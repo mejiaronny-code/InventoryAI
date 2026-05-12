@@ -51,8 +51,14 @@ export const companiesAPI = {
   listAll: () => api.get('/companies/all'),
   create: (data) => api.post('/companies/', data),
   update: (id, data) => api.put(`/companies/${id}`, data),
+  delete: (id) => api.delete(`/companies/${id}`),
   updateSubscription: (id, plan, status) =>
     api.patch(`/companies/${id}/subscription`, null, { params: { plan, status } }),
+  listUsers: (id) => api.get(`/companies/${id}/users`),
+  searchUser: (id, email) => api.get(`/companies/${id}/search-user`, { params: { email } }),
+  assignUser: (id, data) => api.post(`/companies/${id}/assign-admin`, data),
+  createUser: (id, data) => api.post(`/companies/${id}/create-user`, data),
+  removeUser: (companyId, userId) => api.delete(`/companies/${companyId}/users/${userId}`),
   getMe: () => api.get('/companies/me'),
   updateMe: (data) => api.put('/companies/me/settings', data),
 }
@@ -140,7 +146,7 @@ export const chatAPI = {
 // ============================================================
 export const dashboardAPI = {
   getMetrics: () => api.get('/dashboard/metrics'),
-  getSuperAdminMetrics: () => api.get('/dashboard/superadmin'),
+  getSuperAdminMetrics: (month) => api.get('/dashboard/superadmin', { params: month ? { month } : {} }),
 }
 
 // ============================================================

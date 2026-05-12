@@ -67,7 +67,7 @@ export default function DashboardPage() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (
             <div key={i} className="stat-card animate-pulse">
               <div className="w-10 h-10 bg-ink-100 rounded-xl mb-3" />
@@ -79,7 +79,7 @@ export default function DashboardPage() {
       ) : data ? (
         <>
           {/* Stats */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard icon={Package}      label="Productos activos"   value={data.total_products}     sub={`${data.total_stock} en stock`} />
             <StatCard icon={CalendarCheck} label="Reservas activas"   value={data.active_reservations} sub={`${data.monthly_reservations} este mes`} accent />
             <StatCard icon={AlertTriangle} label="Stock bajo mínimo"  value={data.low_stock_products}  sub="requieren atención" />

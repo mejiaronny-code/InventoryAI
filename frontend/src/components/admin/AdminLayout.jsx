@@ -5,12 +5,12 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useState, useEffect } from 'react'
-import { notificationsAPI } from '../../services/api'
+import { notificationsAPI, companiesAPI } from '../../services/api'
 import { useRealtimeNotifications } from '../../hooks/useRealtimeNotifications'
 import {
   LayoutDashboard, Package, Tag, Warehouse, BarChart3,
   CalendarCheck, Bell, Settings, Users, LogOut, Menu, X,
-  Zap, ChevronRight
+  Zap, AlertTriangle
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -31,10 +31,16 @@ export default function AdminLayout() {
   const navigate = useNavigate()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [suspended, setSuspended] = useState(false)
 
   useEffect(() => {
     notificationsAPI.list()
       .then(res => setUnreadCount(res.data.filter(n => !n.read).length))
+      .catch(() => {})
+    companiesAPI.getMe()
+      .then(res => {
+        if (res.data?.subscriptions?.status === 'suspended') setSuspended(true)
+      })
       .catch(() => {})
   }, [])
 
@@ -100,6 +106,25 @@ export default function AdminLayout() {
     </div>
   )
 
+  if (suspended) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-ink-950 text-white text-center px-6">
+        <AlertTriangle size={48} className="text-brand-500 mb-6" />
+        <h1 className="text-2xl font-extrabold mb-3">Cuenta pausada</h1>
+        <p className="text-ink-300 text-base max-w-sm mb-8">
+          Tu cuenta ha sido pausada. Contacta al administrador de la plataforma.
+        </p>
+        <button
+          onClick={() => { logout(); navigate('/admin/login') }}
+          className="btn-primary"
+        >
+          <LogOut size={16} />
+          Cerrar sesión
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-screen bg-ink-50">
       {/* Desktop sidebar */}
@@ -139,7 +164,7 @@ export default function AdminLayout() {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           <Outlet />
         </main>
       </div>
