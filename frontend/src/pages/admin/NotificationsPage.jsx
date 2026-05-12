@@ -1,0 +1,105 @@
+/**
+ * pages/admin/NotificationsPage.jsx
+ */
+import { useState, useEffect } from 'react'
+import { notificationsAPI } from '../../services/api'
+import toast from 'react-hot-toast'
+import { Bell, CheckCheck, Package, AlertTriangle, CalendarCheck, Zap } from 'lucide-react'
+import { format } from 'date-fns'
+import { es } from 'date-fns/locale'
+import clsx from 'clsx'
+
+const typeIcon = {
+  new_reservation: CalendarCheck,
+  reservation_expired: Bell,
+  low_stock: AlertTriangle,
+  stock_out: Package,
+  system: Zap,
+}
+
+const typeColor = {
+  new_reservation: 'text-brand-500 bg-brand-50',
+  reservation_expired: 'text-yellow-500 bg-yellow-50',
+  low_stock: 'text-orange-500 bg-orange-50',
+  stock_out: 'text-red-500 bg-red-50',
+  system: 'text-ink-500 bg-ink-100',
+}
+
+export default function NotificationsPage() {
+  const [notifs, setNotifs] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  const load = () => notificationsAPI.list().then(r => setNotifs(r.data)).finally(() => setLoading(false))
+  useEffect(() => { load() }, [])
+
+  const markRead = async (id) => {
+    await notificationsAPI.markRead(id)
+    setNotifs(n => n.map(x => x.id === id ? { ...x, read: true } : x))
+  }
+
+  const markAll = async () => {
+    await notificationsAPI.markAllRead()
+    setNotifs(n => n.map(x => ({ ...x, read: true })))
+    toast.success('Todas marcadas')
+  }
+
+  const unread = notifs.filter(n => !n.read).length
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="page-title">Notificaciones</h1>
+          {unread > 0 && <p className="text-sm text-ink-500 mt-0.5">{unread} sin leer</p>}
+        </div>
+        {unread > 0 && (
+          <button onClick={markAll} className="btn-secondary text-sm">
+            <CheckCheck size={15} /> Marcar todas leídas
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="space-y-3">
+          {[...Array(5)].map((_, i) => <div key={i} className="card p-4 animate-pulse h-16" />)}
+        </div>
+      ) : notifs.length === 0 ? (
+        <div className="text-center py-20">
+          <Bell size={40} className="text-ink-200 mx-auto mb-3" />
+          <p className="text-ink-500">Sin notificaciones</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {notifs.map(n => {
+            const Icon = typeIcon[n.type] || Bell
+            const colors = typeColor[n.type] || typeColor.system
+            return (
+              <div
+                key={n.id}
+                onClick={() => !n.read && markRead(n.id)}
+                className={clsx(
+                  'card p-4 flex items-start gap-4 cursor-pointer transition-all',
+                  !n.read && 'border-brand-200 bg-brand-50/30 hover:bg-brand-50',
+                  n.read && 'opacity-60'
+                )}
+              >
+                <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center shrink-0', colors)}>
+                  <Icon size={16} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className={clsx('text-sm', !n.read ? 'font-semibold text-ink-900' : 'text-ink-600')}>
+                    {n.message}
+                  </p>
+                  <p className="text-xs text-ink-400 mt-1">
+                    {format(new Date(n.created_at), "d 'de' MMM, HH:mm", { locale: es })}
+                  </p>
+                </div>
+                {!n.read && <div className="w-2 h-2 rounded-full bg-brand-500 mt-1.5 shrink-0" />}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
