@@ -1,10 +1,10 @@
 /**
  * pages/admin/ReservationsPage.jsx
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { reservationsAPI } from '../../services/api'
 import toast from 'react-hot-toast'
-import { RefreshCw, CheckCircle, XCircle, Package, Clock, Filter } from 'lucide-react'
+import { RefreshCw, CheckCircle, XCircle, Package, Clock, Search } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
@@ -20,6 +20,7 @@ const statusConfig = {
 export default function ReservationsPage() {
   const [reservations, setReservations] = useState([])
   const [statusFilter, setStatusFilter] = useState('')
+  const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState(null)
 
@@ -31,6 +32,17 @@ export default function ReservationsPage() {
   }
 
   useEffect(() => { load() }, [statusFilter])
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return reservations
+    const q = search.toLowerCase()
+    return reservations.filter(r =>
+      r.reservation_code?.toLowerCase().includes(q) ||
+      r.client_name?.toLowerCase().includes(q) ||
+      r.client_email?.toLowerCase().includes(q) ||
+      r.products?.name?.toLowerCase().includes(q)
+    )
+  }, [reservations, search])
 
   const handleStatus = async (id, newStatus) => {
     setUpdating(id)
@@ -59,6 +71,17 @@ export default function ReservationsPage() {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
+      </div>
+
+      {/* Search */}
+      <div className="relative max-w-sm">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Código, cliente, email, producto..."
+          className="input pl-9 text-sm"
+        />
       </div>
 
       {/* Status filter */}
@@ -92,9 +115,9 @@ export default function ReservationsPage() {
           <tbody>
             {loading ? (
               [...Array(5)].map((_, i) => <tr key={i}><td colSpan={7}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>)
-            ) : reservations.length === 0 ? (
+            ) : filtered.length === 0 ? (
               <tr><td colSpan={7} className="text-center py-12 text-ink-400">Sin reservas</td></tr>
-            ) : reservations.map(r => {
+            ) : filtered.map(r => {
               const s = statusConfig[r.status] || { color: 'badge-gray', label: r.status }
               const expired = new Date(r.expires_at) < new Date()
               return (
@@ -104,7 +127,7 @@ export default function ReservationsPage() {
                     <p className="font-medium text-ink-900 text-sm">{r.client_name}</p>
                     <p className="text-xs text-ink-400">{r.client_email}</p>
                   </td>
-                  <td className="text-sm text-ink-700">{r.product_id?.slice(0, 8)}...</td>
+                  <td className="text-sm text-ink-700">{r.products?.name || '—'}</td>
                   <td className="font-semibold">{r.quantity}</td>
                   <td><span className={`badge ${s.color}`}>{s.label}</span></td>
                   <td>

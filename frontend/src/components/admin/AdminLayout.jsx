@@ -32,6 +32,8 @@ export default function AdminLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [suspended, setSuspended] = useState(false)
+  const [companyLogo, setCompanyLogo] = useState(null)
+  const [companyName, setCompanyName] = useState('InventoryAI')
 
   useEffect(() => {
     notificationsAPI.list()
@@ -40,6 +42,8 @@ export default function AdminLayout() {
     companiesAPI.getMe()
       .then(res => {
         if (res.data?.subscriptions?.status === 'suspended') setSuspended(true)
+        if (res.data?.logo_url) setCompanyLogo(res.data.logo_url)
+        if (res.data?.name) setCompanyName(res.data.name)
       })
       .catch(() => {})
   }, [])
@@ -58,10 +62,13 @@ export default function AdminLayout() {
       {/* Logo */}
       <div className="px-5 py-5 border-b border-ink-100">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-brand-500 rounded-lg flex items-center justify-center shadow-glow">
-            <Zap size={16} className="text-white" />
+          <div className="w-8 h-8 rounded-lg overflow-hidden shrink-0 flex items-center justify-center bg-brand-500 shadow-glow">
+            {companyLogo
+              ? <img src={companyLogo} alt="logo" className="w-full h-full object-contain" />
+              : <Zap size={16} className="text-white" />
+            }
           </div>
-          <span className="font-bold text-ink-900 text-lg tracking-tight">InventoryAI</span>
+          <span className="font-bold text-ink-900 text-base tracking-tight truncate">{companyName}</span>
         </div>
       </div>
 
@@ -156,10 +163,13 @@ export default function AdminLayout() {
             <Menu size={20} />
           </button>
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-brand-500 rounded-md flex items-center justify-center">
-              <Zap size={13} className="text-white" />
+            <div className="w-6 h-6 rounded-md overflow-hidden flex items-center justify-center bg-brand-500">
+              {companyLogo
+                ? <img src={companyLogo} alt="logo" className="w-full h-full object-contain" />
+                : <Zap size={13} className="text-white" />
+              }
             </div>
-            <span className="font-bold text-ink-900">InventoryAI</span>
+            <span className="font-bold text-ink-900 truncate max-w-[140px]">{companyName}</span>
           </div>
         </header>
 

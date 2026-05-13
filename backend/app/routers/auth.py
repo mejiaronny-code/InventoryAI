@@ -73,6 +73,19 @@ async def get_me(user: dict = Depends(get_current_user)):
     return user
 
 
+class UpdateProfileRequest(BaseModel):
+    full_name: str
+
+
+@router.put("/me")
+async def update_me(data: UpdateProfileRequest, user: dict = Depends(get_current_user)):
+    supabase.table("user_profiles")\
+        .update({"full_name": data.full_name})\
+        .eq("id", user["id"])\
+        .execute()
+    return {**user, "full_name": data.full_name}
+
+
 @router.post("/employees")
 async def create_employee(data: RegisterEmployeeRequest, user: dict = Depends(require_admin)):
     """El admin crea empleados para su empresa."""

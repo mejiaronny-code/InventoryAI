@@ -2,13 +2,14 @@
  * pages/admin/ProductsPage.jsx
  * CRUD completo de productos con generación automática de embeddings.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { productsAPI, categoriesAPI, warehousesAPI, stockAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
+import { useDropzone } from 'react-dropzone'
 import toast from 'react-hot-toast'
 import {
   Plus, Search, Pencil, Trash2, Package, X,
-  RefreshCw, ChevronDown, Loader2, BarChart3
+  RefreshCw, Loader2, Upload, ImageIcon
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -40,9 +41,32 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
     category_id: product?.category_id || '',
     reservation_time_hours: product?.reservation_time_hours || '',
     attributes: JSON.stringify(product?.attributes || {}, null, 2),
+    images: product?.images || [],
   })
   const [stockData, setStockData] = useState({ warehouse_id: '', quantity: 0, min_stock_alert: 5 })
   const [loading, setLoading] = useState(false)
+  const [uploadingImg, setUploadingImg] = useState(false)
+
+  const onDropImage = useCallback(async (acceptedFiles) => {
+    const file = acceptedFiles[0]
+    if (!file) return
+    setUploadingImg(true)
+    try {
+      const res = await productsAPI.uploadImage(file)
+      setForm(f => ({ ...f, images: [...f.images, res.data.url] }))
+    } catch {
+      toast.error('Error al subir imagen')
+    } finally { setUploadingImg(false) }
+  }, [])
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop: onDropImage,
+    accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp'] },
+    maxFiles: 1,
+    maxSize: 5 * 1024 * 1024,
+  })
+
+  const removeImage = (idx) => setForm(f => ({ ...f, images: f.images.filter((_, i) => i !== idx) }))
 
   const handleChange = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -131,6 +155,40 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Tiempo reserva (hs)</label>
           <input type="number" value={form.reservation_time_hours} onChange={e => handleChange('reservation_time_hours', e.target.value)} className="input" placeholder="usa el de la categoría" />
         </div>
+      </div>
+
+      {/* Imágenes */}
+      <div>
+        <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-2">
+          Imágenes <span className="text-brand-500">(la IA las usa para reconocer fotos)</span>
+        </label>
+        <div className="flex gap-2 flex-wrap mb-2">
+          {form.images.map((url, i) => (
+            <div key={i} className="relative group w-16 h-16">
+              <img src={url} className="w-16 h-16 rounded-xl object-cover border border-ink-100" alt="" />
+              <button
+                type="button"
+                onClick={() => removeImage(i)}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <X size={11} className="text-white" />
+              </button>
+            </div>
+          ))}
+          <div
+            {...getRootProps()}
+            className={`w-16 h-16 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all ${
+              isDragActive ? 'border-brand-400 bg-brand-50' : 'border-ink-200 hover:border-brand-300 hover:bg-ink-50'
+            }`}
+          >
+            <input {...getInputProps()} />
+            {uploadingImg
+              ? <Loader2 size={16} className="text-brand-500 animate-spin" />
+              : <Upload size={16} className="text-ink-400" />
+            }
+          </div>
+        </div>
+        <p className="text-xs text-ink-400">PNG, JPG, WEBP · máx 5MB por imagen</p>
       </div>
 
       {/* Stock inicial (solo creación) */}

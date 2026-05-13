@@ -46,7 +46,7 @@ async def list_reservations(
     user: dict = Depends(require_staff),
 ):
     query = supabase.table("reservations")\
-        .select("*")\
+        .select("*, products(name)")\
         .eq("company_id", user["company_id"])\
         .order("created_at", desc=True)
 

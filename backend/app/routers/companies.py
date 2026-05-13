@@ -2,7 +2,7 @@
 app/routers/companies.py
 Gestión de empresas — super admin y admin de empresa.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from app.core.auth import require_super_admin, require_admin, get_current_user
 from app.core.supabase_client import supabase
 from app.core.config import settings
@@ -257,6 +257,53 @@ async def remove_user_from_company(
         .eq("company_id", company_id)\
         .execute()
     return {"message": "Usuario removido"}
+
+
+@router.post("/me/upload-logo")
+async def upload_logo(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_admin)
+):
+    company_id = user["company_id"]
+    ext = file.filename.split(".")[-1].lower()
+    if ext not in ("png", "jpg", "jpeg", "webp", "svg"):
+        raise HTTPException(400, "Formato no permitido. Usa PNG, JPG, WEBP o SVG.")
+
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(400, "El archivo supera 2MB.")
+
+    bucket = "product-images"
+    storage_path = f"logos/{company_id}.{ext}"
+    upload_url = f"{settings.supabase_url}/storage/v1/object/{bucket}/{storage_path}"
+
+    # Subir usando service_role_key — bypasea RLS de Storage
+    response = httpx.put(
+        upload_url,
+        content=content,
+        headers={
+            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+            "apikey": settings.supabase_service_role_key,
+            "Content-Type": file.content_type,
+            "x-upsert": "true",
+        },
+        timeout=30,
+    )
+
+    if response.status_code not in (200, 201):
+        raise HTTPException(500, f"Error al subir imagen: {response.text}")
+
+    public_url = (
+        f"{settings.supabase_url}/storage/v1/object/public/{bucket}/{storage_path}"
+        f"?t={int(__import__('time').time())}"
+    )
+
+    supabase.table("companies")\
+        .update({"logo_url": public_url})\
+        .eq("id", company_id)\
+        .execute()
+
+    return {"logo_url": public_url}
 
 
 @router.put("/me/settings")

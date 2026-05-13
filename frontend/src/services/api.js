@@ -37,6 +37,7 @@ api.interceptors.response.use(
 export const authAPI = {
   login: (email, password) => api.post('/auth/login', { email, password }),
   me: () => api.get('/auth/me'),
+  updateMe: (data) => api.put('/auth/me', data),
   refresh: (refreshToken) => api.post('/auth/refresh', null, { params: { refresh_token: refreshToken } }),
   createEmployee: (data) => api.post('/auth/employees', data),
   listEmployees: () => api.get('/auth/employees'),
@@ -61,6 +62,13 @@ export const companiesAPI = {
   removeUser: (companyId, userId) => api.delete(`/companies/${companyId}/users/${userId}`),
   getMe: () => api.get('/companies/me'),
   updateMe: (data) => api.put('/companies/me/settings', data),
+  uploadLogo: (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post('/companies/me/upload-logo', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
 }
 
 // ============================================================
@@ -96,6 +104,13 @@ export const productsAPI = {
   update: (id, data) => api.put(`/products/${id}`, data),
   delete: (id) => api.delete(`/products/${id}`),
   regenerateEmbedding: (id) => api.post(`/products/${id}/regenerate-embedding`),
+  uploadImage: (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post('/products/upload-image', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
 }
 
 // ============================================================

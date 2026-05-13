@@ -50,3 +50,32 @@ export async function deleteProductImage(url) {
   if (!path) return
   await supabase.storage.from(BUCKET).remove([path])
 }
+
+/**
+ * Sube el logo de una empresa y retorna la URL pública.
+ * Usa el mismo bucket product-images en la carpeta logos/
+ */
+export async function uploadCompanyLogo(file, companyId) {
+  if (!file) throw new Error('No file provided')
+
+  const ext = file.name.split('.').pop()
+  const filename = `logos/${companyId}.${ext}`
+
+  // upsert: true para reemplazar si ya existe un logo anterior
+  const { error } = await supabase.storage
+    .from(BUCKET)
+    .upload(filename, file, {
+      cacheControl: '3600',
+      upsert: true,
+      contentType: file.type,
+    })
+
+  if (error) throw error
+
+  const { data: urlData } = supabase.storage
+    .from(BUCKET)
+    .getPublicUrl(filename)
+
+  // Forzar cache-bust para que el navegador muestre el nuevo logo
+  return `${urlData.publicUrl}?t=${Date.now()}`
+}

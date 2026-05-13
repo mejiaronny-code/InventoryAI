@@ -2,12 +2,15 @@
 app/routers/products.py
 CRUD de productos con generación automática de embeddings.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from typing import Optional, List
 from uuid import UUID
+import httpx
+import time
 
 from app.core.auth import require_admin, require_staff, get_current_user
 from app.core.supabase_client import supabase
+from app.core.config import settings
 from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock
 from app.embeddings.embedding_service import (
     generate_product_embedding,
@@ -193,6 +196,43 @@ async def delete_product(product_id: str, user: dict = Depends(require_admin)):
         .eq("company_id", user["company_id"])\
         .execute()
     return {"message": "Producto desactivado"}
+
+
+@router.post("/upload-image")
+async def upload_product_image(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_admin),
+):
+    """Sube una imagen de producto a Storage y retorna la URL pública."""
+    ext = file.filename.split(".")[-1].lower()
+    if ext not in ("png", "jpg", "jpeg", "webp"):
+        raise HTTPException(400, "Formato no permitido. Usa PNG, JPG o WEBP.")
+
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(400, "El archivo supera 5MB.")
+
+    bucket = "product-images"
+    storage_path = f"{user['company_id']}/{int(time.time())}_{file.filename}"
+    upload_url = f"{settings.supabase_url}/storage/v1/object/{bucket}/{storage_path}"
+
+    response = httpx.put(
+        upload_url,
+        content=content,
+        headers={
+            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+            "apikey": settings.supabase_service_role_key,
+            "Content-Type": file.content_type,
+            "x-upsert": "true",
+        },
+        timeout=30,
+    )
+
+    if response.status_code not in (200, 201):
+        raise HTTPException(500, f"Error al subir imagen: {response.text}")
+
+    public_url = f"{settings.supabase_url}/storage/v1/object/public/{bucket}/{storage_path}"
+    return {"url": public_url}
 
 
 @router.post("/{product_id}/regenerate-embedding")

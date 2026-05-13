@@ -86,10 +86,10 @@ export default function HomePage() {
               >
                 {company.logo_url ? (
                   <img src={company.logo_url} alt={company.name}
-                    className="w-12 h-12 rounded-xl object-cover mb-4 border border-ink-100" />
+                    className="w-20 h-20 rounded-xl object-contain mb-4 border border-ink-100 p-1" />
                 ) : (
-                  <div className="w-12 h-12 rounded-xl bg-brand-50 border border-brand-100 flex items-center justify-center mb-4">
-                    <span className="text-brand-600 font-bold text-lg">{company.name[0]}</span>
+                  <div className="w-20 h-20 rounded-xl bg-brand-50 border border-brand-100 flex items-center justify-center mb-4">
+                    <span className="text-brand-600 font-bold text-2xl">{company.name[0]}</span>
                   </div>
                 )}
                 <h3 className="font-bold text-ink-900 text-base mb-1 group-hover:text-brand-600 transition-colors">

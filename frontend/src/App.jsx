@@ -9,6 +9,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import HomePage from './pages/public/HomePage'
 import CompanyCatalogPage from './pages/public/CompanyCatalogPage'
 import ReservationStatusPage from './pages/public/ReservationStatusPage'
+import NotFoundPage from './pages/public/NotFoundPage'
 
 // Admin pages
 import LoginPage from './pages/admin/LoginPage'
@@ -90,7 +91,7 @@ function AppRoutes() {
       </Route>
 
       {/* ── 404 ── */}
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   )
 }
