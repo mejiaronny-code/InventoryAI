@@ -62,6 +62,7 @@ export const companiesAPI = {
   removeUser: (companyId, userId) => api.delete(`/companies/${companyId}/users/${userId}`),
   getMe: () => api.get('/companies/me'),
   updateMe: (data) => api.put('/companies/me/settings', data),
+  requestDeletion: () => api.post('/companies/me/request-deletion'),
   uploadLogo: (file) => {
     const form = new FormData()
     form.append('file', file)
@@ -126,6 +127,7 @@ export const stockAPI = {
 // RESERVATIONS
 // ============================================================
 export const reservationsAPI = {
+  createPublic: (slug, data) => api.post(`/reservations/public/${slug}`, data),
   getPublic: (slug, code) => api.get(`/reservations/public/${code}`, { params: { company_slug: slug } }),
   list: (params) => api.get('/reservations/', { params }),
   update: (id, data) => api.patch(`/reservations/${id}`, data),
@@ -161,6 +163,7 @@ export const chatAPI = {
 // ============================================================
 export const dashboardAPI = {
   getMetrics: () => api.get('/dashboard/metrics'),
+  getActivity: (limit) => api.get('/dashboard/activity', { params: limit ? { limit } : {} }),
   getSuperAdminMetrics: (month) => api.get('/dashboard/superadmin', { params: month ? { month } : {} }),
 }
 

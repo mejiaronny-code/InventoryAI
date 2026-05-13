@@ -27,6 +27,7 @@ export default function WarehousesPage() {
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState({ name: '', location: '', description: '' })
   const [saving, setSaving] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(null)
 
   const load = () => warehousesAPI.list().then(r => setWarehouses(r.data))
   useEffect(() => { load() }, [])
@@ -43,9 +44,11 @@ export default function WarehousesPage() {
     } catch { toast.error('Error') } finally { setSaving(false) }
   }
 
-  const handleDelete = async (id) => {
-    if (!confirm('¿Desactivar almacén?')) return
-    await warehousesAPI.delete(id); toast.success('Desactivado'); load()
+  const doDelete = async () => {
+    await warehousesAPI.delete(confirmDelete.id)
+    toast.success('Desactivado')
+    setConfirmDelete(null)
+    load()
   }
 
   return (
@@ -64,7 +67,7 @@ export default function WarehousesPage() {
               </div>
               <div className="flex gap-1">
                 <button onClick={() => openEdit(w)} className="btn-ghost p-1.5"><Pencil size={13} /></button>
-                <button onClick={() => handleDelete(w.id)} className="btn-ghost p-1.5 text-red-400 hover:bg-red-50"><Trash2 size={13} /></button>
+                <button onClick={() => setConfirmDelete({ id: w.id, name: w.name })} className="btn-ghost p-1.5 text-red-400 hover:bg-red-50"><Trash2 size={13} /></button>
               </div>
             </div>
             <h3 className="font-bold text-ink-900 mb-1">{w.name}</h3>
@@ -79,6 +82,19 @@ export default function WarehousesPage() {
         ))}
         {warehouses.length === 0 && <p className="col-span-3 text-center text-ink-400 py-12">Sin almacenes</p>}
       </div>
+
+      <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Confirmar desactivación">
+        <div className="space-y-4">
+          <p className="text-sm text-ink-600">
+            ¿Desactivar el almacén <strong className="text-ink-900">"{confirmDelete?.name}"</strong>?
+            Dejará de estar disponible para movimientos de stock.
+          </p>
+          <div className="flex gap-3">
+            <button onClick={() => setConfirmDelete(null)} className="btn-secondary flex-1 justify-center">Cancelar</button>
+            <button onClick={doDelete} className="btn-danger flex-1 justify-center">Desactivar</button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={!!modal} onClose={() => setModal(null)} title={modal === 'create' ? 'Nuevo almacén' : 'Editar almacén'}>
         <form onSubmit={handleSave} className="space-y-4">

@@ -30,6 +30,7 @@ export default function EmployeesPage() {
   const [form, setForm] = useState({ email: '', password: '', full_name: '', role: 'employee' })
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [confirmDelete, setConfirmDelete] = useState(null)
 
   const load = () => authAPI.listEmployees().then(r => setEmployees(r.data)).finally(() => setLoading(false))
   useEffect(() => { load() }, [])
@@ -44,9 +45,11 @@ export default function EmployeesPage() {
     } finally { setSaving(false) }
   }
 
-  const handleDelete = async (id) => {
-    if (!confirm('¿Desactivar empleado?')) return
-    await authAPI.deleteEmployee(id); toast.success('Desactivado'); load()
+  const doDelete = async () => {
+    await authAPI.deleteEmployee(confirmDelete.id)
+    toast.success('Desactivado')
+    setConfirmDelete(null)
+    load()
   }
 
   return (
@@ -68,7 +71,7 @@ export default function EmployeesPage() {
                   : <User size={18} className="text-ink-500" />
                 }
               </div>
-              <button onClick={() => handleDelete(e.id)} className="btn-ghost p-1.5 text-red-400 hover:bg-red-50">
+              <button onClick={() => setConfirmDelete({ id: e.id, name: e.full_name || e.email })} className="btn-ghost p-1.5 text-red-400 hover:bg-red-50">
                 <Trash2 size={14} />
               </button>
             </div>
@@ -92,6 +95,19 @@ export default function EmployeesPage() {
           <p className="col-span-3 text-center text-ink-400 py-12">Sin empleados creados</p>
         )}
       </div>
+
+      <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Confirmar desactivación">
+        <div className="space-y-4">
+          <p className="text-sm text-ink-600">
+            ¿Desactivar a <strong className="text-ink-900">"{confirmDelete?.name}"</strong>?
+            El empleado perderá acceso al sistema.
+          </p>
+          <div className="flex gap-3">
+            <button onClick={() => setConfirmDelete(null)} className="btn-secondary flex-1 justify-center">Cancelar</button>
+            <button onClick={doDelete} className="btn-danger flex-1 justify-center">Desactivar</button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={modal} onClose={() => setModal(false)} title="Nuevo empleado">
         <form onSubmit={handleCreate} className="space-y-4">

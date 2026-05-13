@@ -314,3 +314,34 @@ async def update_my_company(data: CompanyUpdate, user: dict = Depends(require_ad
         .eq("id", user["company_id"])\
         .execute()
     return result.data[0] if result.data else {}
+
+
+@router.post("/me/request-deletion")
+async def request_account_deletion(user: dict = Depends(require_admin)):
+    """Envía una solicitud de eliminación de cuenta al super admin."""
+    company = supabase.table("companies")\
+        .select("name")\
+        .eq("id", user["company_id"])\
+        .single()\
+        .execute()
+
+    company_name = company.data["name"] if company.data else "—"
+    requested_by = user.get("email") or user.get("full_name") or user["id"]
+
+    supabase.table("notifications").insert({
+        "company_id": user["company_id"],
+        "type": "system",
+        "message": (
+            f"🗑️ Solicitud de eliminación de cuenta enviada para '{company_name}'. "
+            f"El equipo de soporte revisará tu solicitud y se pondrá en contacto contigo. "
+            f"(Solicitado por: {requested_by})"
+        ),
+        "target_role": "all",
+        "metadata": {
+            "deletion_request": True,
+            "company_name": company_name,
+            "requested_by": requested_by,
+        },
+    }).execute()
+
+    return {"message": "Solicitud enviada correctamente"}

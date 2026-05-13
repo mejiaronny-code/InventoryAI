@@ -1,10 +1,10 @@
 /**
  * pages/admin/ReservationsPage.jsx
  */
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { reservationsAPI } from '../../services/api'
 import toast from 'react-hot-toast'
-import { RefreshCw, CheckCircle, XCircle, Package, Clock, Search } from 'lucide-react'
+import { RefreshCw, CheckCircle, XCircle, Package, Clock, Search, Loader2 } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
@@ -22,16 +22,19 @@ export default function ReservationsPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  // { id, action } — qué botón muestra spinner
   const [updating, setUpdating] = useState(null)
+  // Set de IDs que acaban de cambiar de estado (para la animación de fila)
+  const [flashedRows, setFlashedRows] = useState(new Set())
 
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true)
     reservationsAPI.list(statusFilter ? { status: statusFilter } : {})
       .then(r => setReservations(r.data))
       .finally(() => setLoading(false))
-  }
+  }, [statusFilter])
 
-  useEffect(() => { load() }, [statusFilter])
+  useEffect(() => { load() }, [load])
 
   const filtered = useMemo(() => {
     if (!search.trim()) return reservations
@@ -45,12 +48,37 @@ export default function ReservationsPage() {
   }, [reservations, search])
 
   const handleStatus = async (id, newStatus) => {
-    setUpdating(id)
+    setUpdating({ id, action: newStatus })
+
+    // Optimistic update — badge cambia de inmediato
+    setReservations(prev =>
+      prev.map(r => r.id === id ? { ...r, status: newStatus } : r)
+    )
+
+    // Marcar fila para animación de flash
+    setFlashedRows(prev => new Set(prev).add(id))
+    setTimeout(() => {
+      setFlashedRows(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }, 700)
+
     try {
       await reservationsAPI.update(id, { status: newStatus })
-      toast.success(`Reserva ${newStatus}`)
+      toast.success(
+        newStatus === 'confirmed' ? 'Reserva confirmada ✓' :
+        newStatus === 'cancelled' ? 'Reserva cancelada' :
+        'Reserva completada ✓'
+      )
+    } catch {
+      // Revertir optimistic update si falla
+      toast.error('Error al actualizar')
       load()
-    } catch { toast.error('Error') } finally { setUpdating(null) }
+    } finally {
+      setUpdating(null)
+    }
   }
 
   const handleExpireAll = async () => {
@@ -58,6 +86,11 @@ export default function ReservationsPage() {
     toast.success('Reservas expiradas procesadas')
     load()
   }
+
+  const isUpdating = (id, action) =>
+    updating?.id === id && updating?.action === action
+
+  const isAnyUpdating = (id) => updating?.id === id
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -120,8 +153,15 @@ export default function ReservationsPage() {
             ) : filtered.map(r => {
               const s = statusConfig[r.status] || { color: 'badge-gray', label: r.status }
               const expired = new Date(r.expires_at) < new Date()
+              const flashing = flashedRows.has(r.id)
               return (
-                <tr key={r.id}>
+                <tr
+                  key={r.id}
+                  className={clsx(
+                    'transition-all duration-500',
+                    flashing && 'bg-brand-50'
+                  )}
+                >
                   <td><span className="font-mono text-xs font-bold text-brand-600">{r.reservation_code}</span></td>
                   <td>
                     <p className="font-medium text-ink-900 text-sm">{r.client_name}</p>
@@ -129,7 +169,11 @@ export default function ReservationsPage() {
                   </td>
                   <td className="text-sm text-ink-700">{r.products?.name || '—'}</td>
                   <td className="font-semibold">{r.quantity}</td>
-                  <td><span className={`badge ${s.color}`}>{s.label}</span></td>
+                  <td>
+                    <span className={clsx('badge transition-all duration-300', s.color)}>
+                      {s.label}
+                    </span>
+                  </td>
                   <td>
                     <span className={clsx('text-xs', expired && r.status === 'pending' ? 'text-red-500 font-semibold' : 'text-ink-400')}>
                       {format(new Date(r.expires_at), 'd MMM HH:mm', { locale: es })}
@@ -141,30 +185,39 @@ export default function ReservationsPage() {
                         <>
                           <button
                             onClick={() => handleStatus(r.id, 'confirmed')}
-                            disabled={updating === r.id}
+                            disabled={isAnyUpdating(r.id)}
                             className="btn-ghost p-1.5 text-green-600 hover:bg-green-50"
                             title="Confirmar"
                           >
-                            <CheckCircle size={15} />
+                            {isUpdating(r.id, 'confirmed')
+                              ? <Loader2 size={15} className="animate-spin" />
+                              : <CheckCircle size={15} />
+                            }
                           </button>
                           <button
                             onClick={() => handleStatus(r.id, 'cancelled')}
-                            disabled={updating === r.id}
+                            disabled={isAnyUpdating(r.id)}
                             className="btn-ghost p-1.5 text-red-500 hover:bg-red-50"
                             title="Cancelar"
                           >
-                            <XCircle size={15} />
+                            {isUpdating(r.id, 'cancelled')
+                              ? <Loader2 size={15} className="animate-spin" />
+                              : <XCircle size={15} />
+                            }
                           </button>
                         </>
                       )}
                       {r.status === 'confirmed' && (
                         <button
                           onClick={() => handleStatus(r.id, 'completed')}
-                          disabled={updating === r.id}
+                          disabled={isAnyUpdating(r.id)}
                           className="btn-ghost p-1.5 text-brand-500 hover:bg-brand-50"
                           title="Marcar entregado"
                         >
-                          <Package size={15} />
+                          {isUpdating(r.id, 'completed')
+                            ? <Loader2 size={15} className="animate-spin" />
+                            : <Package size={15} />
+                          }
                         </button>
                       )}
                     </div>

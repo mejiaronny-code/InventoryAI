@@ -9,8 +9,9 @@ import { useDropzone } from 'react-dropzone'
 import toast from 'react-hot-toast'
 import {
   Plus, Search, Pencil, Trash2, Package, X,
-  RefreshCw, Loader2, Upload, ImageIcon
+  RefreshCw, Loader2, Upload, ImageIcon, Warehouse
 } from 'lucide-react'
+import ProductImage from '../../components/shared/ProductImage'
 import clsx from 'clsx'
 
 function Modal({ open, onClose, title, children }) {
@@ -221,6 +222,54 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
   )
 }
 
+function StockDetailModal({ open, onClose, product, warehouses }) {
+  if (!open || !product) return null
+  const rows = product.stock_by_warehouse || []
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="modal-box max-w-sm">
+        <div className="flex items-center justify-between p-6 border-b border-ink-100">
+          <div>
+            <h3 className="text-base font-bold text-ink-900">Stock por almacén</h3>
+            <p className="text-xs text-ink-400 mt-0.5">{product.name}</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
+        </div>
+        <div className="p-6">
+          {rows.length === 0 ? (
+            <div className="text-center py-8 text-ink-400">
+              <Warehouse size={32} className="mx-auto mb-2 opacity-40" />
+              <p className="text-sm">Sin stock registrado</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {rows.map((r) => {
+                const wh = warehouses.find(w => w.id === r.warehouse_id)
+                return (
+                  <div key={r.warehouse_id} className="flex items-center justify-between p-3 rounded-xl bg-ink-50 border border-ink-100">
+                    <div className="flex items-center gap-2">
+                      <Warehouse size={14} className="text-brand-500" />
+                      <span className="text-sm font-medium text-ink-700">{wh?.name || r.warehouse_id}</span>
+                    </div>
+                    <span className={clsx('badge', r.quantity > 0 ? 'badge-green' : 'badge-red')}>
+                      {r.quantity}
+                    </span>
+                  </div>
+                )
+              })}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-brand-50 border border-brand-100 mt-3">
+                <span className="text-sm font-bold text-brand-700">Total</span>
+                <span className="badge badge-orange">{product.total_stock || 0}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ProductsPage() {
   const { user } = useAuth()
   const [products, setProducts] = useState([])
@@ -229,6 +278,8 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null) // null | 'create' | product obj
+  const [stockModal, setStockModal] = useState(null) // product obj para ver desglose
+  const [confirmDelete, setConfirmDelete] = useState(null) // null | { id, name }
 
   const load = () => {
     setLoading(true)
@@ -249,10 +300,10 @@ export default function ProductsPage() {
     return () => clearTimeout(t)
   }, [search])
 
-  const handleDelete = async (id) => {
-    if (!confirm('¿Desactivar este producto?')) return
-    await productsAPI.delete(id)
+  const doDelete = async () => {
+    await productsAPI.delete(confirmDelete.id)
     toast.success('Producto desactivado')
+    setConfirmDelete(null)
     load()
   }
 
@@ -310,10 +361,7 @@ export default function ProductsPage() {
                 <tr key={p.id}>
                   <td>
                     <div className="flex items-center gap-3">
-                      {p.images?.[0]
-                        ? <img src={p.images[0]} className="w-9 h-9 rounded-lg object-cover border border-ink-100" alt="" />
-                        : <div className="w-9 h-9 rounded-lg bg-brand-50 border border-brand-100 flex items-center justify-center"><Package size={14} className="text-brand-400" /></div>
-                      }
+                      <ProductImage src={p.images?.[0]} className="w-9 h-9 rounded-lg" iconSize={14} />
                       <div>
                         <p className="font-semibold text-ink-900 text-sm">{p.name}</p>
                         <p className="text-xs text-ink-400">{p.unit}</p>
@@ -324,9 +372,13 @@ export default function ProductsPage() {
                   <td><span className="text-xs text-ink-600">{cat?.name || '—'}</span></td>
                   <td><span className="font-semibold text-brand-600">${Number(p.price).toLocaleString()}</span></td>
                   <td>
-                    <span className={clsx('badge', (p.total_stock || 0) > 0 ? 'badge-green' : 'badge-red')}>
+                    <button
+                      onClick={() => setStockModal(p)}
+                      title="Ver stock por almacén"
+                      className={clsx('badge cursor-pointer hover:opacity-80 transition-opacity', (p.total_stock || 0) > 0 ? 'badge-green' : 'badge-red')}
+                    >
                       {p.total_stock || 0}
-                    </span>
+                    </button>
                   </td>
                   <td>
                     <span className={clsx('badge', p.is_active ? 'badge-green' : 'badge-gray')}>
@@ -342,7 +394,7 @@ export default function ProductsPage() {
                         <button onClick={() => handleRegenerateEmbedding(p.id)} className="btn-ghost p-2 text-brand-500" title="Regenerar embedding">
                           <RefreshCw size={14} />
                         </button>
-                        <button onClick={() => handleDelete(p.id)} className="btn-ghost p-2 text-red-500 hover:bg-red-50" title="Desactivar">
+                        <button onClick={() => setConfirmDelete({ id: p.id, name: p.name })} className="btn-ghost p-2 text-red-500 hover:bg-red-50" title="Desactivar">
                           <Trash2 size={14} />
                         </button>
                       </div>
@@ -355,7 +407,7 @@ export default function ProductsPage() {
         </table>
       </div>
 
-      {/* Modal */}
+      {/* Modal editar/crear */}
       <Modal
         open={!!modal}
         onClose={() => setModal(null)}
@@ -369,6 +421,28 @@ export default function ProductsPage() {
           onClose={() => setModal(null)}
         />
       </Modal>
+
+      {/* Modal confirmación eliminar */}
+      <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Confirmar desactivación">
+        <div className="space-y-4">
+          <p className="text-sm text-ink-600">
+            ¿Desactivar <strong className="text-ink-900">"{confirmDelete?.name}"</strong>?
+            El producto dejará de aparecer en el catálogo.
+          </p>
+          <div className="flex gap-3">
+            <button onClick={() => setConfirmDelete(null)} className="btn-secondary flex-1 justify-center">Cancelar</button>
+            <button onClick={doDelete} className="btn-danger flex-1 justify-center">Desactivar</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal stock por almacén */}
+      <StockDetailModal
+        open={!!stockModal}
+        onClose={() => setStockModal(null)}
+        product={stockModal}
+        warehouses={warehouses}
+      />
     </div>
   )
 }

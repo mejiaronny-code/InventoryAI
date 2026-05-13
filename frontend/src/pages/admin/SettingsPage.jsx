@@ -6,7 +6,7 @@ import { companiesAPI, authAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
 import { useDropzone } from 'react-dropzone'
 import toast from 'react-hot-toast'
-import { Save, Loader2, Settings, User, Upload, ImageIcon } from 'lucide-react'
+import { Save, Loader2, Settings, User, Upload, ImageIcon, AlertTriangle, X } from 'lucide-react'
 
 export default function SettingsPage() {
   const { user, updateUser } = useAuth()
@@ -16,6 +16,9 @@ export default function SettingsPage() {
   const [profileName, setProfileName] = useState('')
   const [savingProfile, setSavingProfile] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
+  const [deletionModal, setDeletionModal] = useState(false)
+  const [deletionConfirmName, setDeletionConfirmName] = useState('')
+  const [requestingDeletion, setRequestingDeletion] = useState(false)
 
   useEffect(() => {
     setProfileName(user?.full_name || '')
@@ -69,6 +72,16 @@ export default function SettingsPage() {
       await companiesAPI.updateMe(form)
       toast.success('Configuración guardada')
     } catch { toast.error('Error al guardar') } finally { setSaving(false) }
+  }
+
+  const handleRequestDeletion = async () => {
+    setRequestingDeletion(true)
+    try {
+      await companiesAPI.requestDeletion()
+      toast.success('Solicitud enviada. El equipo de soporte se pondrá en contacto contigo.')
+      setDeletionModal(false)
+      setDeletionConfirmName('')
+    } catch { toast.error('Error al enviar la solicitud') } finally { setRequestingDeletion(false) }
   }
 
   if (loading) return <div className="p-8 text-center text-ink-400">Cargando...</div>
@@ -180,6 +193,88 @@ export default function SettingsPage() {
           Guardar cambios
         </button>
       </form>
+      )}
+
+      {/* Zona de peligro — solo admins */}
+      {user?.role === 'admin' && (
+        <div className="border border-red-200 bg-red-50/50 rounded-2xl p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={18} className="text-red-500" />
+            <h2 className="text-base font-bold text-red-700">Zona de peligro</h2>
+          </div>
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <p className="text-sm font-semibold text-ink-900">Solicitar eliminación de cuenta</p>
+              <p className="text-xs text-ink-500 mt-0.5">
+                Envía una solicitud al equipo de soporte para eliminar tu empresa y todos sus datos.
+                Esta acción es irreversible una vez procesada.
+              </p>
+            </div>
+            <button
+              onClick={() => { setDeletionConfirmName(''); setDeletionModal(true) }}
+              className="btn-danger shrink-0"
+            >
+              Solicitar eliminación
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal confirmar solicitud de eliminación */}
+      {deletionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setDeletionModal(false)} />
+          <div className="modal-box max-w-sm relative">
+            <div className="flex items-center justify-between p-6 border-b border-ink-100">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={18} className="text-red-500" />
+                <h3 className="text-base font-bold text-ink-900">Confirmar solicitud</h3>
+              </div>
+              <button onClick={() => setDeletionModal(false)} className="p-2 rounded-xl hover:bg-ink-100">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-ink-600">
+                Esta solicitud notificará al equipo de soporte para eliminar la empresa
+                <strong className="text-ink-900"> "{form.name}"</strong> y todos sus datos de forma permanente.
+              </p>
+              <div>
+                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                  Escribe el nombre de tu empresa para confirmar
+                </label>
+                <input
+                  value={deletionConfirmName}
+                  onChange={e => setDeletionConfirmName(e.target.value)}
+                  className="input"
+                  placeholder={form.name}
+                  autoFocus
+                />
+                {deletionConfirmName.length > 0 && deletionConfirmName !== form.name && (
+                  <p className="text-xs text-red-500 mt-1">El nombre no coincide</p>
+                )}
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={() => setDeletionModal(false)}
+                  className="btn-secondary flex-1 justify-center"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleRequestDeletion}
+                  disabled={deletionConfirmName !== form.name || requestingDeletion}
+                  className="btn-danger flex-1 justify-center"
+                >
+                  {requestingDeletion
+                    ? <Loader2 size={14} className="animate-spin" />
+                    : 'Enviar solicitud'
+                  }
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

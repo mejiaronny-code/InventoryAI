@@ -7,10 +7,11 @@ import { useAuth } from '../../context/AuthContext'
 import { useState, useEffect } from 'react'
 import { notificationsAPI, companiesAPI } from '../../services/api'
 import { useRealtimeNotifications } from '../../hooks/useRealtimeNotifications'
+import ChatWidget from '../chat/ChatWidget'
 import {
   LayoutDashboard, Package, Tag, Warehouse, BarChart3,
   CalendarCheck, Bell, Settings, Users, LogOut, Menu, X,
-  Zap, AlertTriangle
+  Zap, AlertTriangle, Activity
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -22,6 +23,7 @@ const navItems = [
   { to: '/admin/stock',         icon: BarChart3,       label: 'Stock',           roles: ['admin','employee'] },
   { to: '/admin/reservations',  icon: CalendarCheck,   label: 'Reservas',        roles: ['admin','employee'] },
   { to: '/admin/notifications', icon: Bell,            label: 'Notificaciones',  roles: ['admin','employee'] },
+  { to: '/admin/activity',      icon: Activity,        label: 'Actividad',       roles: ['admin','employee'] },
   { to: '/admin/employees',     icon: Users,           label: 'Empleados',       roles: ['admin'] },
   { to: '/admin/settings',      icon: Settings,        label: 'Configuración',   roles: ['admin'] },
 ]
@@ -34,6 +36,7 @@ export default function AdminLayout() {
   const [suspended, setSuspended] = useState(false)
   const [companyLogo, setCompanyLogo] = useState(null)
   const [companyName, setCompanyName] = useState('InventoryAI')
+  const [companySlug, setCompanySlug] = useState(null)
 
   useEffect(() => {
     notificationsAPI.list()
@@ -44,6 +47,7 @@ export default function AdminLayout() {
         if (res.data?.subscriptions?.status === 'suspended') setSuspended(true)
         if (res.data?.logo_url) setCompanyLogo(res.data.logo_url)
         if (res.data?.name) setCompanyName(res.data.name)
+        if (res.data?.slug) setCompanySlug(res.data.slug)
       })
       .catch(() => {})
   }, [])
@@ -178,6 +182,22 @@ export default function AdminLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* Chat IA — vista previa del catálogo */}
+      {companySlug && (
+        <>
+          {/* Badge "Vista previa" posicionado encima del FAB del ChatWidget */}
+          <div className="fixed bottom-[5.25rem] right-3 z-50 pointer-events-none">
+            <span className="text-[10px] font-bold text-brand-600 bg-brand-50 border border-brand-200 px-2 py-0.5 rounded-full shadow-sm">
+              Vista previa
+            </span>
+          </div>
+          <ChatWidget
+            companySlug={companySlug}
+            welcomeMessage={`[Admin] Estás viendo el chat tal como lo ven tus clientes en el catálogo de ${companyName}.`}
+          />
+        </>
+      )}
     </div>
   )
 }

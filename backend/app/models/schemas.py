@@ -162,9 +162,14 @@ class ProductOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+class StockByWarehouse(BaseModel):
+    warehouse_id: str
+    quantity: int
+
 class ProductWithStock(ProductOut):
     total_stock: int = 0
     available_stock: int = 0
+    stock_by_warehouse: List[StockByWarehouse] = []
 
 
 # ============================================================

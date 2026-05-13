@@ -2,7 +2,7 @@
 app/routers/dashboard.py
 Métricas del dashboard para admin y super admin.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from datetime import datetime, timedelta
 from app.core.auth import require_staff, require_super_admin
 from app.core.supabase_client import supabase
@@ -92,6 +92,75 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
         "recent_reservations": recent_res.data or [],
         "recent_notifications": recent_notifs.data or [],
     }
+
+
+@router.get("/activity")
+async def get_activity(
+    limit: int = Query(100, le=200),
+    user: dict = Depends(require_staff),
+):
+    """Historial de actividad de la empresa: movimientos de stock + eventos."""
+    company_id = user["company_id"]
+
+    # IDs de productos de esta empresa
+    product_ids_res = supabase.table("products")\
+        .select("id")\
+        .eq("company_id", company_id)\
+        .execute()
+    product_ids = [p["id"] for p in (product_ids_res.data or [])]
+
+    activities = []
+
+    # Movimientos de stock (filtrados por productos de la empresa)
+    if product_ids:
+        movements = supabase.table("stock_movements")\
+            .select("id, type, quantity, notes, created_at, products(name), warehouses(name)")\
+            .in_("product_id", product_ids)\
+            .order("created_at", desc=True)\
+            .limit(limit)\
+            .execute()
+
+        type_labels = {
+            "entrada": "Entrada de stock",
+            "salida": "Salida de stock",
+            "ajuste": "Ajuste de stock",
+            "transferencia": "Transferencia",
+        }
+
+        for m in (movements.data or []):
+            product_name = (m.get("products") or {}).get("name", "Producto")
+            warehouse_name = (m.get("warehouses") or {}).get("name", "Almacén")
+            label = type_labels.get(m["type"], m["type"].capitalize())
+            activities.append({
+                "id": m["id"],
+                "category": "stock",
+                "type": m["type"],
+                "message": f"{label}: {product_name} × {m['quantity']} — {warehouse_name}",
+                "notes": m.get("notes"),
+                "created_at": m["created_at"],
+            })
+
+    # Notificaciones de la empresa (eventos del sistema)
+    notifs = supabase.table("notifications")\
+        .select("id, type, message, created_at")\
+        .eq("company_id", company_id)\
+        .order("created_at", desc=True)\
+        .limit(limit)\
+        .execute()
+
+    for n in (notifs.data or []):
+        activities.append({
+            "id": n["id"],
+            "category": "event",
+            "type": n["type"],
+            "message": n["message"],
+            "notes": None,
+            "created_at": n["created_at"],
+        })
+
+    # Fusionar y ordenar por fecha descendente
+    activities.sort(key=lambda x: x["created_at"], reverse=True)
+    return activities[:limit]
 
 
 @router.get("/superadmin")

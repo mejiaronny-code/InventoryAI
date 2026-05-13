@@ -27,6 +27,7 @@ export default function CategoriesPage() {
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState({ name: '', description: '', reservation_time_hours: 24 })
   const [saving, setSaving] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(null)
 
   const load = () => categoriesAPI.list().then(r => setCats(r.data))
   useEffect(() => { load() }, [])
@@ -43,9 +44,11 @@ export default function CategoriesPage() {
     } catch { toast.error('Error') } finally { setSaving(false) }
   }
 
-  const handleDelete = async (id) => {
-    if (!confirm('¿Eliminar?')) return
-    await categoriesAPI.delete(id); toast.success('Eliminada'); load()
+  const doDelete = async () => {
+    await categoriesAPI.delete(confirmDelete.id)
+    toast.success('Eliminada')
+    setConfirmDelete(null)
+    load()
   }
 
   return (
@@ -64,7 +67,7 @@ export default function CategoriesPage() {
               </div>
               <div className="flex gap-1">
                 <button onClick={() => openEdit(c)} className="btn-ghost p-1.5"><Pencil size={13} /></button>
-                <button onClick={() => handleDelete(c.id)} className="btn-ghost p-1.5 text-red-400 hover:bg-red-50"><Trash2 size={13} /></button>
+                <button onClick={() => setConfirmDelete({ id: c.id, name: c.name })} className="btn-ghost p-1.5 text-red-400 hover:bg-red-50"><Trash2 size={13} /></button>
               </div>
             </div>
             <h3 className="font-bold text-ink-900">{c.name}</h3>
@@ -74,6 +77,19 @@ export default function CategoriesPage() {
         ))}
         {cats.length === 0 && <p className="col-span-3 text-center text-ink-400 py-12">Sin categorías</p>}
       </div>
+
+      <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Confirmar eliminación">
+        <div className="space-y-4">
+          <p className="text-sm text-ink-600">
+            ¿Eliminar la categoría <strong className="text-ink-900">"{confirmDelete?.name}"</strong>?
+            Esta acción no se puede deshacer.
+          </p>
+          <div className="flex gap-3">
+            <button onClick={() => setConfirmDelete(null)} className="btn-secondary flex-1 justify-center">Cancelar</button>
+            <button onClick={doDelete} className="btn-danger flex-1 justify-center">Eliminar</button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={!!modal} onClose={() => setModal(null)} title={modal === 'create' ? 'Nueva categoría' : 'Editar categoría'}>
         <form onSubmit={handleSave} className="space-y-4">

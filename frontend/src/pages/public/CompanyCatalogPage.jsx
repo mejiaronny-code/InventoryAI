@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { productsAPI, categoriesAPI, companiesAPI } from '../../services/api'
 import ChatWidget from '../../components/chat/ChatWidget'
+import ProductImage from '../../components/shared/ProductImage'
 import {
   Search, Package, Tag, ChevronLeft,
   ShoppingBag, Zap, Filter
@@ -17,17 +18,12 @@ function ProductCard({ product }) {
 
   return (
     <div className="card-hover p-5 flex flex-col gap-3" onClick={() => setExpanded(e => !e)}>
-      {product.images?.[0] ? (
-        <img
-          src={product.images[0]}
-          alt={product.name}
-          className="w-full h-36 object-cover rounded-xl bg-ink-100"
-        />
-      ) : (
-        <div className="w-full h-36 rounded-xl bg-gradient-to-br from-brand-50 to-brand-100 flex items-center justify-center border border-brand-100">
-          <Package size={36} className="text-brand-300" />
-        </div>
-      )}
+      <ProductImage
+        src={product.images?.[0]}
+        alt={product.name}
+        className="w-full h-36 rounded-xl"
+        iconSize={36}
+      />
 
       <div>
         <h3 className="font-bold text-ink-900 text-sm leading-snug">{product.name}</h3>

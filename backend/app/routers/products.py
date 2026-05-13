@@ -11,7 +11,7 @@ import time
 from app.core.auth import require_admin, require_staff, get_current_user
 from app.core.supabase_client import supabase
 from app.core.config import settings
-from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock
+from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, StockByWarehouse
 from app.embeddings.embedding_service import (
     generate_product_embedding,
     should_regenerate_embedding,
@@ -58,7 +58,12 @@ async def list_public_products(
     for p in (result.data or []):
         stock_records = p.pop("product_warehouse_stock", []) or []
         total_stock = sum(s["quantity"] for s in stock_records)
-        products.append({**p, "total_stock": total_stock, "available_stock": total_stock})
+        products.append({
+            **p,
+            "total_stock": total_stock,
+            "available_stock": total_stock,
+            "stock_by_warehouse": stock_records,
+        })
 
     return products
 
@@ -89,7 +94,12 @@ async def list_products(
     for p in (result.data or []):
         stock_records = p.pop("product_warehouse_stock", []) or []
         total_stock = sum(s["quantity"] for s in stock_records)
-        products.append({**p, "total_stock": total_stock, "available_stock": total_stock})
+        products.append({
+            **p,
+            "total_stock": total_stock,
+            "available_stock": total_stock,
+            "stock_by_warehouse": stock_records,
+        })
 
     return products
 
@@ -109,7 +119,12 @@ async def get_product(product_id: str, user: dict = Depends(require_staff)):
     p = result.data
     stock_records = p.pop("product_warehouse_stock", []) or []
     total_stock = sum(s["quantity"] for s in stock_records)
-    return {**p, "total_stock": total_stock, "available_stock": total_stock}
+    return {
+        **p,
+        "total_stock": total_stock,
+        "available_stock": total_stock,
+        "stock_by_warehouse": stock_records,
+    }
 
 
 @router.post("/", response_model=ProductOut)
