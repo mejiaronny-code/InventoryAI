@@ -10,10 +10,12 @@ from langchain_groq import ChatGroq
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 import base64
 import logging
 import os
+import json
+import re
 from typing import Optional
 
 from app.core.config import settings
@@ -49,6 +51,7 @@ REGLAS IMPORTANTES:
 - Sé conciso, amigable y profesional
 - Nunca muestres IDs técnicos al cliente en la respuesta final — solo el código de reserva
 - Si el cliente no tiene email ni teléfono, puedes crear la reserva igualmente con solo el nombre
+- Si el cliente pregunta DÓNDE está un producto o cómo encontrarlo físicamente, usa get_stock_availability o get_product_detail y reporta el pasillo (aisle), estante (shelf) y posición (bin) si están definidos. Ejemplo: "Está en el Pasillo A, Estante 3, Posición B2"
 
 Fecha/hora actual: {current_datetime}
 """
@@ -109,15 +112,68 @@ def get_or_create_session(session_id: str, company_id: str, company_name: str) -
         MessagesPlaceholder(variable_name="agent_scratchpad"),
     ])
 
-    # Agente con tool calling
-    agent = create_tool_calling_agent(llm, tools, prompt)
+    # ── Normalizador de tool calls malformados ──────────────────────────────
+    # Groq/llama a veces genera: name='search_products {"query":"x"}' args={}
+    # Lo corregimos antes de que ToolsAgentOutputParser lo rechace.
+    def _fix_tool_calls(msg):
+        calls = getattr(msg, "tool_calls", None)
+        if not calls:
+            return msg
+        fixed = []
+        changed = False
+        for tc in calls:
+            name = tc.get("name", "")
+            if "{" in name or (name and " " in name.strip()):
+                m = re.match(r'^(\w+)\s+(\{.*\})$', name.strip(), re.DOTALL)
+                if m:
+                    try:
+                        new_args = json.loads(m.group(2))
+                        tc = {**tc, "name": m.group(1), "args": new_args}
+                        logger.warning(f"Tool call normalizado: '{name}' → '{m.group(1)}'")
+                        changed = True
+                    except Exception:
+                        pass
+            fixed.append(tc)
+        if not changed:
+            return msg
+        try:
+            return msg.model_copy(update={"tool_calls": fixed})
+        except Exception:
+            return msg
+
+    # ── Construir agente manualmente para insertar el normalizador ────────
+    try:
+        from langchain.agents.format_scratchpad.tool_calling import format_to_tool_messages
+        from langchain.agents.output_parsers.tools import ToolsAgentOutputParser
+        from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+
+        agent = (
+            RunnablePassthrough.assign(
+                agent_scratchpad=lambda x: format_to_tool_messages(x["intermediate_steps"])
+            )
+            | prompt
+            | llm.bind_tools(tools)
+            | RunnableLambda(_fix_tool_calls)
+            | ToolsAgentOutputParser()
+        )
+        logger.debug("Agente creado con normalizador de tool calls")
+    except Exception as import_err:
+        logger.warning(f"Fallback a create_tool_calling_agent: {import_err}")
+        agent = create_tool_calling_agent(llm, tools, prompt)
+    def _on_parse_error(err: Exception) -> str:
+        err_str = str(err)
+        logger.warning(f"AgentExecutor parse error: {err_str[:120]}")
+        if "tool call validation failed" in err_str or "not in request.tools" in err_str:
+            return "Hubo un error de formato en la llamada a herramientas. Por favor reintenta la misma acción."
+        return f"Error al procesar la respuesta: {err_str[:80]}"
+
     executor = AgentExecutor(
         agent=agent,
         tools=tools,
         memory=memory,
         verbose=True,
         max_iterations=5,
-        handle_parsing_errors=True,
+        handle_parsing_errors=_on_parse_error,
         metadata={
             "session_id": session_id,
             "company_id": company_id,
@@ -167,34 +223,72 @@ async def chat(
     # Obtener o crear sesión
     executor = get_or_create_session(session_id, company_id, company_name)
 
-    try:
-        result = await executor.ainvoke(
-            {"input": message},
-            config={
-                "metadata": {
-                    "session_id": session_id,
-                    "company_id": company_id,
-                    "company_slug": company_slug,
-                }
-            }
-        )
+    invoke_config = {
+        "metadata": {
+            "session_id": session_id,
+            "company_id": company_id,
+            "company_slug": company_slug,
+        }
+    }
 
-        response = result.get("output", "No pude procesar tu mensaje.")
-        
-        # Registrar uso de IA (estimado — LangSmith tiene el real)
-        _log_ai_usage(company_id, session_id, model="llama-3.3-70b-versatile")
+    # Patrones de error conocidos del modelo Groq/llama que requieren reintento
+    _RETRYABLE_ERRORS = (
+        "Failed to call a function",
+        "failed_generation",
+        "tool call validation failed",
+        "not in request.tools",
+        "tool_use_failed",
+        "invalid tool",
+    )
 
-        used_tools = []
-        if "intermediate_steps" in result:
-            for step in result["intermediate_steps"]:
-                if hasattr(step[0], "tool"):
-                    used_tools.append(step[0].tool)
+    # Intentar hasta 3 veces antes de usar fallback sin tools
+    for attempt in range(3):
+        try:
+            # En reintento 2+, forzar nueva sesión para limpiar estado corrupto
+            if attempt >= 1:
+                _session_store.pop(session_id, None)
+                _memory_store.pop(session_id, None)
+                executor = get_or_create_session(session_id, company_id, company_name)
 
-        return response, used_tools
+            result = await executor.ainvoke({"input": message}, config=invoke_config)
+            response = result.get("output", "No pude procesar tu mensaje.")
+            _log_ai_usage(company_id, session_id, model="llama-3.3-70b-versatile")
+            used_tools = []
+            if "intermediate_steps" in result:
+                for step in result["intermediate_steps"]:
+                    if hasattr(step[0], "tool"):
+                        used_tools.append(step[0].tool)
+            return response, used_tools
 
-    except Exception as e:
-        logger.error(f"Error en chat: {e}")
-        return "Lo siento, tuve un problema procesando tu mensaje. Intenta de nuevo.", []
+        except Exception as e:
+            error_str = str(e)
+            logger.warning(f"Intento {attempt + 1} fallido: {error_str[:150]}")
+
+            if any(pattern in error_str for pattern in _RETRYABLE_ERRORS):
+                if attempt < 2:
+                    continue  # reintentar
+
+                # Fallback: respuesta directa sin tools
+                logger.warning("Usando fallback sin tools para esta consulta")
+                try:
+                    llm = get_llm_chat()
+                    fallback_prompt = (
+                        f"Eres el asistente de inventario de {company_name}. "
+                        f"El cliente pregunta: {message}\n\n"
+                        "No tienes acceso a herramientas en este momento. "
+                        "Responde de forma amigable indicando que puedes ayudar con búsqueda de productos, "
+                        "precios y reservas, pero que en este momento hay un inconveniente técnico temporal. "
+                        "Invita al cliente a intentar de nuevo en unos segundos."
+                    )
+                    fallback = await llm.ainvoke(fallback_prompt)
+                    return fallback.content, []
+                except Exception as fe:
+                    logger.error(f"Fallback también falló: {fe}")
+                    return "Lo siento, hay un problema técnico temporal. Por favor intenta en unos segundos.", []
+
+            # Error no recuperable
+            logger.error(f"Error en chat (intento {attempt + 1}): {e}")
+            return "Lo siento, tuve un problema procesando tu mensaje. Intenta de nuevo.", []
 
 
 async def chat_with_image(

@@ -8,24 +8,27 @@ import { useState, useEffect } from 'react'
 import { notificationsAPI, companiesAPI } from '../../services/api'
 import { useRealtimeNotifications } from '../../hooks/useRealtimeNotifications'
 import ChatWidget from '../chat/ChatWidget'
+import ThemeProvider from '../shared/ThemeProvider'
+import { CompanyFeaturesProvider } from '../../context/CompanyFeaturesContext'
 import {
   LayoutDashboard, Package, Tag, Warehouse, BarChart3,
   CalendarCheck, Bell, Settings, Users, LogOut, Menu, X,
-  Zap, AlertTriangle, Activity
+  Zap, AlertTriangle, Activity, Hash
 } from 'lucide-react'
 import clsx from 'clsx'
 
 const navItems = [
-  { to: '/admin/dashboard',     icon: LayoutDashboard, label: 'Dashboard',      roles: ['admin','employee'] },
-  { to: '/admin/products',      icon: Package,         label: 'Productos',       roles: ['admin','employee'] },
-  { to: '/admin/categories',    icon: Tag,             label: 'Categorías',      roles: ['admin'] },
-  { to: '/admin/warehouses',    icon: Warehouse,       label: 'Almacenes',       roles: ['admin'] },
-  { to: '/admin/stock',         icon: BarChart3,       label: 'Stock',           roles: ['admin','employee'] },
-  { to: '/admin/reservations',  icon: CalendarCheck,   label: 'Reservas',        roles: ['admin','employee'] },
-  { to: '/admin/notifications', icon: Bell,            label: 'Notificaciones',  roles: ['admin','employee'] },
-  { to: '/admin/activity',      icon: Activity,        label: 'Actividad',       roles: ['admin','employee'] },
-  { to: '/admin/employees',     icon: Users,           label: 'Empleados',       roles: ['admin'] },
-  { to: '/admin/settings',      icon: Settings,        label: 'Configuración',   roles: ['admin'] },
+  { to: '/admin/dashboard',     icon: LayoutDashboard, label: 'Dashboard',        roles: ['admin','employee'] },
+  { to: '/admin/products',      icon: Package,         label: 'Productos',         roles: ['admin','employee'] },
+  { to: '/admin/categories',    icon: Tag,             label: 'Categorías',        roles: ['admin'] },
+  { to: '/admin/warehouses',    icon: Warehouse,       label: 'Almacenes',         roles: ['admin'] },
+  { to: '/admin/stock',         icon: BarChart3,       label: 'Stock',             roles: ['admin','employee'] },
+  { to: '/admin/serials',       icon: Hash,            label: 'Nros. de serie',    roles: ['admin','employee'], feature: 'serial_numbers' },
+  { to: '/admin/reservations',  icon: CalendarCheck,   label: 'Reservas',          roles: ['admin','employee'] },
+  { to: '/admin/notifications', icon: Bell,            label: 'Notificaciones',    roles: ['admin','employee'] },
+  { to: '/admin/activity',      icon: Activity,        label: 'Actividad',         roles: ['admin','employee'] },
+  { to: '/admin/employees',     icon: Users,           label: 'Empleados',         roles: ['admin'] },
+  { to: '/admin/settings',      icon: Settings,        label: 'Configuración',     roles: ['admin'] },
 ]
 
 export default function AdminLayout() {
@@ -37,6 +40,9 @@ export default function AdminLayout() {
   const [companyLogo, setCompanyLogo] = useState(null)
   const [companyName, setCompanyName] = useState('InventoryAI')
   const [companySlug, setCompanySlug] = useState(null)
+  const [companySettings, setCompanySettings] = useState(null)
+  const [companyFeatures, setCompanyFeatures] = useState(null)
+  const [companyBusinessType, setCompanyBusinessType] = useState('general')
 
   useEffect(() => {
     notificationsAPI.list()
@@ -48,6 +54,9 @@ export default function AdminLayout() {
         if (res.data?.logo_url) setCompanyLogo(res.data.logo_url)
         if (res.data?.name) setCompanyName(res.data.name)
         if (res.data?.slug) setCompanySlug(res.data.slug)
+        if (res.data?.settings) setCompanySettings(res.data.settings)
+        if (res.data?.features) setCompanyFeatures(res.data.features)
+        if (res.data?.business_type) setCompanyBusinessType(res.data.business_type)
       })
       .catch(() => {})
   }, [])
@@ -59,7 +68,11 @@ export default function AdminLayout() {
 
   const handleLogout = () => { logout(); navigate('/admin/login') }
 
-  const filteredNav = navItems.filter(item => item.roles.includes(user?.role))
+  const filteredNav = navItems.filter(item => {
+    if (!item.roles.includes(user?.role)) return false
+    if (item.feature && companyFeatures && !companyFeatures[item.feature]) return false
+    return true
+  })
 
   const Sidebar = () => (
     <div className="flex flex-col h-full">
@@ -137,7 +150,9 @@ export default function AdminLayout() {
   }
 
   return (
+    <CompanyFeaturesProvider features={companyFeatures} businessType={companyBusinessType}>
     <div className="flex h-screen bg-ink-50">
+      <ThemeProvider settings={companySettings} />
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex flex-col w-60 bg-white border-r border-ink-100 shrink-0">
         <Sidebar />
@@ -195,9 +210,11 @@ export default function AdminLayout() {
           <ChatWidget
             companySlug={companySlug}
             welcomeMessage={`[Admin] Estás viendo el chat tal como lo ven tus clientes en el catálogo de ${companyName}.`}
+            companyLogo={companyLogo}
           />
         </>
       )}
     </div>
+    </CompanyFeaturesProvider>
   )
 }

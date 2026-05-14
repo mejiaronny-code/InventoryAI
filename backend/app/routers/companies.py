@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from app.core.auth import require_super_admin, require_admin, get_current_user
 from app.core.supabase_client import supabase
 from app.core.config import settings
-from app.models.schemas import CompanyCreate, CompanyUpdate, CompanyOut
+from app.models.schemas import CompanyCreate, CompanyUpdate, CompanyOut, BUSINESS_PRESETS, DEFAULT_FEATURES
 from typing import List
 from pydantic import BaseModel
 import httpx
@@ -20,6 +20,10 @@ class CreateUserBody(BaseModel):
     password: str
     full_name: str
     role: str = "admin"
+
+class BusinessTypeBody(BaseModel):
+    business_type: str
+    features: dict | None = None  # solo para tipo "custom"
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -88,9 +92,12 @@ async def create_company(data: CompanyCreate, user: dict = Depends(require_super
         "status": "trial",
     }).execute()
 
+    btype = data.business_type or "general"
     company_data = {
         **data.model_dump(),
         "subscription_id": sub.data[0]["id"],
+        "business_type": btype,
+        "features": BUSINESS_PRESETS.get(btype, DEFAULT_FEATURES),
     }
     result = supabase.table("companies").insert(company_data).execute()
     return result.data[0]
@@ -138,6 +145,32 @@ async def update_subscription(
             .execute()
 
     return {"message": "Suscripción actualizada"}
+
+
+@router.patch("/{company_id}/business-type")
+async def set_business_type(
+    company_id: str,
+    body: BusinessTypeBody,
+    user: dict = Depends(require_super_admin)
+):
+    """Super admin: define el tipo de negocio y aplica el preset de features."""
+    if body.business_type not in BUSINESS_PRESETS and body.business_type != "custom":
+        raise HTTPException(400, "Tipo de negocio no válido")
+
+    if body.business_type == "custom" and body.features:
+        # Merge con defaults para asegurar que todos los keys existan
+        features = {**DEFAULT_FEATURES, **body.features}
+    else:
+        features = BUSINESS_PRESETS.get(body.business_type, DEFAULT_FEATURES)
+
+    result = supabase.table("companies").update({
+        "business_type": body.business_type,
+        "features": features,
+    }).eq("id", company_id).execute()
+
+    if not result.data:
+        raise HTTPException(404, "Empresa no encontrada")
+    return {"business_type": body.business_type, "features": features}
 
 
 @router.get("/me")

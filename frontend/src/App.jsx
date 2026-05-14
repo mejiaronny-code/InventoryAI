@@ -24,6 +24,7 @@ import NotificationsPage from './pages/admin/NotificationsPage'
 import SettingsPage from './pages/admin/SettingsPage'
 import EmployeesPage from './pages/admin/EmployeesPage'
 import ActivityPage from './pages/admin/ActivityPage'
+import SerialsPage from './pages/admin/SerialsPage'
 
 // Super Admin pages
 import SuperAdminLayout from './components/admin/SuperAdminLayout'
@@ -67,6 +68,7 @@ function AppRoutes() {
         <Route path="reservations" element={<ReservationsPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="activity" element={<ActivityPage />} />
+        <Route path="serials" element={<SerialsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route
           path="employees"

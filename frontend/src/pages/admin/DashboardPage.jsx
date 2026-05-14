@@ -2,13 +2,14 @@
  * pages/admin/DashboardPage.jsx
  */
 import { useState, useEffect } from 'react'
-import { dashboardAPI } from '../../services/api'
+import { dashboardAPI, stockAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
+import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import {
   Package, CalendarCheck, AlertTriangle, DollarSign,
-  TrendingUp, Bell, ArrowRight, RefreshCw
+  Bell, ArrowRight, RefreshCw, CalendarX2
 } from 'lucide-react'
-import { format } from 'date-fns'
+import { format, parseISO, differenceInDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
 
@@ -38,13 +39,20 @@ function StatCard({ icon: Icon, label, value, sub, accent = false }) {
 
 export default function DashboardPage() {
   const { user } = useAuth()
+  const { hasFeature } = useCompanyFeatures()
   const [data, setData] = useState(null)
+  const [expiring, setExpiring] = useState([])
   const [loading, setLoading] = useState(true)
 
   const load = () => {
     setLoading(true)
-    dashboardAPI.getMetrics()
-      .then(r => setData(r.data))
+    const calls = [dashboardAPI.getMetrics()]
+    if (hasFeature('expiration_dates')) calls.push(stockAPI.getExpiring(30))
+    Promise.all(calls)
+      .then(([metrics, exp]) => {
+        setData(metrics.data)
+        if (exp) setExpiring(exp.data || [])
+      })
       .finally(() => setLoading(false))
   }
 
@@ -80,11 +88,53 @@ export default function DashboardPage() {
         <>
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard icon={Package}      label="Productos activos"   value={data.total_products}     sub={`${data.total_stock} en stock`} />
-            <StatCard icon={CalendarCheck} label="Reservas activas"   value={data.active_reservations} sub={`${data.monthly_reservations} este mes`} accent />
-            <StatCard icon={AlertTriangle} label="Stock bajo mínimo"  value={data.low_stock_products}  sub="requieren atención" />
-            <StatCard icon={DollarSign}    label="Costo IA (mes)"     value={`$${data.monthly_ai_cost.toFixed(4)}`} sub="USD · LangSmith" />
+            <StatCard icon={Package}       label="Productos activos"   value={data.total_products}      sub={`${data.total_stock} en stock`} />
+            <StatCard icon={CalendarCheck} label="Reservas activas"    value={data.active_reservations} sub={`${data.monthly_reservations} este mes`} accent />
+            <StatCard icon={AlertTriangle} label="Stock bajo mínimo"   value={data.low_stock_products}  sub="requieren atención" />
+            {hasFeature('expiration_dates')
+              ? <StatCard icon={CalendarX2} label="Por vencer (30d)" value={data.expiring_soon ?? 0} sub="próximos 30 días" />
+              : <StatCard icon={DollarSign} label="Costo IA (mes)"   value={`$${data.monthly_ai_cost.toFixed(4)}`} sub="USD · LangSmith" />
+            }
           </div>
+          {hasFeature('expiration_dates') && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <StatCard icon={DollarSign} label="Costo IA (mes)" value={`$${data.monthly_ai_cost.toFixed(4)}`} sub="USD · LangSmith" />
+            </div>
+          )}
+
+          {/* Widget: Productos por vencer */}
+          {hasFeature('expiration_dates') && expiring.length > 0 && (
+            <div className="card border-yellow-200 bg-yellow-50/40">
+              <div className="p-5 border-b border-yellow-100 flex items-center gap-2">
+                <CalendarX2 size={17} className="text-yellow-500" />
+                <h2 className="section-title text-yellow-700">Productos por vencer (próximos 30 días)</h2>
+              </div>
+              <div className="divide-y divide-yellow-100">
+                {expiring.map((item, i) => {
+                  const daysLeft = item.days_left
+                  const urgent = daysLeft <= 3
+                  const warn = daysLeft <= 7
+                  return (
+                    <div key={i} className="px-5 py-3 flex items-center gap-3">
+                      <div className={clsx(
+                        'w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0',
+                        urgent ? 'bg-red-100 text-red-600' : warn ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'
+                      )}>
+                        {daysLeft}d
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-ink-900 text-sm truncate">{item.product_name}</p>
+                        <p className="text-xs text-ink-400">{item.warehouse_name} · {item.quantity} {item.unit}</p>
+                      </div>
+                      <span className="text-xs text-ink-500 shrink-0">
+                        {format(parseISO(item.nearest_expiry), 'd MMM yyyy', { locale: es })}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Tables row */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

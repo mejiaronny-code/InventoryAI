@@ -1,9 +1,11 @@
 """
 app/routers/dashboard.py
 Métricas del dashboard para admin y super admin.
+Queries paralelas con asyncio.to_thread para máximo rendimiento.
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from datetime import datetime, timedelta
+import asyncio
 from app.core.auth import require_staff, require_super_admin
 from app.core.supabase_client import supabase
 
@@ -13,84 +15,94 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 @router.get("/metrics")
 async def get_dashboard_metrics(user: dict = Depends(require_staff)):
     company_id = user["company_id"]
+    if not company_id:
+        raise HTTPException(status_code=403, detail="Esta cuenta no tiene empresa asignada")
+
     now = datetime.utcnow()
     month_start = now.replace(day=1, hour=0, minute=0, second=0).isoformat()
+    cutoff_30d = (now + timedelta(days=30)).isoformat()
 
-    # Productos activos
-    products = supabase.table("products").select("id", count="exact").eq("company_id", company_id).eq("is_active", True).execute()
-    total_products = products.count or 0
-
-    # Stock total (solo productos de esta empresa)
-    product_ids_res = supabase.table("products").select("id").eq("company_id", company_id).eq("is_active", True).execute()
-    product_ids = [p["id"] for p in (product_ids_res.data or [])]
-
-    if product_ids:
-        stock = supabase.table("product_warehouse_stock")\
-            .select("quantity")\
-            .in_("product_id", product_ids)\
+    # ── Ronda 1: obtener IDs de productos (necesario para las demás queries) ──
+    products_res = await asyncio.to_thread(
+        lambda: supabase.table("products")
+            .select("id", count="exact")
+            .eq("company_id", company_id)
+            .eq("is_active", True)
             .execute()
-        total_stock = sum(s["quantity"] for s in (stock.data or []))
-    else:
-        total_stock = 0
+    )
+    total_products = products_res.count or 0
+    product_ids = [p["id"] for p in (products_res.data or [])]
 
-    # Reservas activas
-    active_res = supabase.table("reservations").select("id", count="exact")\
-        .eq("company_id", company_id)\
-        .in_("status", ["pending", "confirmed"])\
-        .execute()
-    active_reservations = active_res.count or 0
+    if not product_ids:
+        return {
+            "total_products": 0, "total_stock": 0, "active_reservations": 0,
+            "low_stock_products": 0, "expiring_soon": 0, "monthly_ai_cost": 0.0,
+            "monthly_reservations": 0, "recent_reservations": [], "recent_notifications": [],
+        }
 
-    # Reservas del mes
-    monthly_res = supabase.table("reservations").select("id", count="exact")\
-        .eq("company_id", company_id)\
-        .gte("created_at", month_start)\
-        .execute()
-    monthly_reservations = monthly_res.count or 0
+    # ── Ronda 2: todas las queries restantes en paralelo ──
+    (
+        stock_res,
+        active_res,
+        monthly_res,
+        ai_res,
+        recent_res_data,
+        notifs_res,
+    ) = await asyncio.gather(
+        asyncio.to_thread(lambda: supabase.table("product_warehouse_stock")
+            .select("quantity, min_stock_alert, nearest_expiry")
+            .in_("product_id", product_ids)
+            .execute()),
+        asyncio.to_thread(lambda: supabase.table("reservations")
+            .select("id", count="exact")
+            .eq("company_id", company_id)
+            .in_("status", ["pending", "confirmed"])
+            .execute()),
+        asyncio.to_thread(lambda: supabase.table("reservations")
+            .select("id", count="exact")
+            .eq("company_id", company_id)
+            .gte("created_at", month_start)
+            .execute()),
+        asyncio.to_thread(lambda: supabase.table("ai_usage_log")
+            .select("cost_usd")
+            .eq("company_id", company_id)
+            .gte("created_at", month_start)
+            .execute()),
+        asyncio.to_thread(lambda: supabase.table("reservations")
+            .select("id, reservation_code, client_name, status, created_at, products(name)")
+            .eq("company_id", company_id)
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()),
+        asyncio.to_thread(lambda: supabase.table("notifications")
+            .select("*")
+            .eq("company_id", company_id)
+            .eq("read", False)
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()),
+    )
 
-    # Costo IA del mes
-    ai_usage = supabase.table("ai_usage_log")\
-        .select("cost_usd")\
-        .eq("company_id", company_id)\
-        .gte("created_at", month_start)\
-        .execute()
-    monthly_ai_cost = sum(float(u.get("cost_usd", 0)) for u in (ai_usage.data or []))
-
-    # Productos con stock bajo (solo de esta empresa)
-    if product_ids:
-        stock_all = supabase.table("product_warehouse_stock")\
-            .select("quantity, min_stock_alert, product_id")\
-            .in_("product_id", product_ids)\
-            .execute()
-        low_stock = sum(1 for s in (stock_all.data or []) if s["quantity"] <= (s.get("min_stock_alert") or 5))
-    else:
-        low_stock = 0
-
-    # Reservas recientes
-    recent_res = supabase.table("reservations")\
-        .select("id, reservation_code, client_name, status, created_at, products(name)")\
-        .eq("company_id", company_id)\
-        .order("created_at", desc=True)\
-        .limit(10)\
-        .execute()
-
-    # Notificaciones recientes
-    recent_notifs = supabase.table("notifications")\
-        .select("*")\
-        .eq("company_id", company_id)\
-        .eq("read", False)\
-        .order("created_at", desc=True)\
-        .limit(10)\
-        .execute()
+    # ── Calcular métricas ──
+    stock_data = stock_res.data or []
+    total_stock = sum(s["quantity"] for s in stock_data)
+    low_stock = sum(1 for s in stock_data if s["quantity"] <= (s.get("min_stock_alert") or 5))
+    expiring_soon = sum(
+        1 for s in stock_data
+        if s.get("nearest_expiry") and s["nearest_expiry"] <= cutoff_30d
+    )
+    monthly_ai_cost = sum(float(u.get("cost_usd", 0)) for u in (ai_res.data or []))
 
     return {
         "total_products": total_products,
         "total_stock": total_stock,
-        "active_reservations": active_reservations,
+        "active_reservations": active_res.count or 0,
         "low_stock_products": low_stock,
+        "expiring_soon": expiring_soon,
         "monthly_ai_cost": round(monthly_ai_cost, 4),
-        "monthly_reservations": monthly_reservations,
-        "recent_reservations": recent_res.data or [],
-        "recent_notifications": recent_notifs.data or [],
+        "monthly_reservations": monthly_res.count or 0,
+        "recent_reservations": recent_res_data.data or [],
+        "recent_notifications": notifs_res.data or [],
     }
 
 
@@ -101,61 +113,50 @@ async def get_activity(
 ):
     """Historial de actividad de la empresa: movimientos de stock + eventos."""
     company_id = user["company_id"]
+    if not company_id:
+        raise HTTPException(status_code=403, detail="Esta cuenta no tiene empresa asignada")
 
-    # IDs de productos de esta empresa
-    product_ids_res = supabase.table("products")\
-        .select("id")\
-        .eq("company_id", company_id)\
-        .execute()
+    # Queries en paralelo
+    product_ids_res, notifs_res = await asyncio.gather(
+        asyncio.to_thread(lambda: supabase.table("products")
+            .select("id").eq("company_id", company_id).execute()),
+        asyncio.to_thread(lambda: supabase.table("notifications")
+            .select("id, type, message, created_at")
+            .eq("company_id", company_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()),
+    )
+
     product_ids = [p["id"] for p in (product_ids_res.data or [])]
-
     activities = []
 
-    # Movimientos de stock (filtrados por productos de la empresa)
     if product_ids:
-        movements = supabase.table("stock_movements")\
-            .select("id, type, quantity, notes, created_at, products(name), warehouses(name)")\
-            .in_("product_id", product_ids)\
-            .order("created_at", desc=True)\
-            .limit(limit)\
-            .execute()
-
+        movements_res = await asyncio.to_thread(
+            lambda: supabase.table("stock_movements")
+                .select("id, type, quantity, notes, created_at, products(name), warehouses(name)")
+                .in_("product_id", product_ids)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+        )
         type_labels = {
-            "entrada": "Entrada de stock",
-            "salida": "Salida de stock",
-            "ajuste": "Ajuste de stock",
-            "transferencia": "Transferencia",
+            "entrada": "Entrada de stock", "salida": "Salida de stock",
+            "ajuste": "Ajuste de stock",   "transferencia": "Transferencia",
         }
-
-        for m in (movements.data or []):
-            product_name = (m.get("products") or {}).get("name", "Producto")
+        for m in (movements_res.data or []):
+            product_name  = (m.get("products")   or {}).get("name", "Producto")
             warehouse_name = (m.get("warehouses") or {}).get("name", "Almacén")
-            label = type_labels.get(m["type"], m["type"].capitalize())
             activities.append({
-                "id": m["id"],
-                "category": "stock",
-                "type": m["type"],
-                "message": f"{label}: {product_name} × {m['quantity']} — {warehouse_name}",
-                "notes": m.get("notes"),
-                "created_at": m["created_at"],
+                "id": m["id"], "category": "stock", "type": m["type"],
+                "message": f"{type_labels.get(m['type'], m['type'].capitalize())}: {product_name} × {m['quantity']} — {warehouse_name}",
+                "notes": m.get("notes"), "created_at": m["created_at"],
             })
 
-    # Notificaciones de la empresa (eventos del sistema)
-    notifs = supabase.table("notifications")\
-        .select("id, type, message, created_at")\
-        .eq("company_id", company_id)\
-        .order("created_at", desc=True)\
-        .limit(limit)\
-        .execute()
-
-    for n in (notifs.data or []):
+    for n in (notifs_res.data or []):
         activities.append({
-            "id": n["id"],
-            "category": "event",
-            "type": n["type"],
-            "message": n["message"],
-            "notes": None,
-            "created_at": n["created_at"],
+            "id": n["id"], "category": "event", "type": n["type"],
+            "message": n["message"], "notes": None, "created_at": n["created_at"],
         })
 
     # Fusionar y ordenar por fecha descendente

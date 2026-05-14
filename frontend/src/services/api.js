@@ -1,11 +1,48 @@
 /**
  * services/api.js
  * Capa de servicio centralizada para todas las llamadas al backend FastAPI.
+ * Incluye cache de GET requests para evitar refetch en navegación.
  */
 import axios from 'axios'
 
 const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1'
 
+// ── Cache de respuestas GET ───────────────────────────────────────
+// TTLs: datos que cambian poco = 30s, notificaciones = 8s
+const _cache = new Map()
+
+const CACHE_TTLS = {
+  '/products':     30_000,
+  '/categories':   60_000,
+  '/warehouses':   60_000,
+  '/dashboard':    20_000,
+  '/reservations': 15_000,
+  '/stock':        20_000,
+  '/notifications':  8_000,
+  '/auth/me':      60_000,
+  '/companies/me': 60_000,
+}
+
+function getTTL(url) {
+  for (const [prefix, ttl] of Object.entries(CACHE_TTLS)) {
+    if (url.includes(prefix)) return ttl
+  }
+  return 15_000 // default 15s
+}
+
+function getCacheKey(config) {
+  const token = localStorage.getItem('access_token') || ''
+  return `${token.slice(-12)}::${config.url}::${JSON.stringify(config.params || {})}`
+}
+
+export function clearCache(urlFragment) {
+  if (!urlFragment) { _cache.clear(); return }
+  for (const key of _cache.keys()) {
+    if (key.includes(urlFragment)) _cache.delete(key)
+  }
+}
+
+// ── Instancia axios ───────────────────────────────────────────────
 const api = axios.create({
   baseURL: BASE_URL,
   timeout: 30000,
@@ -15,14 +52,35 @@ const api = axios.create({
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('access_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
+
+  // Cache hit para GET
+  if (config.method === 'get' && !config.noCache) {
+    const key = getCacheKey(config)
+    const hit = _cache.get(key)
+    if (hit && Date.now() < hit.expiresAt) {
+      config._cacheHit = hit.data
+    }
+  }
   return config
 })
 
-// ── Interceptor: manejo de errores globales ───────────────────────
+// ── Interceptor: cache de respuestas + errores globales ──────────
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    // Guardar GET en cache
+    if (res.config.method === 'get' && !res.config.noCache) {
+      const key = getCacheKey(res.config)
+      _cache.set(key, { data: res, expiresAt: Date.now() + getTTL(res.config.url) })
+    }
+    // Invalidar cache en mutaciones
+    if (['post', 'put', 'patch', 'delete'].includes(res.config.method)) {
+      clearCache()
+    }
+    return res
+  },
   (error) => {
     if (error.response?.status === 401) {
+      clearCache()
       localStorage.removeItem('access_token')
       localStorage.removeItem('user')
       window.location.href = '/admin/login'
@@ -30,6 +88,30 @@ api.interceptors.response.use(
     return Promise.reject(error)
   }
 )
+
+// ── Wrapper que devuelve cache hit sin hacer request ─────────────
+const _originalRequest = api.request.bind(api)
+api.request = function(config) {
+  return _originalRequest(config).catch(err => {
+    if (err.config?._cacheHit) return err.config._cacheHit
+    throw err
+  })
+}
+
+// Monkey-patch get para retornar cache hit antes de la llamada HTTP
+const _originalGet = api.get.bind(api)
+api.get = function(url, config = {}) {
+  if (!config.noCache) {
+    const fakeConfig = { ...config, url, method: 'get', baseURL: BASE_URL }
+    const token = localStorage.getItem('access_token') || ''
+    const key = `${token.slice(-12)}::${url}::${JSON.stringify(config.params || {})}`
+    const hit = _cache.get(key)
+    if (hit && Date.now() < hit.expiresAt) {
+      return Promise.resolve(hit.data)
+    }
+  }
+  return _originalGet(url, config)
+}
 
 // ============================================================
 // AUTH
@@ -55,6 +137,8 @@ export const companiesAPI = {
   delete: (id) => api.delete(`/companies/${id}`),
   updateSubscription: (id, plan, status) =>
     api.patch(`/companies/${id}/subscription`, null, { params: { plan, status } }),
+  setBusinessType: (id, business_type, features = null) =>
+    api.patch(`/companies/${id}/business-type`, { business_type, features }),
   listUsers: (id) => api.get(`/companies/${id}/users`),
   searchUser: (id, email) => api.get(`/companies/${id}/search-user`, { params: { email } }),
   assignUser: (id, data) => api.post(`/companies/${id}/assign-admin`, data),
@@ -105,6 +189,7 @@ export const productsAPI = {
   update: (id, data) => api.put(`/products/${id}`, data),
   delete: (id) => api.delete(`/products/${id}`),
   regenerateEmbedding: (id) => api.post(`/products/${id}/regenerate-embedding`),
+  getVariants: (id) => api.get(`/products/${id}/variants`),
   uploadImage: (file) => {
     const form = new FormData()
     form.append('file', file)
@@ -121,6 +206,30 @@ export const stockAPI = {
   listMovements: (params) => api.get('/stock/movements', { params }),
   createMovement: (data) => api.post('/stock/movement', data),
   setStock: (productId, data) => api.put('/stock/set', data, { params: { product_id: productId } }),
+  updateLocation: (data) => api.patch('/stock/location', data),
+  getExpiring: (days = 30) => api.get('/stock/expiring', { params: { days } }),
+}
+
+// ============================================================
+// BATCHES
+// ============================================================
+export const batchesAPI = {
+  list: (params) => api.get('/batches/', { params }),
+  getByProduct: (productId) => api.get('/batches/', { params: { product_id: productId } }),
+  create: (data) => api.post('/batches/', data),
+  update: (id, data) => api.patch(`/batches/${id}`, data),
+  delete: (id) => api.delete(`/batches/${id}`),
+}
+
+// ============================================================
+// SERIALS
+// ============================================================
+export const serialsAPI = {
+  list: (params) => api.get('/serials/', { params }),
+  create: (data) => api.post('/serials/', data),
+  find: (serialNumber) => api.get(`/serials/search/${serialNumber}`),
+  update: (id, data) => api.patch(`/serials/${id}`, data),
+  delete: (id) => api.delete(`/serials/${id}`),
 }
 
 // ============================================================

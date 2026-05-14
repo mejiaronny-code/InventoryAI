@@ -5,11 +5,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { productsAPI, categoriesAPI, warehousesAPI, stockAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
+import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import { useDropzone } from 'react-dropzone'
 import toast from 'react-hot-toast'
 import {
   Plus, Search, Pencil, Trash2, Package, X,
-  RefreshCw, Loader2, Upload, ImageIcon, Warehouse
+  RefreshCw, Loader2, Upload, ImageIcon, Warehouse, Tag, Layers
 } from 'lucide-react'
 import ProductImage from '../../components/shared/ProductImage'
 import clsx from 'clsx'
@@ -30,7 +31,115 @@ function Modal({ open, onClose, title, children }) {
   )
 }
 
+function TagInput({ tags, onChange }) {
+  const [input, setInput] = useState('')
+
+  const addTag = () => {
+    const trimmed = input.trim().toLowerCase()
+    if (trimmed && !tags.includes(trimmed)) {
+      onChange([...tags, trimmed])
+    }
+    setInput('')
+  }
+
+  const handleKey = (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault()
+      addTag()
+    } else if (e.key === 'Backspace' && !input && tags.length > 0) {
+      onChange(tags.slice(0, -1))
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5 p-2 border border-ink-200 rounded-xl min-h-[40px] focus-within:border-brand-400 transition-colors">
+      {tags.map(tag => (
+        <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 bg-brand-100 text-brand-700 rounded-lg text-xs font-medium">
+          {tag}
+          <button type="button" onClick={() => onChange(tags.filter(t => t !== tag))} className="text-brand-400 hover:text-brand-700">
+            <X size={10} />
+          </button>
+        </span>
+      ))}
+      <input
+        value={input}
+        onChange={e => setInput(e.target.value)}
+        onKeyDown={handleKey}
+        onBlur={addTag}
+        placeholder={tags.length === 0 ? 'Agregar etiqueta...' : ''}
+        className="flex-1 min-w-[100px] bg-transparent outline-none text-xs text-ink-700 placeholder-ink-400"
+      />
+    </div>
+  )
+}
+
+function UnitsEditor({ baseUnit, units, onChange }) {
+  const [newName, setNewName] = useState('')
+  const [newFactor, setNewFactor] = useState('')
+
+  const add = () => {
+    const name = newName.trim()
+    const factor = parseFloat(newFactor)
+    if (!name || !factor || factor <= 0) return
+    if (units.some(u => u.name === name)) return
+    onChange([...units, { name, factor }])
+    setNewName('')
+    setNewFactor('')
+  }
+
+  return (
+    <div className="space-y-2">
+      {/* Base unit (read-only) */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-ink-50 border border-ink-200">
+        <span className="text-xs font-semibold text-brand-600 w-16 shrink-0">Base</span>
+        <span className="flex-1 text-xs text-ink-700 font-medium">{baseUnit}</span>
+        <span className="text-xs text-ink-400">factor: 1</span>
+      </div>
+
+      {/* Existing extra units */}
+      {units.map((u, i) => (
+        <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-ink-200">
+          <span className="text-xs text-ink-400 w-16 shrink-0">Extra</span>
+          <span className="flex-1 text-xs text-ink-700 font-medium">{u.name}</span>
+          <span className="text-xs text-ink-500">× {u.factor} {baseUnit}s</span>
+          <button
+            type="button"
+            onClick={() => onChange(units.filter((_, j) => j !== i))}
+            className="text-red-400 hover:text-red-600 ml-1"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      ))}
+
+      {/* Add new unit */}
+      <div className="flex gap-2">
+        <input
+          value={newName}
+          onChange={e => setNewName(e.target.value)}
+          placeholder="Ej: caja, pack, docena..."
+          className="input text-xs flex-1"
+          onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), add())}
+        />
+        <input
+          type="number"
+          value={newFactor}
+          onChange={e => setNewFactor(e.target.value)}
+          placeholder="Factor"
+          className="input text-xs w-24"
+          onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), add())}
+        />
+        <button type="button" onClick={add} className="btn-primary px-3 py-2 text-xs">
+          <Plus size={13} />
+        </button>
+      </div>
+      <p className="text-[10px] text-ink-400">Factor = cuántas unidades base contiene. Ej: caja = 12 unidades</p>
+    </div>
+  )
+}
+
 function ProductForm({ product, categories, warehouses, onSave, onClose }) {
+  const { hasFeature } = useCompanyFeatures()
   const [form, setForm] = useState({
     name: product?.name || '',
     description: product?.description || '',
@@ -43,7 +152,24 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
     reservation_time_hours: product?.reservation_time_hours || '',
     attributes: JSON.stringify(product?.attributes || {}, null, 2),
     images: product?.images || [],
+    tags: product?.tags || [],
+    units: product?.units || [],
+    variant_attributes: product?.variant_attributes || {},
+    parent_product_id: product?.parent_product_id || null,
   })
+  const [variants, setVariants] = useState([])
+  const [loadingVariants, setLoadingVariants] = useState(false)
+
+  // Cargar variantes si es un producto padre
+  useEffect(() => {
+    if (product?.id && hasFeature('variants') && !product?.parent_product_id) {
+      setLoadingVariants(true)
+      productsAPI.getVariants(product.id)
+        .then(r => setVariants(r.data || []))
+        .catch(() => {})
+        .finally(() => setLoadingVariants(false))
+    }
+  }, [product?.id])
   const [stockData, setStockData] = useState({ warehouse_id: '', quantity: 0, min_stock_alert: 5 })
   const [loading, setLoading] = useState(false)
   const [uploadingImg, setUploadingImg] = useState(false)
@@ -81,6 +207,10 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
         category_id: form.category_id || null,
         reservation_time_hours: form.reservation_time_hours ? parseInt(form.reservation_time_hours) : null,
         attributes: (() => { try { return JSON.parse(form.attributes) } catch { return {} } })(),
+        tags: form.tags,
+        units: form.units,
+        variant_attributes: form.variant_attributes,
+        parent_product_id: form.parent_product_id || null,
       }
 
       let saved
@@ -157,6 +287,110 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
           <input type="number" value={form.reservation_time_hours} onChange={e => handleChange('reservation_time_hours', e.target.value)} className="input" placeholder="usa el de la categoría" />
         </div>
       </div>
+
+      {/* Tags */}
+      {hasFeature('tags') && (
+        <div>
+          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+            Etiquetas <span className="text-ink-400 font-normal normal-case">· Enter o coma para agregar</span>
+          </label>
+          <TagInput tags={form.tags} onChange={v => handleChange('tags', v)} />
+        </div>
+      )}
+
+      {/* Variante: atributos de variante (si tiene padre) */}
+      {hasFeature('variants') && product?.parent_product_id && (
+        <div className="border border-brand-100 bg-brand-50 rounded-xl p-3">
+          <p className="text-xs font-bold text-brand-700 uppercase tracking-wide mb-2">Atributos de variante</p>
+          <p className="text-xs text-ink-500 mb-2">Ej: color=Rojo, talla=M</p>
+          <div className="space-y-2">
+            {Object.entries(form.variant_attributes).map(([k, v]) => (
+              <div key={k} className="flex items-center gap-2">
+                <span className="text-xs font-medium text-ink-600 w-20 shrink-0">{k}</span>
+                <input
+                  value={v}
+                  onChange={e => handleChange('variant_attributes', { ...form.variant_attributes, [k]: e.target.value })}
+                  className="input text-xs flex-1"
+                />
+                <button type="button" onClick={() => {
+                  const rest = { ...form.variant_attributes }
+                  delete rest[k]
+                  handleChange('variant_attributes', rest)
+                }} className="text-red-400 hover:text-red-600"><X size={12} /></button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                const key = window.prompt('Nombre del atributo (ej: color, talla, tamaño)')
+                if (key?.trim()) handleChange('variant_attributes', { ...form.variant_attributes, [key.trim()]: '' })
+              }}
+              className="text-xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
+            >
+              <Plus size={11} /> Agregar atributo
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Variantes existentes (solo en producto padre) */}
+      {hasFeature('variants') && product?.id && !product?.parent_product_id && (
+        <div className="border border-ink-100 rounded-xl overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 bg-ink-50 border-b border-ink-100">
+            <p className="text-xs font-bold text-ink-600 uppercase tracking-wide flex items-center gap-1.5">
+              <Layers size={12} /> Variantes ({variants.length})
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                // Abrir formulario para crear variante (producto hijo)
+                onSave({ openVariant: product.id })
+              }}
+              className="text-xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
+            >
+              <Plus size={11} /> Agregar
+            </button>
+          </div>
+          {loadingVariants ? (
+            <div className="p-3 text-center text-xs text-ink-400">Cargando...</div>
+          ) : variants.length === 0 ? (
+            <div className="p-3 text-center text-xs text-ink-400">Sin variantes. Agrega la primera.</div>
+          ) : (
+            <div className="divide-y divide-ink-50">
+              {variants.map(v => (
+                <div key={v.id} className="flex items-center gap-2 px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-ink-800">{v.name}</p>
+                    <div className="flex gap-1 flex-wrap mt-0.5">
+                      {Object.entries(v.variant_attributes || {}).map(([k, val]) => (
+                        <span key={k} className="text-[10px] bg-ink-100 text-ink-500 px-1.5 py-0.5 rounded">{k}: {val}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold text-brand-600">${Number(v.price).toLocaleString()}</span>
+                  <span className={clsx('badge text-[10px]', v.total_stock > 0 ? 'badge-green' : 'badge-red')}>
+                    {v.total_stock}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Multi-unidad */}
+      {hasFeature('multi_unit') && (
+        <div>
+          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+            Unidades de medida <span className="text-ink-400 font-normal normal-case">· unidades adicionales de venta</span>
+          </label>
+          <UnitsEditor
+            baseUnit={form.unit || 'unidad'}
+            units={form.units}
+            onChange={v => handleChange('units', v)}
+          />
+        </div>
+      )}
 
       {/* Imágenes */}
       <div>
@@ -272,6 +506,7 @@ function StockDetailModal({ open, onClose, product, warehouses }) {
 
 export default function ProductsPage() {
   const { user } = useAuth()
+  const { hasFeature } = useCompanyFeatures()
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [warehouses, setWarehouses] = useState([])
@@ -365,6 +600,21 @@ export default function ProductsPage() {
                       <div>
                         <p className="font-semibold text-ink-900 text-sm">{p.name}</p>
                         <p className="text-xs text-ink-400">{p.unit}</p>
+                        {hasFeature('tags') && p.tags?.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {p.tags.slice(0, 3).map(tag => (
+                              <span key={tag} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-brand-50 text-brand-600 rounded text-[10px] font-medium border border-brand-100">
+                                <Tag size={8} /> {tag}
+                              </span>
+                            ))}
+                            {p.tags.length > 3 && <span className="text-[10px] text-ink-400">+{p.tags.length - 3}</span>}
+                          </div>
+                        )}
+                        {hasFeature('variants') && p.parent_product_id && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded text-[10px] font-medium border border-purple-100 mt-1">
+                            <Layers size={8} /> Variante
+                          </span>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -417,7 +667,23 @@ export default function ProductsPage() {
           product={modal === 'create' ? null : modal}
           categories={categories}
           warehouses={warehouses}
-          onSave={() => { setModal(null); load() }}
+          onSave={(extra) => {
+            setModal(null)
+            load()
+            // Si se solicitó crear una variante del producto padre
+            if (extra?.openVariant) {
+              const parent = products.find(p => p.id === extra.openVariant)
+              if (parent) {
+                setModal({
+                  ...parent,
+                  id: undefined, // nuevo producto
+                  name: `${parent.name} — Variante`,
+                  parent_product_id: parent.id,
+                  variant_attributes: {},
+                })
+              }
+            }
+          }}
           onClose={() => setModal(null)}
         />
       </Modal>

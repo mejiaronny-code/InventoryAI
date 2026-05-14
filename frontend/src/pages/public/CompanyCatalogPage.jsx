@@ -7,14 +7,27 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { productsAPI, categoriesAPI, companiesAPI } from '../../services/api'
 import ChatWidget from '../../components/chat/ChatWidget'
 import ProductImage from '../../components/shared/ProductImage'
+import ThemeProvider from '../../components/shared/ThemeProvider'
 import {
   Search, Package, Tag, ChevronLeft,
   ShoppingBag, Zap, Filter
 } from 'lucide-react'
 import clsx from 'clsx'
 
-function ProductCard({ product }) {
+function ProductCard({ product, variants = [] }) {
   const [expanded, setExpanded] = useState(false)
+  const [selectedVariant, setSelectedVariant] = useState(null)
+  const activeProduct = selectedVariant || product
+  const extraUnits = activeProduct.units || []
+  const allUnits = extraUnits.length > 0
+    ? [{ name: activeProduct.unit, factor: 1 }, ...extraUnits]
+    : []
+  const [selectedUnit, setSelectedUnit] = useState(allUnits[0] || null)
+
+  const displayPrice = selectedUnit
+    ? Number(activeProduct.price) * selectedUnit.factor
+    : Number(activeProduct.price)
+  const displayUnit = selectedUnit ? selectedUnit.name : activeProduct.unit
 
   return (
     <div className="card-hover p-5 flex flex-col gap-3" onClick={() => setExpanded(e => !e)}>
@@ -27,26 +40,86 @@ function ProductCard({ product }) {
 
       <div>
         <h3 className="font-bold text-ink-900 text-sm leading-snug">{product.name}</h3>
-        {product.sku && <p className="text-ink-400 text-xs font-mono mt-0.5">SKU: {product.sku}</p>}
+        {activeProduct.sku && <p className="text-ink-400 text-xs font-mono mt-0.5">SKU: {activeProduct.sku}</p>}
       </div>
+
+      {/* Selector de variantes */}
+      {variants.length > 0 && (
+        <div className="flex gap-1 flex-wrap" onClick={e => e.stopPropagation()}>
+          <button
+            onClick={() => setSelectedVariant(null)}
+            className={clsx(
+              'px-2 py-0.5 rounded-lg text-[10px] font-semibold border transition-all',
+              !selectedVariant ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-500 border-ink-200 hover:border-brand-300'
+            )}
+          >
+            Base
+          </button>
+          {variants.map(v => {
+            const attrs = Object.entries(v.variant_attributes || {}).map(([k, val]) => val).join(' / ')
+            return (
+              <button
+                key={v.id}
+                onClick={() => setSelectedVariant(selectedVariant?.id === v.id ? null : v)}
+                className={clsx(
+                  'px-2 py-0.5 rounded-lg text-[10px] font-semibold border transition-all',
+                  selectedVariant?.id === v.id ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-500 border-ink-200 hover:border-brand-300'
+                )}
+              >
+                {attrs || v.name}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Selector de unidades */}
+      {allUnits.length > 1 && (
+        <div className="flex gap-1 flex-wrap" onClick={e => e.stopPropagation()}>
+          {allUnits.map(u => (
+            <button
+              key={u.name}
+              onClick={() => setSelectedUnit(u)}
+              className={clsx(
+                'px-2 py-0.5 rounded-lg text-[10px] font-semibold border transition-all',
+                selectedUnit?.name === u.name
+                  ? 'bg-brand-500 text-white border-brand-500'
+                  : 'bg-white text-ink-500 border-ink-200 hover:border-brand-300'
+              )}
+            >
+              {u.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="flex items-center justify-between mt-auto">
         <div>
           <p className="text-xl font-extrabold text-brand-600">
-            ${Number(product.price).toLocaleString()}
+            ${displayPrice.toLocaleString()}
           </p>
-          <p className="text-xs text-ink-400">por {product.unit}</p>
+          <p className="text-xs text-ink-400">por {displayUnit}</p>
         </div>
         <div className={clsx(
           'badge',
-          (product.total_stock || 0) > 0 ? 'badge-green' : 'badge-red'
+          (activeProduct.total_stock || 0) > 0 ? 'badge-green' : 'badge-red'
         )}>
-          {(product.total_stock || 0) > 0
-            ? `${product.total_stock} en stock`
+          {(activeProduct.total_stock || 0) > 0
+            ? `${activeProduct.total_stock} en stock`
             : 'Sin stock'
           }
         </div>
       </div>
+
+      {product.tags?.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {product.tags.map(tag => (
+            <span key={tag} className="px-2 py-0.5 bg-ink-100 text-ink-500 rounded text-[10px] font-medium">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
 
       {expanded && product.description && (
         <div className="border-t border-ink-100 pt-3 animate-fade-in">
@@ -69,6 +142,7 @@ export default function CompanyCatalogPage() {
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [selectedCat, setSelectedCat] = useState(null)
+  const [selectedTag, setSelectedTag] = useState(null)
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
@@ -92,11 +166,25 @@ export default function CompanyCatalogPage() {
       })
   }, [companySlug])
 
+  const allTags = [...new Set(products.flatMap(p => p.tags || []))].sort()
+
+  // Ocultar variantes (hijos) del grid principal — se muestran dentro del card del padre
   const filtered = products.filter(p => {
+    if (p.parent_product_id) return false  // variantes no van en la lista principal
     const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase())
     const matchCat = !selectedCat || p.category_id === selectedCat
-    return matchSearch && matchCat
+    const matchTag = !selectedTag || (p.tags || []).includes(selectedTag)
+    return matchSearch && matchCat && matchTag
   })
+
+  // Agrupar variantes por parent_product_id
+  const variantsByParent = products.reduce((acc, p) => {
+    if (p.parent_product_id) {
+      if (!acc[p.parent_product_id]) acc[p.parent_product_id] = []
+      acc[p.parent_product_id].push(p)
+    }
+    return acc
+  }, {})
 
   if (notFound) return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-ink-50">
@@ -108,6 +196,7 @@ export default function CompanyCatalogPage() {
 
   return (
     <div className="min-h-screen bg-ink-50">
+      <ThemeProvider settings={company?.settings} />
       {/* Header */}
       <header className="bg-white border-b border-ink-100 sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-4">
@@ -136,37 +225,57 @@ export default function CompanyCatalogPage() {
 
       <div className="max-w-6xl mx-auto px-6 py-6">
         {/* Filters */}
-        <div className="flex flex-col sm:flex-row gap-3 mb-6">
-          <div className="relative flex-1">
-            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-400" />
-            <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar productos..."
-              className="input pl-10"
-            />
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            <button
-              onClick={() => setSelectedCat(null)}
-              className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
-                !selectedCat ? 'badge-orange' : 'badge-gray hover:badge-orange'
-              )}
-            >
-              Todos
-            </button>
-            {categories.map(cat => (
+        <div className="flex flex-col gap-3 mb-6">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-400" />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Buscar productos..."
+                className="input pl-10"
+              />
+            </div>
+            <div className="flex gap-2 flex-wrap">
               <button
-                key={cat.id}
-                onClick={() => setSelectedCat(cat.id === selectedCat ? null : cat.id)}
+                onClick={() => setSelectedCat(null)}
                 className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
-                  selectedCat === cat.id ? 'badge-orange' : 'badge-gray hover:badge-orange'
+                  !selectedCat ? 'badge-orange' : 'badge-gray hover:badge-orange'
                 )}
               >
-                {cat.name}
+                Todos
               </button>
-            ))}
+              {categories.map(cat => (
+                <button
+                  key={cat.id}
+                  onClick={() => setSelectedCat(cat.id === selectedCat ? null : cat.id)}
+                  className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
+                    selectedCat === cat.id ? 'badge-orange' : 'badge-gray hover:badge-orange'
+                  )}
+                >
+                  {cat.name}
+                </button>
+              ))}
+            </div>
           </div>
+          {allTags.length > 0 && (
+            <div className="flex gap-2 flex-wrap items-center">
+              <span className="text-xs text-ink-400 flex items-center gap-1"><Tag size={11} /> Etiquetas:</span>
+              {allTags.map(tag => (
+                <button
+                  key={tag}
+                  onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                  className={clsx('inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all cursor-pointer',
+                    selectedTag === tag
+                      ? 'bg-brand-500 text-white border-brand-500'
+                      : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300 hover:text-brand-600'
+                  )}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Products grid */}
@@ -190,7 +299,9 @@ export default function CompanyCatalogPage() {
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {filtered.map(p => <ProductCard key={p.id} product={p} />)}
+            {filtered.map(p => (
+              <ProductCard key={p.id} product={p} variants={variantsByParent[p.id] || []} />
+            ))}
           </div>
         )}
       </div>
@@ -199,6 +310,7 @@ export default function CompanyCatalogPage() {
       <ChatWidget
         companySlug={companySlug}
         welcomeMessage={company?.settings?.chat_welcome}
+        companyLogo={company?.logo_url}
       />
     </div>
   )

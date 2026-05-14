@@ -18,6 +18,15 @@ class UserRole(str, Enum):
     admin = "admin"
     employee = "employee"
 
+class BusinessType(str, Enum):
+    general    = "general"
+    alimentos  = "alimentos"
+    farmacia   = "farmacia"
+    ferreteria = "ferreteria"
+    ropa       = "ropa"
+    electronica = "electronica"
+    custom     = "custom"
+
 class ReservationStatus(str, Enum):
     pending = "pending"
     confirmed = "confirmed"
@@ -43,11 +52,34 @@ class NotificationType(str, Enum):
 # COMPANIES
 # ============================================================
 
+DEFAULT_FEATURES = {
+    "physical_location": True,
+    "expiration_dates":  False,
+    "batch_tracking":    False,
+    "serial_numbers":    False,
+    "variants":          False,
+    "multi_unit":        False,
+    "tags":              True,
+    "barcodes_qr":       True,
+    "auto_reorder":      False,
+}
+
+BUSINESS_PRESETS: dict[str, dict] = {
+    "general":     {**DEFAULT_FEATURES},
+    "alimentos":   {**DEFAULT_FEATURES, "expiration_dates": True, "batch_tracking": True},
+    "farmacia":    {**DEFAULT_FEATURES, "expiration_dates": True, "batch_tracking": True, "serial_numbers": True},
+    "ferreteria":  {**DEFAULT_FEATURES, "multi_unit": True},
+    "ropa":        {**DEFAULT_FEATURES, "variants": True},
+    "electronica": {**DEFAULT_FEATURES, "serial_numbers": True, "variants": True},
+    "custom":      {**DEFAULT_FEATURES},
+}
+
 class CompanyCreate(BaseModel):
     name: str
     slug: Optional[str] = None
     logo_url: Optional[str] = None
     settings: Optional[dict] = {}
+    business_type: Optional[str] = "general"
 
 class CompanyUpdate(BaseModel):
     name: Optional[str] = None
@@ -61,6 +93,8 @@ class CompanyOut(BaseModel):
     slug: Optional[str]
     logo_url: Optional[str]
     settings: dict
+    business_type: Optional[str] = "general"
+    features: Optional[dict] = None
     is_active: bool
     created_at: datetime
 
@@ -129,6 +163,10 @@ class ProductCreate(BaseModel):
     images: List[str] = []
     attributes: dict = {}
     reservation_time_hours: Optional[int] = None
+    tags: List[str] = []
+    units: List[dict] = []
+    parent_product_id: Optional[UUID] = None
+    variant_attributes: dict = {}
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
@@ -143,6 +181,9 @@ class ProductUpdate(BaseModel):
     attributes: Optional[dict] = None
     reservation_time_hours: Optional[int] = None
     is_active: Optional[bool] = None
+    tags: Optional[List[str]] = None
+    units: Optional[List[dict]] = None
+    variant_attributes: Optional[dict] = None
 
 class ProductOut(BaseModel):
     id: UUID
@@ -158,6 +199,10 @@ class ProductOut(BaseModel):
     images: List[str]
     attributes: dict
     reservation_time_hours: Optional[int]
+    tags: List[str] = []
+    units: List[dict] = []
+    parent_product_id: Optional[UUID] = None
+    variant_attributes: dict = {}
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -165,11 +210,47 @@ class ProductOut(BaseModel):
 class StockByWarehouse(BaseModel):
     warehouse_id: str
     quantity: int
+    aisle: Optional[str] = None
+    shelf: Optional[str] = None
+    bin:   Optional[str] = None
+    nearest_expiry: Optional[datetime] = None
 
 class ProductWithStock(ProductOut):
     total_stock: int = 0
     available_stock: int = 0
     stock_by_warehouse: List[StockByWarehouse] = []
+
+
+# ============================================================
+# BATCHES
+# ============================================================
+
+class BatchCreate(BaseModel):
+    product_id: UUID
+    warehouse_id: UUID
+    batch_code: Optional[str] = None   # se genera automático si no se pasa
+    quantity: int = Field(gt=0)
+    expires_at: Optional[datetime] = None
+    received_at: Optional[datetime] = None
+    notes: Optional[str] = None
+
+class BatchOut(BaseModel):
+    id: UUID
+    company_id: UUID
+    product_id: UUID
+    warehouse_id: UUID
+    batch_code: str
+    quantity: int
+    initial_quantity: int
+    expires_at: Optional[datetime]
+    received_at: datetime
+    notes: Optional[str]
+    created_at: datetime
+
+class BatchUpdate(BaseModel):
+    quantity: Optional[int] = None
+    expires_at: Optional[datetime] = None
+    notes: Optional[str] = None
 
 
 # ============================================================
@@ -181,12 +262,21 @@ class StockUpdate(BaseModel):
     quantity: int
     min_stock_alert: int = 5
 
+class LocationUpdate(BaseModel):
+    product_id: str
+    warehouse_id: str
+    aisle: Optional[str] = None
+    shelf: Optional[str] = None
+    bin:   Optional[str] = None
+
 class StockMovementCreate(BaseModel):
     product_id: UUID
     warehouse_id: UUID
     type: StockMovementType
     quantity: int
     notes: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    batch_code: Optional[str] = None  # si la empresa usa batch_tracking
 
 class StockMovementOut(BaseModel):
     id: UUID

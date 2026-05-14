@@ -17,12 +17,25 @@ function parseMarkdown(text) {
     .replace(/\n/g, '<br/>')
 }
 
+function BotAvatar({ logo, size = 'sm' }) {
+  const dim = size === 'sm' ? 'w-7 h-7' : 'w-9 h-9'
+  return (
+    <div className={`${dim} rounded-full bg-brand-500 flex items-center justify-center shrink-0 overflow-hidden`}>
+      {logo
+        ? <img src={logo} alt="bot" className="w-full h-full object-contain p-0.5" />
+        : <Zap size={size === 'sm' ? 12 : 18} className="text-white" />
+      }
+    </div>
+  )
+}
+
 function TypingIndicator() {
   return (
     <div className="flex items-end gap-2 animate-fade-in">
       <div className="w-7 h-7 rounded-full bg-brand-500 flex items-center justify-center shrink-0">
         <Zap size={12} className="text-white" />
       </div>
+
       <div className="chat-bubble-ai flex items-center gap-1.5 py-3.5 px-4">
         <div className="typing-dot" />
         <div className="typing-dot" />
@@ -32,7 +45,7 @@ function TypingIndicator() {
   )
 }
 
-export default function ChatWidget({ companySlug, welcomeMessage }) {
+export default function ChatWidget({ companySlug, welcomeMessage, companyLogo }) {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -162,8 +175,11 @@ export default function ChatWidget({ companySlug, welcomeMessage }) {
       )}>
         {/* Header */}
         <div className="bg-gradient-to-r from-brand-500 to-brand-600 px-4 py-3.5 flex items-center gap-3">
-          <div className="w-9 h-9 bg-white/20 rounded-xl flex items-center justify-center">
-            <Zap size={18} className="text-white" />
+          <div className="w-9 h-9 bg-white/20 rounded-xl flex items-center justify-center overflow-hidden shrink-0">
+            {companyLogo
+              ? <img src={companyLogo} alt="logo" className="w-full h-full object-contain p-1" />
+              : <Zap size={18} className="text-white" />
+            }
           </div>
           <div className="flex-1">
             <p className="font-bold text-white text-sm">Asistente IA</p>

@@ -80,12 +80,14 @@ def create_inventory_tools(company_id: str, supabase_client):
             lines = [f"Encontré {len(available)} producto(s) relevante(s):\n"]
             for p in available[:5]:
                 sim = p.get("similarity", 0)
-                lines.append(
+                tags_str = ", ".join(p.get("tags") or [])
+            lines.append(
                     f"• **{p['name']}** (ID: {p['id']})\n"
                     f"  Precio: ${p['price']} / {p['unit']}\n"
                     f"  Stock disponible: {p.get('total_stock', 0)} unidades\n"
                     f"  {p.get('description', '')[:100]}...\n"
                     f"  Relevancia: {sim:.0%}\n"
+                    + (f"  Etiquetas: {tags_str}\n" if tags_str else "")
                 )
             return "\n".join(lines)
 
@@ -123,20 +125,35 @@ def create_inventory_tools(company_id: str, supabase_client):
             stock_lines = []
             for s in (stock_result.data or []):
                 wh = s.get("warehouses", {}) or {}
+                loc_parts = [s.get("aisle"), s.get("shelf"), s.get("bin")]
+                loc = " · ".join(p for p in loc_parts if p)
+                loc_str = f" (📍 {loc})" if loc else ""
                 stock_lines.append(
-                    f"  - {wh.get('name', 'Almacén')}: {s['quantity']} unidades"
+                    f"  - {wh.get('name', 'Almacén')}: {s['quantity']} unidades{loc_str}"
                 )
 
             reservation_hours = p.get("reservation_time_hours") or cat.get("reservation_time_hours", 24)
+
+            tags_str = ", ".join(p.get("tags") or [])
+            units_list = p.get("units") or []
+            units_lines = ""
+            if units_list:
+                units_lines = "Unidades disponibles:\n"
+                units_lines += f"  - {p['unit']} (base, factor: 1) → ${p['price']}\n"
+                for u in units_list:
+                    price_u = round(p['price'] * u['factor'], 2)
+                    units_lines += f"  - {u['name']} (factor: {u['factor']}) → ${price_u}\n"
 
             return (
                 f"**{p['name']}**\n"
                 f"SKU: {p.get('sku', 'N/A')} | Código: {p.get('barcode', 'N/A')}\n"
                 f"Precio: ${p['price']} / {p['unit']}\n"
-                f"Categoría: {cat.get('name', 'Sin categoría')}\n\n"
-                f"Descripción: {p.get('description', 'Sin descripción')}\n\n"
+                f"Categoría: {cat.get('name', 'Sin categoría')}\n"
+                + (f"Etiquetas: {tags_str}\n" if tags_str else "")
+                + f"\nDescripción: {p.get('description', 'Sin descripción')}\n\n"
                 f"Usos: {p.get('use_cases', 'No especificado')}\n\n"
-                f"Stock por almacén:\n" + "\n".join(stock_lines or ["  Sin stock"]) + "\n\n"
+                + (units_lines + "\n" if units_lines else "")
+                + f"Stock por almacén:\n" + "\n".join(stock_lines or ["  Sin stock"]) + "\n\n"
                 f"Tiempo de reserva: {reservation_hours} horas\n"
                 f"Atributos: {p.get('attributes', {})}"
             )
@@ -155,7 +172,7 @@ def create_inventory_tools(company_id: str, supabase_client):
         try:
             # Stock total
             stock_result = supabase_client.table("product_warehouse_stock")\
-                .select("quantity, warehouse_id, warehouses(name)")\
+                .select("quantity, warehouse_id, aisle, shelf, bin, warehouses(name)")\
                 .eq("product_id", product_id)\
                 .execute()
 
@@ -184,9 +201,12 @@ def create_inventory_tools(company_id: str, supabase_client):
                 reserved = reserved_by_wh.get(wh_id, 0)
                 available = s["quantity"] - reserved
                 total_available += max(available, 0)
+                loc_parts = [s.get("aisle"), s.get("shelf"), s.get("bin")]
+                loc = " · ".join(p for p in loc_parts if p)
+                loc_str = f" — 📍 {loc}" if loc else ""
                 lines.append(
                     f"  - {wh_name}: {s['quantity']} total - {reserved} reservados = **{max(available,0)} disponibles**"
-                    f" (warehouse_id: {wh_id})"
+                    f"{loc_str} (warehouse_id: {wh_id})"
                 )
 
             return (
@@ -416,6 +436,139 @@ def create_inventory_tools(company_id: str, supabase_client):
             logger.error(f"Error en get_reservation_status: {e}")
             return f"Error: {str(e)}"
 
+    @tool
+    async def get_batch_info(product_id: str) -> str:
+        """
+        Obtiene los lotes disponibles de un producto ordenados por FIFO (más antiguo primero).
+        Útil cuando preguntan por lotes, trazabilidad o fechas de vencimiento por lote.
+        """
+        try:
+            result = supabase_client.table("product_batches")\
+                .select("*, warehouses(name)")\
+                .eq("product_id", product_id)\
+                .eq("company_id", company_id)\
+                .gt("quantity", 0)\
+                .order("received_at")\
+                .execute()
+
+            if not result.data:
+                return "No hay lotes disponibles para este producto."
+
+            prod = supabase_client.table("products")\
+                .select("name, unit")\
+                .eq("id", product_id)\
+                .single().execute()
+            prod_name = (prod.data or {}).get("name", product_id)
+
+            lines = [f"Lotes disponibles de **{prod_name}** (orden FIFO):\n"]
+            for b in result.data:
+                wh = (b.get("warehouses") or {}).get("name", "—")
+                exp = b["expires_at"][:10] if b.get("expires_at") else "Sin vencimiento"
+                lines.append(
+                    f"  • Lote **{b['batch_code']}** — {b['quantity']} unidades | "
+                    f"Almacén: {wh} | Vence: {exp} | Recibido: {b['received_at'][:10]}"
+                )
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error en get_batch_info: {e}")
+            return f"Error: {str(e)}"
+
+    @tool
+    async def find_serial_number(serial_number: str) -> str:
+        """
+        Busca un producto por su número de serie.
+        Úsalo cuando el cliente menciona un número de serie específico.
+        """
+        try:
+            result = supabase_client.table("product_serial_numbers")\
+                .select("*, products(name, unit, price), warehouses(name)")\
+                .eq("company_id", company_id)\
+                .eq("serial_number", serial_number.upper())\
+                .single()\
+                .execute()
+
+            if not result.data:
+                return f"No encontré el número de serie '{serial_number}'."
+
+            s = result.data
+            prod = s.get("products") or {}
+            wh = (s.get("warehouses") or {}).get("name", "—")
+            status_map = {
+                "in_stock": "✅ En stock",
+                "reserved": "⏳ Reservado",
+                "sold": "📦 Vendido",
+                "retired": "🚫 Retirado",
+            }
+            return (
+                f"**Número de serie: {s['serial_number']}**\n"
+                f"Producto: {prod.get('name', '—')}\n"
+                f"Estado: {status_map.get(s['status'], s['status'])}\n"
+                f"Almacén: {wh}\n"
+                f"Precio: ${prod.get('price', '—')} / {prod.get('unit', '—')}\n"
+                f"Registrado: {s['created_at'][:10]}"
+            )
+        except Exception as e:
+            logger.error(f"Error en find_serial_number: {e}")
+            return f"Error: {str(e)}"
+
+    @tool
+    async def get_expiring_products(days: int = 30) -> str:
+        """
+        Lista los productos que vencen en los próximos N días.
+        Útil cuando el cliente o el negocio pregunta por productos próximos a vencer.
+        Parámetros:
+        - days: días hacia adelante a revisar (default: 30)
+        """
+        try:
+            from datetime import timedelta
+            cutoff = (datetime.utcnow() + timedelta(days=days)).isoformat()
+            now_iso = datetime.utcnow().isoformat()
+
+            product_ids_res = supabase_client.table("products")\
+                .select("id")\
+                .eq("company_id", company_id)\
+                .eq("is_active", True)\
+                .execute()
+            product_ids = [p["id"] for p in (product_ids_res.data or [])]
+
+            if not product_ids:
+                return "No hay productos registrados."
+
+            stock_res = supabase_client.table("product_warehouse_stock")\
+                .select("product_id, warehouse_id, quantity, nearest_expiry, warehouses(name)")\
+                .in_("product_id", product_ids)\
+                .not_.is_("nearest_expiry", "null")\
+                .lte("nearest_expiry", cutoff)\
+                .gte("nearest_expiry", now_iso)\
+                .order("nearest_expiry")\
+                .execute()
+
+            if not stock_res.data:
+                return f"No hay productos que venzan en los próximos {days} días. ✅"
+
+            pid_set = list({r["product_id"] for r in stock_res.data})
+            products_res = supabase_client.table("products")\
+                .select("id, name")\
+                .in_("id", pid_set)\
+                .execute()
+            name_map = {p["id"]: p["name"] for p in (products_res.data or [])}
+
+            lines = [f"Productos que vencen en los próximos {days} días:\n"]
+            for s in stock_res.data:
+                name = name_map.get(s["product_id"], "—")
+                wh = (s.get("warehouses") or {}).get("name", "—")
+                expiry = s["nearest_expiry"][:10]
+                days_left = (datetime.fromisoformat(s["nearest_expiry"].replace("Z", "")) - datetime.utcnow()).days
+                urgency = "🔴" if days_left <= 3 else "🟡" if days_left <= 7 else "🟢"
+                lines.append(f"  {urgency} **{name}** — Vence: {expiry} ({max(days_left, 0)} días) | {s['quantity']} unidades | {wh}")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error en get_expiring_products: {e}")
+            return f"Error: {str(e)}"
+
     return [
         search_products,
         get_product_detail,
@@ -423,4 +576,7 @@ def create_inventory_tools(company_id: str, supabase_client):
         create_reservation,
         cancel_reservation,
         get_reservation_status,
+        get_expiring_products,
+        get_batch_info,
+        find_serial_number,
     ]

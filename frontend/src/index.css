@@ -4,9 +4,18 @@
 
 @layer base {
   :root {
+    /* Colores del tema — se sobreescriben por empresa vía ThemeProvider */
+    --brand-primary:  #f97316;
+    --brand-dark:     color-mix(in srgb, var(--brand-primary) 82%, black);
+    --brand-light:    color-mix(in srgb, var(--brand-primary) 18%, white);
+    --brand-muted:    color-mix(in srgb, var(--brand-primary) 9%,  white);
+    --brand-ring:     color-mix(in srgb, var(--brand-primary) 35%, transparent);
+    --page-bg:        #fafafa;
+    --page-text:      #171717;
+
+    /* Legado — no eliminar */
     --brand: #f97316;
-    --brand-dark: #ea580c;
-    --brand-light: #fed7aa;
+    --brand-light-hex: #fed7aa;
     --ink-900: #171717;
     --ink-800: #262626;
   }
@@ -43,18 +52,27 @@
   /* ── Buttons ── */
   .btn-primary {
     @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-xl
-           bg-brand-500 text-white font-semibold text-sm
-           hover:bg-brand-600 active:bg-brand-700
-           transition-all duration-150 shadow-sm hover:shadow-glow
+           text-white font-semibold text-sm
+           transition-all duration-150 shadow-sm
            disabled:opacity-50 disabled:cursor-not-allowed;
+    background-color: var(--brand-primary);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--brand-dark);
+  }
+  .btn-primary:active:not(:disabled) {
+    background-color: color-mix(in srgb, var(--brand-primary) 72%, black);
   }
 
   .btn-secondary {
     @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-xl
            bg-white text-ink-800 font-semibold text-sm border border-ink-200
-           hover:border-brand-400 hover:text-brand-600
            transition-all duration-150 shadow-sm
            disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary:hover:not(:disabled) {
+    border-color: var(--brand-primary);
+    color: var(--brand-primary);
   }
 
   .btn-ghost {
@@ -78,8 +96,11 @@
     @apply w-full px-3.5 py-2.5 rounded-xl text-sm
            bg-white border border-ink-200 text-ink-900
            placeholder:text-ink-400
-           focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent
+           focus:outline-none focus:border-transparent
            transition-all duration-150;
+  }
+  .input:focus {
+    box-shadow: 0 0 0 2px var(--brand-ring);
   }
 
   .input-error {
@@ -101,7 +122,9 @@
   }
 
   .badge-orange {
-    @apply badge bg-brand-100 text-brand-700;
+    @apply badge;
+    background-color: var(--brand-muted);
+    color: color-mix(in srgb, var(--brand-primary) 80%, black);
   }
 
   .badge-green {
@@ -123,12 +146,20 @@
   /* ── Sidebar ── */
   .sidebar-link {
     @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium
-           text-ink-600 hover:bg-brand-50 hover:text-brand-700
-           transition-all duration-150 cursor-pointer;
+           text-ink-600 transition-all duration-150 cursor-pointer;
+  }
+  .sidebar-link:hover {
+    background-color: var(--brand-muted);
+    color: var(--brand-primary);
   }
 
   .sidebar-link-active {
-    @apply bg-brand-500 text-white shadow-sm hover:bg-brand-600 hover:text-white;
+    @apply text-white shadow-sm;
+    background-color: var(--brand-primary);
+  }
+  .sidebar-link-active:hover {
+    background-color: var(--brand-dark);
+    color: white;
   }
 
   /* ── Table ── */
@@ -171,7 +202,8 @@
 
   /* ── Chat bubble ── */
   .chat-bubble-user {
-    @apply px-4 py-3 rounded-2xl rounded-br-sm bg-brand-500 text-white text-sm leading-relaxed;
+    @apply px-4 py-3 rounded-2xl rounded-br-sm text-white text-sm leading-relaxed;
+    background-color: var(--brand-primary);
   }
 
   .chat-bubble-ai {
@@ -223,7 +255,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #f97316;
+  background: var(--brand-primary);
   animation: typing 1.4s ease-in-out infinite;
 }
 .typing-dot:nth-child(2) { animation-delay: 0.2s; }

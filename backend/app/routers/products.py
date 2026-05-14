@@ -42,7 +42,7 @@ async def list_public_products(
     company_id = company.data["id"]
 
     query = supabase.table("products")\
-        .select("*, product_warehouse_stock(quantity, warehouse_id)")\
+        .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\
         .eq("company_id", company_id)\
         .eq("is_active", True)
 
@@ -80,7 +80,7 @@ async def list_products(
     company_id = user["company_id"]
 
     query = supabase.table("products")\
-        .select("*, product_warehouse_stock(quantity, warehouse_id)")\
+        .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\
         .eq("company_id", company_id)
 
     if category_id:
@@ -107,7 +107,7 @@ async def list_products(
 @router.get("/{product_id}", response_model=ProductWithStock)
 async def get_product(product_id: str, user: dict = Depends(require_staff)):
     result = supabase.table("products")\
-        .select("*, product_warehouse_stock(quantity, warehouse_id)")\
+        .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\
         .eq("id", product_id)\
         .eq("company_id", user["company_id"])\
         .single()\
@@ -274,3 +274,26 @@ async def regenerate_embedding(product_id: str, user: dict = Depends(require_adm
         .execute()
 
     return {"message": "Embedding regenerado correctamente"}
+
+
+@router.get("/{product_id}/variants")
+async def get_variants(product_id: str, user: dict = Depends(require_staff)):
+    """Retorna todas las variantes de un producto padre."""
+    result = supabase.table("products")\
+        .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\
+        .eq("parent_product_id", product_id)\
+        .eq("company_id", user["company_id"])\
+        .eq("is_active", True)\
+        .execute()
+
+    variants = []
+    for p in (result.data or []):
+        stock_records = p.pop("product_warehouse_stock", []) or []
+        total_stock = sum(s["quantity"] for s in stock_records)
+        variants.append({
+            **p,
+            "total_stock": total_stock,
+            "available_stock": total_stock,
+            "stock_by_warehouse": stock_records,
+        })
+    return variants

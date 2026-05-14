@@ -1,17 +1,26 @@
 /**
  * pages/admin/StockPage.jsx
  */
-import { useState, useEffect } from 'react'
-import { stockAPI, productsAPI, warehousesAPI } from '../../services/api'
+import { useState, useEffect, useCallback } from 'react'
+import { stockAPI, productsAPI, warehousesAPI, batchesAPI, serialsAPI } from '../../services/api'
+import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import toast from 'react-hot-toast'
 import {
   Plus, ArrowUp, ArrowDown, RefreshCw, BarChart3,
-  X, Loader2, Pencil, Warehouse, Package
+  X, Loader2, Pencil, Warehouse, Package, MapPin, CalendarX2, Layers,
+  Hash, Search, CheckCircle2, ShoppingCart, Archive, Trash2
 } from 'lucide-react'
 import ProductImage from '../../components/shared/ProductImage'
-import { format } from 'date-fns'
+import { format, differenceInDays, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
+
+const SERIAL_STATUSES = {
+  in_stock:  { label: 'En stock',   color: 'badge-green',  icon: CheckCircle2  },
+  reserved:  { label: 'Reservado',  color: 'badge-orange', icon: Archive       },
+  sold:      { label: 'Vendido',    color: 'badge-gray',   icon: ShoppingCart  },
+  retired:   { label: 'Retirado',   color: 'badge-red',    icon: Trash2        },
+}
 
 const typeConfig = {
   entrada:       { color: 'badge-green',  icon: ArrowUp,    label: 'Entrada'       },
@@ -38,10 +47,18 @@ function Modal({ open, onClose, title, children }) {
 
 function EditStockModal({ open, onClose, item, onSaved }) {
   const [newQty, setNewQty] = useState('')
+  const [aisle, setAisle] = useState('')
+  const [shelf, setShelf] = useState('')
+  const [bin, setBin] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    if (open && item) setNewQty(String(item.current_qty))
+    if (open && item) {
+      setNewQty(String(item.current_qty))
+      setAisle(item.aisle || '')
+      setShelf(item.shelf || '')
+      setBin(item.bin || '')
+    }
   }, [open, item])
 
   if (!open || !item) return null
@@ -52,13 +69,24 @@ function EditStockModal({ open, onClose, item, onSaved }) {
     if (isNaN(qty) || qty < 0) { toast.error('Cantidad inválida'); return }
     setSaving(true)
     try {
-      await stockAPI.createMovement({
+      const tasks = []
+      if (qty !== item.current_qty) {
+        tasks.push(stockAPI.createMovement({
+          product_id: item.product_id,
+          warehouse_id: item.warehouse_id,
+          type: 'ajuste',
+          quantity: qty,
+          notes: `Ajuste manual: ${item.current_qty} → ${qty}`,
+        }))
+      }
+      tasks.push(stockAPI.updateLocation({
         product_id: item.product_id,
         warehouse_id: item.warehouse_id,
-        type: 'ajuste',
-        quantity: qty,
-        notes: `Ajuste manual: ${item.current_qty} → ${qty}`,
-      })
+        aisle: aisle || null,
+        shelf: shelf || null,
+        bin: bin || null,
+      }))
+      await Promise.all(tasks)
       toast.success('Stock actualizado')
       onSaved()
       onClose()
@@ -85,6 +113,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
           <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
         </div>
         <form onSubmit={handleSave} className="p-6 space-y-4">
+          {/* Cantidad */}
           <div className="flex items-center gap-4 p-3 rounded-xl bg-ink-50 border border-ink-100">
             <div className="text-center flex-1">
               <p className="text-xs text-ink-400 mb-1">Actual</p>
@@ -110,19 +139,41 @@ function EditStockModal({ open, onClose, item, onSaved }) {
               Nueva cantidad *
             </label>
             <input
-              type="number"
-              min="0"
-              value={newQty}
+              type="number" min="0" value={newQty}
               onChange={e => setNewQty(e.target.value)}
               className="input text-center text-xl font-bold"
-              autoFocus
-              required
+              autoFocus required
             />
           </div>
 
           <p className="text-xs text-ink-400 text-center">
             Se registrará como <span className="font-semibold text-ink-600">ajuste manual</span> en el historial.
           </p>
+
+          {/* Ubicación física */}
+          <div className="divider" />
+          <div className="flex items-center gap-2 mb-2">
+            <MapPin size={14} className="text-brand-500" />
+            <span className="text-xs font-semibold text-ink-600 uppercase tracking-wide">Ubicación física</span>
+            <span className="text-xs text-ink-400">(opcional)</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { label: 'Pasillo', value: aisle, set: setAisle, placeholder: 'P-5' },
+              { label: 'Estante', value: shelf, set: setShelf, placeholder: 'E-B' },
+              { label: 'Caja/Bin', value: bin,   set: setBin,   placeholder: '12' },
+            ].map(({ label, value, set, placeholder }) => (
+              <div key={label}>
+                <label className="text-xs text-ink-400 block mb-1">{label}</label>
+                <input
+                  value={value}
+                  onChange={e => set(e.target.value)}
+                  className="input text-sm text-center"
+                  placeholder={placeholder}
+                />
+              </div>
+            ))}
+          </div>
 
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose} className="btn-secondary flex-1 justify-center">Cancelar</button>
@@ -137,28 +188,50 @@ function EditStockModal({ open, onClose, item, onSaved }) {
 }
 
 export default function StockPage() {
+  const { hasFeature } = useCompanyFeatures()
   const [movements, setMovements] = useState([])
   const [products, setProducts] = useState([])
   const [warehouses, setWarehouses] = useState([])
   const [modal, setModal] = useState(false)
   const [editModal, setEditModal] = useState(null)
-  const [form, setForm] = useState({ product_id: '', warehouse_id: '', type: 'entrada', quantity: 1, notes: '' })
+  const [batches, setBatches] = useState([])
+  const [serials, setSerials] = useState([])
+  const [serialSearch, setSerialSearch] = useState('')
+  const [serialStatusFilter, setSerialStatusFilter] = useState('')
+  const [serialModal, setSerialModal] = useState(false)
+  const [serialForm, setSerialForm] = useState({ product_id: '', warehouse_id: '', serial_numbers: '', notes: '' })
+  const [serialSaving, setSerialSaving] = useState(false)
+  const [form, setForm] = useState({ product_id: '', warehouse_id: '', type: 'entrada', quantity: 1, notes: '', expires_at: '', batch_code: '' })
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('current')
 
+  const loadSerials = useCallback(() => {
+    if (!hasFeature('serial_numbers')) return
+    serialsAPI.list({
+      ...(serialSearch ? { search: serialSearch } : {}),
+      ...(serialStatusFilter ? { status: serialStatusFilter } : {}),
+    }).then(r => setSerials(r.data || []))
+  }, [serialSearch, serialStatusFilter, hasFeature])
+
   const load = () => {
     setLoading(true)
-    Promise.all([
+    const calls = [
       stockAPI.listMovements(),
       productsAPI.list(),
       warehousesAPI.list(),
-    ]).then(([m, p, w]) => {
-      setMovements(m.data); setProducts(p.data); setWarehouses(w.data)
+    ]
+    if (hasFeature('batch_tracking')) calls.push(batchesAPI.list({ include_empty: false }))
+    Promise.all(calls).then(([m, p, w, b]) => {
+      setMovements(m.data)
+      setProducts(p.data)
+      setWarehouses(w.data)
+      if (b) setBatches(b.data || [])
     }).finally(() => setLoading(false))
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => { loadSerials() }, [loadSerials])
 
   // Aplanar productos → filas por producto+almacén
   const currentStockRows = products.flatMap(p =>
@@ -171,6 +244,10 @@ export default function StockPage() {
         warehouse_id: s.warehouse_id,
         warehouse_name: wh?.name || s.warehouse_id,
         current_qty: s.quantity,
+        aisle: s.aisle || null,
+        shelf: s.shelf || null,
+        bin:   s.bin   || null,
+        nearest_expiry: s.nearest_expiry || null,
       }
     })
   )
@@ -178,11 +255,64 @@ export default function StockPage() {
   const handleSave = async (e) => {
     e.preventDefault(); setSaving(true)
     try {
-      await stockAPI.createMovement({ ...form, quantity: parseInt(form.quantity) })
-      toast.success('Movimiento registrado'); setModal(false); load()
+      const payload = {
+        ...form,
+        quantity: parseInt(form.quantity),
+        expires_at: form.expires_at || null,
+        batch_code: form.batch_code || null,
+      }
+      await stockAPI.createMovement(payload)
+      toast.success('Movimiento registrado')
+      setModal(false)
+      setForm({ product_id: '', warehouse_id: '', type: 'entrada', quantity: 1, notes: '', expires_at: '', batch_code: '' })
+      load()
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Error')
     } finally { setSaving(false) }
+  }
+
+  const handleSaveSerials = async (e) => {
+    e.preventDefault(); setSerialSaving(true)
+    try {
+      const lines = serialForm.serial_numbers
+        .split(/[\n,]+/)
+        .map(s => s.trim().toUpperCase())
+        .filter(Boolean)
+      if (!lines.length) { toast.error('Ingresa al menos un número de serie'); return }
+      const res = await serialsAPI.create({
+        product_id: serialForm.product_id,
+        warehouse_id: serialForm.warehouse_id,
+        serial_numbers: lines,
+        notes: serialForm.notes || null,
+      })
+      toast.success(`${res.data.created} serie(s) registrada(s)`)
+      setSerialModal(false)
+      setSerialForm({ product_id: '', warehouse_id: '', serial_numbers: '', notes: '' })
+      loadSerials()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Error al registrar series')
+    } finally { setSerialSaving(false) }
+  }
+
+  const handleDeleteSerial = async (id) => {
+    if (!confirm('¿Eliminar este número de serie?')) return
+    try {
+      await serialsAPI.delete(id)
+      toast.success('Serie eliminada')
+      loadSerials()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'No se puede eliminar')
+    }
+  }
+
+  const handleUpdateSerialStatus = async (id, status) => {
+    try {
+      await serialsAPI.update(id, { status })
+      toast.success('Estado actualizado')
+      loadSerials()
+    } catch (err) {
+      toast.error('Error al actualizar')
+    }
   }
 
   return (
@@ -193,29 +323,26 @@ export default function StockPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-ink-100 p-1 rounded-xl w-fit">
-        <button
-          onClick={() => setActiveTab('current')}
-          className={clsx(
-            'px-4 py-1.5 rounded-lg text-sm font-semibold transition-all',
-            activeTab === 'current'
-              ? 'bg-white text-ink-900 shadow-sm'
-              : 'text-ink-500 hover:text-ink-700'
-          )}
-        >
-          Inventario actual
-        </button>
-        <button
-          onClick={() => setActiveTab('movements')}
-          className={clsx(
-            'px-4 py-1.5 rounded-lg text-sm font-semibold transition-all',
-            activeTab === 'movements'
-              ? 'bg-white text-ink-900 shadow-sm'
-              : 'text-ink-500 hover:text-ink-700'
-          )}
-        >
-          Historial de movimientos
-        </button>
+      <div className="flex gap-1 bg-ink-100 p-1 rounded-xl w-fit flex-wrap">
+        {[
+          { key: 'current',   label: 'Inventario actual' },
+          { key: 'movements', label: 'Historial' },
+          ...(hasFeature('batch_tracking')  ? [{ key: 'batches', label: 'Lotes' }]   : []),
+          ...(hasFeature('serial_numbers')  ? [{ key: 'serials', label: 'Seriales' }] : []),
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={clsx(
+              'px-4 py-1.5 rounded-lg text-sm font-semibold transition-all',
+              activeTab === tab.key
+                ? 'bg-white text-ink-900 shadow-sm'
+                : 'text-ink-500 hover:text-ink-700'
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* Tab: Inventario actual */}
@@ -226,7 +353,9 @@ export default function StockPage() {
               <tr>
                 <th>Producto</th>
                 <th>Almacén</th>
+                <th>Ubicación</th>
                 <th>Cantidad</th>
+                {hasFeature('expiration_dates') && <th>Vencimiento</th>}
                 <th>Acción</th>
               </tr>
             </thead>
@@ -243,7 +372,10 @@ export default function StockPage() {
                     <p className="text-xs mt-1">Registra un movimiento de entrada para comenzar</p>
                   </td>
                 </tr>
-              ) : currentStockRows.map((row, i) => (
+              ) : currentStockRows.map((row, i) => {
+                const locationParts = [row.aisle, row.shelf, row.bin].filter(Boolean)
+                const locationText = locationParts.join(' · ')
+                return (
                 <tr key={`${row.product_id}-${row.warehouse_id}-${i}`}>
                   <td>
                     <div className="flex items-center gap-3">
@@ -258,21 +390,52 @@ export default function StockPage() {
                     </div>
                   </td>
                   <td>
+                    {locationText ? (
+                      <div className="flex items-center gap-1.5">
+                        <MapPin size={12} className="text-brand-500 shrink-0" />
+                        <span className="text-xs text-ink-600 font-medium">{locationText}</span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-ink-300">—</span>
+                    )}
+                  </td>
+                  <td>
                     <span className={clsx('badge', row.current_qty > 0 ? 'badge-green' : 'badge-red')}>
                       {row.current_qty}
                     </span>
                   </td>
+                  {hasFeature('expiration_dates') && (
+                    <td>
+                      {row.nearest_expiry ? (() => {
+                        const daysLeft = differenceInDays(parseISO(row.nearest_expiry), new Date())
+                        return (
+                          <div className="flex items-center gap-1.5">
+                            <CalendarX2 size={12} className={clsx(
+                              daysLeft <= 3 ? 'text-red-500' : daysLeft <= 7 ? 'text-yellow-500' : 'text-ink-400'
+                            )} />
+                            <span className={clsx('text-xs font-medium',
+                              daysLeft <= 3 ? 'text-red-600' : daysLeft <= 7 ? 'text-yellow-600' : 'text-ink-500'
+                            )}>
+                              {format(parseISO(row.nearest_expiry), 'd MMM yyyy', { locale: es })}
+                              <span className="text-ink-400 ml-1">({daysLeft}d)</span>
+                            </span>
+                          </div>
+                        )
+                      })() : <span className="text-xs text-ink-300">—</span>}
+                    </td>
+                  )}
                   <td>
                     <button
                       onClick={() => setEditModal(row)}
                       className="btn-ghost p-2 text-ink-500"
-                      title="Editar cantidad"
+                      title="Editar stock y ubicación"
                     >
                       <Pencil size={14} />
                     </button>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -332,6 +495,266 @@ export default function StockPage() {
         </div>
       )}
 
+      {/* Tab: Lotes */}
+      {activeTab === 'batches' && (
+        <div className="table-container">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Código de lote</th>
+                <th>Producto</th>
+                <th>Almacén</th>
+                <th>Restante / Inicial</th>
+                <th>Consumido</th>
+                <th>Vencimiento</th>
+                <th>Recibido</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                [...Array(5)].map((_, i) => (
+                  <tr key={i}><td colSpan={7}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>
+                ))
+              ) : batches.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="text-center py-12 text-ink-400">
+                    <Layers size={32} className="mx-auto mb-2 opacity-40" />
+                    <p>Sin lotes registrados</p>
+                    <p className="text-xs mt-1">Los lotes se crean automáticamente al registrar entradas de stock</p>
+                  </td>
+                </tr>
+              ) : batches.map(b => {
+                const expiry = b.expires_at ? parseISO(b.expires_at) : null
+                const daysLeft = expiry ? differenceInDays(expiry, new Date()) : null
+                const pct = Math.round((b.quantity / (b.initial_quantity || 1)) * 100)
+                const unit = b.product_unit || ''
+                return (
+                  <tr key={b.id}>
+                    <td>
+                      <span className="font-mono text-xs font-semibold text-ink-700 bg-ink-100 px-2 py-1 rounded-lg">
+                        {b.batch_code}
+                      </span>
+                    </td>
+                    <td className="font-medium text-ink-900 text-sm">{b.product_name || '—'}</td>
+                    <td className="text-ink-600 text-sm">{b.warehouse_name || '—'}</td>
+                    <td>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className={clsx('badge', b.quantity > 0 ? 'badge-green' : 'badge-red')}>
+                            {b.quantity} {unit}
+                          </span>
+                          <span className="text-xs text-ink-400">/ {b.initial_quantity} {unit}</span>
+                        </div>
+                        {/* Barra de progreso */}
+                        <div className="w-24 h-1.5 bg-ink-100 rounded-full overflow-hidden">
+                          <div
+                            className={clsx('h-full rounded-full transition-all',
+                              pct > 50 ? 'bg-green-400' : pct > 20 ? 'bg-yellow-400' : 'bg-red-400'
+                            )}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </td>
+                    <td className="text-xs text-ink-500">
+                      {b.consumed > 0
+                        ? <span className="text-red-500">-{b.consumed} {unit}</span>
+                        : <span className="text-ink-300">—</span>
+                      }
+                    </td>
+                    <td>
+                      {expiry ? (
+                        <div className="flex items-center gap-1.5">
+                          <CalendarX2 size={12} className={clsx(
+                            daysLeft <= 3 ? 'text-red-500' : daysLeft <= 7 ? 'text-yellow-500' : 'text-ink-400'
+                          )} />
+                          <span className={clsx('text-xs font-medium',
+                            daysLeft <= 3 ? 'text-red-600' : daysLeft <= 7 ? 'text-yellow-600' : 'text-ink-500'
+                          )}>
+                            {format(expiry, 'd MMM yyyy', { locale: es })}
+                            <span className="text-ink-400 ml-1">({daysLeft}d)</span>
+                          </span>
+                        </div>
+                      ) : <span className="text-xs text-ink-300">—</span>}
+                    </td>
+                    <td className="text-xs text-ink-400">
+                      {format(parseISO(b.received_at || b.created_at), 'd MMM yyyy', { locale: es })}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Tab: Seriales */}
+      {activeTab === 'serials' && (
+        <div className="space-y-4">
+          {/* Filtros */}
+          <div className="flex flex-wrap gap-3 items-center">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+              <input
+                value={serialSearch}
+                onChange={e => setSerialSearch(e.target.value)}
+                placeholder="Buscar número de serie..."
+                className="input pl-8 text-sm"
+              />
+            </div>
+            <select
+              value={serialStatusFilter}
+              onChange={e => setSerialStatusFilter(e.target.value)}
+              className="input text-sm w-40"
+            >
+              <option value="">Todos los estados</option>
+              {Object.entries(SERIAL_STATUSES).map(([k, v]) => (
+                <option key={k} value={k}>{v.label}</option>
+              ))}
+            </select>
+            <button onClick={() => setSerialModal(true)} className="btn-primary">
+              <Plus size={14} /> Registrar series
+            </button>
+          </div>
+
+          <div className="table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Número de serie</th>
+                  <th>Producto</th>
+                  <th>Almacén</th>
+                  <th>Estado</th>
+                  <th>Notas</th>
+                  <th>Registrado</th>
+                  <th>Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {serials.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="text-center py-12 text-ink-400">
+                      <Hash size={32} className="mx-auto mb-2 opacity-40" />
+                      <p>Sin números de serie registrados</p>
+                      <p className="text-xs mt-1">Registra series para llevar trazabilidad individual</p>
+                    </td>
+                  </tr>
+                ) : serials.map(s => {
+                  const st = SERIAL_STATUSES[s.status] || SERIAL_STATUSES.in_stock
+                  const StIcon = st.icon
+                  return (
+                    <tr key={s.id}>
+                      <td>
+                        <span className="font-mono text-xs font-bold text-ink-800 bg-ink-100 px-2 py-1 rounded-lg tracking-wider">
+                          {s.serial_number}
+                        </span>
+                      </td>
+                      <td className="font-medium text-ink-900 text-sm">
+                        {s.products?.name || '—'}
+                      </td>
+                      <td className="text-ink-600 text-sm">
+                        {s.warehouses?.name || '—'}
+                      </td>
+                      <td>
+                        <select
+                          value={s.status}
+                          onChange={e => handleUpdateSerialStatus(s.id, e.target.value)}
+                          className={clsx('text-xs font-semibold border-0 bg-transparent cursor-pointer focus:ring-1 focus:ring-brand-400 rounded px-1', {
+                            'text-green-700': s.status === 'in_stock',
+                            'text-orange-600': s.status === 'reserved',
+                            'text-ink-500': s.status === 'sold',
+                            'text-red-600': s.status === 'retired',
+                          })}
+                        >
+                          {Object.entries(SERIAL_STATUSES).map(([k, v]) => (
+                            <option key={k} value={k}>{v.label}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="text-xs text-ink-400 max-w-[140px] truncate">{s.notes || '—'}</td>
+                      <td className="text-xs text-ink-400">
+                        {format(parseISO(s.created_at), 'd MMM yyyy', { locale: es })}
+                      </td>
+                      <td>
+                        {s.status === 'in_stock' && (
+                          <button
+                            onClick={() => handleDeleteSerial(s.id)}
+                            className="btn-ghost p-1.5 text-red-400 hover:text-red-600"
+                            title="Eliminar"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Modal registrar series */}
+      <Modal open={serialModal} onClose={() => setSerialModal(false)} title="Registrar números de serie">
+        <form onSubmit={handleSaveSerials} className="space-y-4">
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Producto *</label>
+            <select
+              value={serialForm.product_id}
+              onChange={e => setSerialForm(f => ({ ...f, product_id: e.target.value }))}
+              className="input" required
+            >
+              <option value="">Seleccionar...</option>
+              {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Almacén *</label>
+            <select
+              value={serialForm.warehouse_id}
+              onChange={e => setSerialForm(f => ({ ...f, warehouse_id: e.target.value }))}
+              className="input" required
+            >
+              <option value="">Seleccionar...</option>
+              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+              Números de serie *
+              <span className="text-ink-400 font-normal normal-case ml-1">(uno por línea o separados por coma)</span>
+            </label>
+            <textarea
+              value={serialForm.serial_numbers}
+              onChange={e => setSerialForm(f => ({ ...f, serial_numbers: e.target.value }))}
+              className="input font-mono text-sm h-28 resize-none"
+              placeholder={"SN-001\nSN-002\nSN-003"}
+              required
+            />
+            {serialForm.serial_numbers && (
+              <p className="text-xs text-ink-400 mt-1">
+                {serialForm.serial_numbers.split(/[\n,]+/).filter(s => s.trim()).length} serie(s) a registrar
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Notas</label>
+            <input
+              value={serialForm.notes}
+              onChange={e => setSerialForm(f => ({ ...f, notes: e.target.value }))}
+              className="input" placeholder="Ej: Lote de importación mayo 2024"
+            />
+          </div>
+          <div className="flex gap-3 pt-1">
+            <button type="button" onClick={() => setSerialModal(false)} className="btn-secondary flex-1 justify-center">Cancelar</button>
+            <button type="submit" disabled={serialSaving} className="btn-primary flex-1 justify-center">
+              {serialSaving ? <Loader2 size={14} className="animate-spin" /> : 'Registrar'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
       {/* Modal registrar movimiento */}
       <Modal open={modal} onClose={() => setModal(false)} title="Registrar movimiento">
         <form onSubmit={handleSave} className="space-y-4">
@@ -367,6 +790,33 @@ export default function StockPage() {
             <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Notas</label>
             <input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input" placeholder="Motivo del movimiento..." />
           </div>
+          {hasFeature('expiration_dates') && form.type === 'entrada' && (
+            <div>
+              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                Fecha de vencimiento <span className="text-ink-400 font-normal normal-case">(opcional)</span>
+              </label>
+              <input
+                type="date"
+                value={form.expires_at}
+                onChange={e => setForm(f => ({ ...f, expires_at: e.target.value }))}
+                className="input"
+                min={new Date().toISOString().split('T')[0]}
+              />
+            </div>
+          )}
+          {hasFeature('batch_tracking') && form.type === 'entrada' && (
+            <div>
+              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                Código de lote <span className="text-ink-400 font-normal normal-case">(se genera automáticamente si se deja vacío)</span>
+              </label>
+              <input
+                value={form.batch_code}
+                onChange={e => setForm(f => ({ ...f, batch_code: e.target.value }))}
+                className="input font-mono"
+                placeholder="Ej: LOTE-20240115-A1B2"
+              />
+            </div>
+          )}
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={() => setModal(false)} className="btn-secondary flex-1 justify-center">Cancelar</button>
             <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">

@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react'
 import { companiesAPI } from '../../services/api'
 import toast from 'react-hot-toast'
-import { Plus, X, Loader2, Users, UserPlus, Search } from 'lucide-react'
+import { Plus, X, Loader2, Users, UserPlus, Search, Building2, ChevronDown } from 'lucide-react'
 import clsx from 'clsx'
 
 function Modal({ open, onClose, title, children }) {
@@ -24,6 +24,139 @@ function Modal({ open, onClose, title, children }) {
 }
 
 const roleColors = { admin: 'badge-orange', employee: 'badge-gray' }
+
+const BUSINESS_TYPES = [
+  { value: 'general',     label: 'General',      emoji: '🏪' },
+  { value: 'alimentos',   label: 'Alimentos',    emoji: '🍎' },
+  { value: 'farmacia',    label: 'Farmacia',      emoji: '💊' },
+  { value: 'ferreteria',  label: 'Ferretería',   emoji: '🔧' },
+  { value: 'ropa',        label: 'Ropa',          emoji: '👕' },
+  { value: 'electronica', label: 'Electrónica',  emoji: '💻' },
+  { value: 'custom',      label: 'Personalizado', emoji: '⚙️' },
+]
+
+const FEATURE_LABELS = {
+  physical_location: 'Ubicación física (pasillo/estante)',
+  expiration_dates:  'Fechas de caducidad',
+  batch_tracking:    'Control por lotes',
+  serial_numbers:    'Números de serie',
+  variants:          'Variantes (talla/color)',
+  multi_unit:        'Multi-unidad (caja/docena)',
+  tags:              'Etiquetas/Tags',
+  barcodes_qr:       'Códigos QR / Barras',
+  auto_reorder:      'Reorden automático',
+}
+
+function BusinessTypeModal({ company, onClose, onSaved }) {
+  const [btype, setBtype] = useState(company.business_type || 'general')
+  const [customFeatures, setCustomFeatures] = useState(company.features || {})
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await companiesAPI.setBusinessType(company.id, btype, btype === 'custom' ? customFeatures : null)
+      toast.success('Tipo de negocio actualizado')
+      onSaved()
+      onClose()
+    } catch { toast.error('Error al guardar') }
+    finally { setSaving(false) }
+  }
+
+  const toggleFeature = (key) => setCustomFeatures(f => ({ ...f, [key]: !f[key] }))
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="modal-box max-w-md">
+        <div className="flex items-center justify-between p-6 border-b border-ink-100">
+          <div className="flex items-center gap-2">
+            <Building2 size={18} className="text-brand-500" />
+            <h3 className="text-base font-bold text-ink-900">Tipo de negocio · {company.name}</h3>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
+        </div>
+        <div className="p-6 space-y-5">
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-2">
+              Sector
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {BUSINESS_TYPES.map(({ value, label, emoji }) => (
+                <button
+                  key={value}
+                  onClick={() => setBtype(value)}
+                  className={clsx(
+                    'flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium text-left transition-all',
+                    btype === value
+                      ? 'bg-brand-50 border-brand-400 text-brand-700'
+                      : 'bg-white border-ink-200 text-ink-700 hover:border-brand-300'
+                  )}
+                >
+                  <span>{emoji}</span>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {btype !== 'custom' && (
+            <div className="bg-ink-50 rounded-xl p-4 space-y-1.5">
+              <p className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Features que se activarán</p>
+              {Object.entries(FEATURE_LABELS).map(([key, label]) => {
+                const presets = {
+                  general:     { physical_location:true, tags:true, barcodes_qr:true },
+                  alimentos:   { physical_location:true, tags:true, barcodes_qr:true, expiration_dates:true, batch_tracking:true },
+                  farmacia:    { physical_location:true, tags:true, barcodes_qr:true, expiration_dates:true, batch_tracking:true, serial_numbers:true },
+                  ferreteria:  { physical_location:true, tags:true, barcodes_qr:true, multi_unit:true },
+                  ropa:        { physical_location:true, tags:true, barcodes_qr:true, variants:true },
+                  electronica: { physical_location:true, tags:true, barcodes_qr:true, serial_numbers:true, variants:true },
+                }
+                const on = presets[btype]?.[key] || false
+                return (
+                  <div key={key} className="flex items-center gap-2">
+                    <span className={`w-3 h-3 rounded-full shrink-0 ${on ? 'bg-green-400' : 'bg-ink-200'}`} />
+                    <span className={`text-xs ${on ? 'text-ink-700 font-medium' : 'text-ink-400'}`}>{label}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {btype === 'custom' && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-ink-500 uppercase tracking-wide">Activar manualmente</p>
+              {Object.entries(FEATURE_LABELS).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-ink-50 cursor-pointer">
+                  <div
+                    onClick={() => toggleFeature(key)}
+                    className={clsx(
+                      'w-9 h-5 rounded-full transition-colors shrink-0 relative cursor-pointer',
+                      customFeatures[key] ? 'bg-brand-500' : 'bg-ink-200'
+                    )}
+                  >
+                    <span className={clsx(
+                      'absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform',
+                      customFeatures[key] ? 'translate-x-4' : 'translate-x-0.5'
+                    )} />
+                  </div>
+                  <span className="text-sm text-ink-700">{label}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <button onClick={onClose} className="btn-secondary flex-1 justify-center">Cancelar</button>
+            <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 justify-center">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : 'Guardar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function UsersModal({ company, onClose }) {
   const [users, setUsers] = useState([])
@@ -256,6 +389,7 @@ export default function SuperAdminCompaniesPage() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
   const [usersTarget, setUsersTarget] = useState(null)
+  const [businessTarget, setBusinessTarget] = useState(null)
 
   const load = () => companiesAPI.listAll().then(r => setCompanies(r.data)).finally(() => setLoading(false))
   useEffect(() => { load() }, [])
@@ -308,6 +442,7 @@ export default function SuperAdminCompaniesPage() {
             <tr>
               <th>Empresa</th>
               <th>Slug</th>
+              <th>Sector</th>
               <th>Plan</th>
               <th>Estado</th>
               <th>Acciones</th>
@@ -329,6 +464,14 @@ export default function SuperAdminCompaniesPage() {
                     </div>
                   </td>
                   <td><span className="font-mono text-xs text-ink-500">/{c.slug}</span></td>
+                  <td>
+                    {(() => {
+                      const bt = BUSINESS_TYPES.find(b => b.value === (c.business_type || 'general'))
+                      return (
+                        <span className="text-sm">{bt?.emoji} {bt?.label || 'General'}</span>
+                      )
+                    })()}
+                  </td>
                   <td><span className="badge badge-gray">{sub.plan || '—'}</span></td>
                   <td>
                     <span className={`badge ${subStatusColor[sub.status] || 'badge-gray'}`}>
@@ -347,6 +490,13 @@ export default function SuperAdminCompaniesPage() {
                         <option value="suspended">Suspendido</option>
                         <option value="cancelled">Cancelado</option>
                       </select>
+                      <button
+                        onClick={() => setBusinessTarget(c)}
+                        className="btn-secondary text-xs px-3 py-1.5"
+                        title="Tipo de negocio"
+                      >
+                        <Building2 size={13} /> Sector
+                      </button>
                       <button
                         onClick={() => setUsersTarget(c)}
                         className="btn-secondary text-xs px-3 py-1.5"
@@ -367,6 +517,15 @@ export default function SuperAdminCompaniesPage() {
           </tbody>
         </table>
       </div>
+
+      {/* Modal tipo de negocio */}
+      {businessTarget && (
+        <BusinessTypeModal
+          company={businessTarget}
+          onClose={() => setBusinessTarget(null)}
+          onSaved={load}
+        />
+      )}
 
       {/* Modal gestionar usuarios */}
       {usersTarget && <UsersModal company={usersTarget} onClose={() => setUsersTarget(null)} />}

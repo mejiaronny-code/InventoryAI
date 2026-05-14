@@ -6,7 +6,7 @@ import { companiesAPI, authAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
 import { useDropzone } from 'react-dropzone'
 import toast from 'react-hot-toast'
-import { Save, Loader2, Settings, User, Upload, ImageIcon, AlertTriangle, X } from 'lucide-react'
+import { Save, Loader2, Settings, User, Upload, ImageIcon, AlertTriangle, X, Palette } from 'lucide-react'
 
 export default function SettingsPage() {
   const { user, updateUser } = useAuth()
@@ -187,6 +187,60 @@ export default function SettingsPage() {
             placeholder="¡Hola! ¿En qué puedo ayudarte?"
           />
         </div>
+
+        <div className="divider" />
+
+        {/* Personalización de colores */}
+        <div className="flex items-center gap-2 mb-1">
+          <Palette size={17} className="text-brand-500" />
+          <h2 className="section-title">Personalización</h2>
+        </div>
+        <p className="text-xs text-ink-400 -mt-1">
+          Estos colores se aplican en tu catálogo público y en el panel de administración.
+        </p>
+
+        {[
+          { key: 'primary_color', label: 'Color principal', hint: 'Botones, badges, íconos, links y acentos de la marca' },
+        ].map(({ key, label, hint }) => (
+          <div key={key}>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">{label}</label>
+            <p className="text-xs text-ink-400 mb-2">{hint}</p>
+            <div className="flex items-center gap-3">
+              {/* Native color picker swatch */}
+              <label className="relative w-10 h-10 rounded-xl border-2 border-ink-200 overflow-hidden cursor-pointer shrink-0 shadow-sm hover:border-brand-400 transition-colors">
+                <span
+                  className="absolute inset-0"
+                  style={{ backgroundColor: form.settings[key] }}
+                />
+                <input
+                  type="color"
+                  value={form.settings[key]}
+                  onChange={e => setForm(f => ({ ...f, settings: { ...f.settings, [key]: e.target.value } }))}
+                  className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                />
+              </label>
+              {/* Hex text input */}
+              <input
+                type="text"
+                value={form.settings[key]}
+                onChange={e => {
+                  const v = e.target.value
+                  if (/^#[0-9A-Fa-f]{0,6}$/.test(v)) {
+                    setForm(f => ({ ...f, settings: { ...f.settings, [key]: v } }))
+                  }
+                }}
+                maxLength={7}
+                className="input font-mono w-32 text-sm"
+                placeholder="#000000"
+              />
+              {/* Live preview pill */}
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-ink-100 bg-ink-50">
+                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: form.settings[key] }} />
+                <span className="text-xs text-ink-500 font-mono">{form.settings[key]}</span>
+              </div>
+            </div>
+          </div>
+        ))}
 
         <button type="submit" disabled={saving} className="btn-primary">
           {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
