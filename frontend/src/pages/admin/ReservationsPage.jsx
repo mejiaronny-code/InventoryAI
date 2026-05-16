@@ -4,7 +4,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { reservationsAPI } from '../../services/api'
 import toast from 'react-hot-toast'
-import { RefreshCw, CheckCircle, XCircle, Package, Clock, Search, Loader2 } from 'lucide-react'
+import { RefreshCw, CheckCircle, XCircle, Package, Clock, Search, Loader2, Trash2 } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
@@ -24,6 +24,7 @@ export default function ReservationsPage() {
   const [loading, setLoading] = useState(true)
   // { id, action } — qué botón muestra spinner
   const [updating, setUpdating] = useState(null)
+  const [deletingCancelled, setDeletingCancelled] = useState(false)
   // Set de IDs que acaban de cambiar de estado (para la animación de fila)
   const [flashedRows, setFlashedRows] = useState(new Set())
 
@@ -87,6 +88,17 @@ export default function ReservationsPage() {
     load()
   }
 
+  const handleDeleteCancelled = async () => {
+    const count = reservations.filter(r => ['cancelled', 'expired', 'completed'].includes(r.status)).length
+    if (count === 0) { toast('No hay reservas para limpiar', { icon: '💬' }); return }
+    setDeletingCancelled(true)
+    try {
+      await reservationsAPI.deleteCancelled()
+      toast.success(`${count} reserva${count > 1 ? 's eliminadas' : ' eliminada'}`)
+      load()
+    } catch { toast.error('Error al eliminar') } finally { setDeletingCancelled(false) }
+  }
+
   const isUpdating = (id, action) =>
     updating?.id === id && updating?.action === action
 
@@ -100,6 +112,19 @@ export default function ReservationsPage() {
           <button onClick={handleExpireAll} className="btn-ghost text-xs">
             <Clock size={14} /> Expirar vencidas
           </button>
+          {reservations.some(r => ['cancelled', 'expired', 'completed'].includes(r.status)) && (
+            <button
+              onClick={handleDeleteCancelled}
+              disabled={deletingCancelled}
+              className="btn-danger text-xs"
+            >
+              {deletingCancelled
+                ? <Loader2 size={14} className="animate-spin" />
+                : <Trash2 size={14} />
+              }
+              Limpiar historial
+            </button>
+          )}
           <button onClick={load} className="btn-ghost">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>

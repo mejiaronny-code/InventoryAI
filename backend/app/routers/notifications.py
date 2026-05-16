@@ -37,3 +37,23 @@ async def mark_all_read(user: dict = Depends(require_staff)):
         .eq("company_id", user["company_id"])\
         .execute()
     return {"message": "Todas marcadas como leídas"}
+
+
+@router.delete("/{notification_id}")
+async def delete_notification(notification_id: str, user: dict = Depends(require_staff)):
+    supabase.table("notifications")\
+        .delete()\
+        .eq("id", notification_id)\
+        .eq("company_id", user["company_id"])\
+        .execute()
+    return {"message": "Notificación eliminada"}
+
+
+@router.delete("/")
+async def delete_read_notifications(user: dict = Depends(require_staff)):
+    supabase.table("notifications")\
+        .delete()\
+        .eq("company_id", user["company_id"])\
+        .eq("read", True)\
+        .execute()
+    return {"message": "Notificaciones leídas eliminadas"}

@@ -10,6 +10,8 @@ import HomePage from './pages/public/HomePage'
 import CompanyCatalogPage from './pages/public/CompanyCatalogPage'
 import ReservationStatusPage from './pages/public/ReservationStatusPage'
 import NotFoundPage from './pages/public/NotFoundPage'
+import ResetPasswordPage from './pages/public/ResetPasswordPage'
+import ForgotPasswordPage from './pages/public/ForgotPasswordPage'
 
 // Admin pages
 import LoginPage from './pages/admin/LoginPage'
@@ -25,6 +27,10 @@ import SettingsPage from './pages/admin/SettingsPage'
 import EmployeesPage from './pages/admin/EmployeesPage'
 import ActivityPage from './pages/admin/ActivityPage'
 import SerialsPage from './pages/admin/SerialsPage'
+import PickingPage from './pages/admin/PickingPage'
+import ReorderPage from './pages/admin/ReorderPage'
+import ReconciliationPage from './pages/admin/ReconciliationPage'
+import ReportsPage from './pages/admin/ReportsPage'
 
 // Super Admin pages
 import SuperAdminLayout from './components/admin/SuperAdminLayout'
@@ -44,6 +50,8 @@ function AppRoutes() {
     <Routes>
       {/* ── Public ── */}
       <Route path="/" element={<HomePage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/:companySlug" element={<CompanyCatalogPage />} />
       <Route path="/reserva/:code" element={<ReservationStatusPage />} />
 
@@ -69,6 +77,10 @@ function AppRoutes() {
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="activity" element={<ActivityPage />} />
         <Route path="serials" element={<SerialsPage />} />
+        <Route path="picking" element={<PickingPage />} />
+        <Route path="reorder" element={<ReorderPage />} />
+        <Route path="conteo" element={<ReconciliationPage />} />
+        <Route path="reports" element={<ReportsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route
           path="employees"

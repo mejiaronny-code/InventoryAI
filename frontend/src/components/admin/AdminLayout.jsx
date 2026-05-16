@@ -13,7 +13,8 @@ import { CompanyFeaturesProvider } from '../../context/CompanyFeaturesContext'
 import {
   LayoutDashboard, Package, Tag, Warehouse, BarChart3,
   CalendarCheck, Bell, Settings, Users, LogOut, Menu, X,
-  Zap, AlertTriangle, Activity, Hash
+  Zap, AlertTriangle, Activity, Hash, ClipboardList,
+  ShoppingCart, ClipboardCheck, FileBarChart
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -25,6 +26,10 @@ const navItems = [
   { to: '/admin/stock',         icon: BarChart3,       label: 'Stock',             roles: ['admin','employee'] },
   { to: '/admin/serials',       icon: Hash,            label: 'Nros. de serie',    roles: ['admin','employee'], feature: 'serial_numbers' },
   { to: '/admin/reservations',  icon: CalendarCheck,   label: 'Reservas',          roles: ['admin','employee'] },
+  { to: '/admin/picking',       icon: ClipboardList,   label: 'Picking',           roles: ['admin','employee'] },
+  { to: '/admin/reorder',       icon: ShoppingCart,    label: 'Reabastecimiento',  roles: ['admin'] },
+  { to: '/admin/conteo',        icon: ClipboardCheck,  label: 'Conteo cíclico',    roles: ['admin','employee'] },
+  { to: '/admin/reports',       icon: FileBarChart,    label: 'Reportes',          roles: ['admin'] },
   { to: '/admin/notifications', icon: Bell,            label: 'Notificaciones',    roles: ['admin','employee'] },
   { to: '/admin/activity',      icon: Activity,        label: 'Actividad',         roles: ['admin','employee'] },
   { to: '/admin/employees',     icon: Users,           label: 'Empleados',         roles: ['admin'] },
@@ -43,6 +48,7 @@ export default function AdminLayout() {
   const [companySettings, setCompanySettings] = useState(null)
   const [companyFeatures, setCompanyFeatures] = useState(null)
   const [companyBusinessType, setCompanyBusinessType] = useState('general')
+  const [companyCurrency, setCompanyCurrency] = useState('USD')
 
   useEffect(() => {
     notificationsAPI.list()
@@ -57,6 +63,7 @@ export default function AdminLayout() {
         if (res.data?.settings) setCompanySettings(res.data.settings)
         if (res.data?.features) setCompanyFeatures(res.data.features)
         if (res.data?.business_type) setCompanyBusinessType(res.data.business_type)
+        if (res.data?.settings?.currency) setCompanyCurrency(res.data.settings.currency)
       })
       .catch(() => {})
   }, [])
@@ -150,7 +157,7 @@ export default function AdminLayout() {
   }
 
   return (
-    <CompanyFeaturesProvider features={companyFeatures} businessType={companyBusinessType}>
+    <CompanyFeaturesProvider features={companyFeatures} businessType={companyBusinessType} currency={companyCurrency}>
     <div className="flex h-screen bg-ink-50">
       <ThemeProvider settings={companySettings} />
       {/* Desktop sidebar */}

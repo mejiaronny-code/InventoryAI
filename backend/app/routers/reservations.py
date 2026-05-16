@@ -3,14 +3,16 @@ app/routers/reservations.py
 Gestión de reservas para staff y operaciones públicas del cliente.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime, timedelta
 import secrets
 import string
+import asyncio
 
 from app.core.auth import require_admin, require_staff
 from app.core.supabase_client import supabase
-from app.models.schemas import ReservationCreate, ReservationUpdate, ReservationOut
+from app.services.notifications import send_reservation_email
+from app.models.schemas import ReservationCreate, ReservationUpdate
 
 router = APIRouter(prefix="/reservations", tags=["reservations"])
 
@@ -114,6 +116,17 @@ async def create_public_reservation(company_slug: str, data: ReservationCreate):
         },
     }).execute()
 
+    # Email de confirmación al cliente
+    asyncio.create_task(send_reservation_email(
+        to_email=data.client_email,
+        client_name=data.client_name,
+        product_name=p["name"],
+        reservation_code=code,
+        quantity=data.quantity,
+        expires_at=expires_at,
+        company_name=company_name,
+    ))
+
     return {
         "reservation_code": code,
         "expires_at": expires_at,
@@ -146,7 +159,7 @@ async def get_public_reservation(reservation_code: str, company_slug: str):
     return result.data
 
 
-@router.get("/", response_model=List[ReservationOut])
+@router.get("/")
 async def list_reservations(
     status: Optional[str] = None,
     limit: int = Query(50, le=200),
@@ -154,7 +167,7 @@ async def list_reservations(
     user: dict = Depends(require_staff),
 ):
     query = supabase.table("reservations")\
-        .select("*, products(name)")\
+        .select("*, products(name, unit), warehouses(name)")\
         .eq("company_id", user["company_id"])\
         .order("created_at", desc=True)
 
@@ -171,8 +184,12 @@ async def update_reservation(
     data: ReservationUpdate,
     user: dict = Depends(require_staff),
 ):
+    update_data = {"status": data.status, "updated_at": datetime.utcnow().isoformat()}
+    if data.notes is not None:
+        update_data["notes"] = data.notes
+
     result = supabase.table("reservations")\
-        .update({"status": data.status, "notes": data.notes, "updated_at": datetime.utcnow().isoformat()})\
+        .update(update_data)\
         .eq("id", reservation_id)\
         .eq("company_id", user["company_id"])\
         .execute()
@@ -180,6 +197,19 @@ async def update_reservation(
     if not result.data:
         raise HTTPException(404, "Reserva no encontrada")
     return result.data[0]
+
+
+@router.delete("/cancelled")
+async def delete_cancelled_reservations(user: dict = Depends(require_admin)):
+    """Elimina todas las reservas completadas, canceladas y expiradas de la empresa."""
+    company_id = user["company_id"]
+    result = supabase.table("reservations")\
+        .delete()\
+        .eq("company_id", company_id)\
+        .in_("status", ["cancelled", "expired", "completed"])\
+        .execute()
+    count = len(result.data or [])
+    return {"message": f"{count} reservas eliminadas"}
 
 
 @router.post("/expire-all")

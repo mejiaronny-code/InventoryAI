@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react'
 import { authAPI } from '../../services/api'
 import toast from 'react-hot-toast'
-import { Plus, Trash2, Users, X, Loader2, Shield, User } from 'lucide-react'
+import { Plus, Trash2, Users, X, Loader2, Shield, User, ToggleLeft, ToggleRight } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 
@@ -31,6 +31,8 @@ export default function EmployeesPage() {
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [confirmDelete, setConfirmDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  const [toggling, setToggling] = useState(null)
 
   const load = () => authAPI.listEmployees().then(r => setEmployees(r.data)).finally(() => setLoading(false))
   useEffect(() => { load() }, [])
@@ -39,17 +41,35 @@ export default function EmployeesPage() {
     e.preventDefault(); setSaving(true)
     try {
       await authAPI.createEmployee(form)
-      toast.success('Empleado creado'); setModal(false); load()
+      toast.success('Empleado creado'); setModal(false)
+      setForm({ email: '', password: '', full_name: '', role: 'employee' })
+      load()
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Error')
     } finally { setSaving(false) }
   }
 
+  const handleToggleActive = async (emp) => {
+    setToggling(emp.id)
+    try {
+      const res = await authAPI.toggleEmployeeActive(emp.id)
+      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, is_active: res.data.is_active } : e))
+      toast.success(res.data.is_active ? 'Empleado activado' : 'Empleado desactivado')
+    } catch {
+      toast.error('Error al cambiar estado')
+    } finally { setToggling(null) }
+  }
+
   const doDelete = async () => {
-    await authAPI.deleteEmployee(confirmDelete.id)
-    toast.success('Desactivado')
-    setConfirmDelete(null)
-    load()
+    setDeleting(true)
+    try {
+      await authAPI.deleteEmployee(confirmDelete.id)
+      toast.success('Empleado eliminado')
+      setConfirmDelete(null)
+      load()
+    } catch {
+      toast.error('Error al eliminar')
+    } finally { setDeleting(false) }
   }
 
   return (
@@ -71,9 +91,29 @@ export default function EmployeesPage() {
                   : <User size={18} className="text-ink-500" />
                 }
               </div>
-              <button onClick={() => setConfirmDelete({ id: e.id, name: e.full_name || e.email })} className="btn-ghost p-1.5 text-red-400 hover:bg-red-50">
-                <Trash2 size={14} />
-              </button>
+              {/* Acciones */}
+              <div className="flex items-center gap-1">
+                {/* Toggle activo/inactivo */}
+                <button
+                  onClick={() => handleToggleActive(e)}
+                  disabled={toggling === e.id}
+                  title={e.is_active ? 'Desactivar' : 'Activar'}
+                  className={`btn-ghost p-1.5 ${e.is_active ? 'text-green-500 hover:bg-green-50' : 'text-ink-400 hover:bg-ink-100'}`}
+                >
+                  {toggling === e.id
+                    ? <Loader2 size={15} className="animate-spin" />
+                    : e.is_active ? <ToggleRight size={17} /> : <ToggleLeft size={17} />
+                  }
+                </button>
+                {/* Eliminar permanentemente */}
+                <button
+                  onClick={() => setConfirmDelete({ id: e.id, name: e.full_name || e.email })}
+                  title="Eliminar permanentemente"
+                  className="btn-ghost p-1.5 text-red-400 hover:bg-red-50"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
             <div>
               <p className="font-bold text-ink-900">{e.full_name || '—'}</p>
@@ -96,19 +136,25 @@ export default function EmployeesPage() {
         )}
       </div>
 
-      <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Confirmar desactivación">
+      {/* Modal confirmar eliminación permanente */}
+      <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Eliminar empleado">
         <div className="space-y-4">
           <p className="text-sm text-ink-600">
-            ¿Desactivar a <strong className="text-ink-900">"{confirmDelete?.name}"</strong>?
-            El empleado perderá acceso al sistema.
+            ¿Eliminar permanentemente a <strong className="text-ink-900">"{confirmDelete?.name}"</strong>?
+            Esta acción <strong className="text-red-600">no se puede deshacer</strong> — se borrará su cuenta y acceso al sistema.
           </p>
           <div className="flex gap-3">
-            <button onClick={() => setConfirmDelete(null)} className="btn-secondary flex-1 justify-center">Cancelar</button>
-            <button onClick={doDelete} className="btn-danger flex-1 justify-center">Desactivar</button>
+            <button onClick={() => setConfirmDelete(null)} className="btn-secondary flex-1 justify-center">
+              Cancelar
+            </button>
+            <button onClick={doDelete} disabled={deleting} className="btn-danger flex-1 justify-center">
+              {deleting ? <Loader2 size={14} className="animate-spin" /> : 'Eliminar'}
+            </button>
           </div>
         </div>
       </Modal>
 
+      {/* Modal crear empleado */}
       <Modal open={modal} onClose={() => setModal(false)} title="Nuevo empleado">
         <form onSubmit={handleCreate} className="space-y-4">
           <div>

@@ -1,19 +1,97 @@
 /**
  * pages/admin/StockPage.jsx
  */
-import { useState, useEffect, useCallback } from 'react'
-import { stockAPI, productsAPI, warehousesAPI, batchesAPI, serialsAPI } from '../../services/api'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { stockAPI, productsAPI, warehousesAPI, batchesAPI, serialsAPI, putawayAPI } from '../../services/api'
 import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import toast from 'react-hot-toast'
 import {
   Plus, ArrowUp, ArrowDown, RefreshCw, BarChart3,
-  X, Loader2, Pencil, Warehouse, Package, MapPin, CalendarX2, Layers,
-  Hash, Search, CheckCircle2, ShoppingCart, Archive, Trash2
+  X, Loader2, Pencil, Warehouse, MapPin, CalendarX2, Layers,
+  Hash, Search, CheckCircle2, ShoppingCart, Archive, Trash2, ChevronDown,
+  ScanLine, Camera, AlertCircle
 } from 'lucide-react'
 import ProductImage from '../../components/shared/ProductImage'
+import BarcodeScannerModal from '../../components/shared/BarcodeScannerModal'
 import { format, differenceInDays, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
+
+/**
+ * SearchableSelect — dropdown con búsqueda integrada.
+ * options: array de objetos | getValue(opt)→string | getLabel(opt)→string
+ */
+function SearchableSelect({ options = [], value, onChange, placeholder = 'Seleccionar...', getLabel, getValue, required }) {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  const selected = options.find(o => getValue(o) === value)
+
+  const filtered = query
+    ? options.filter(o => getLabel(o).toLowerCase().includes(query.toLowerCase()))
+    : options
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  return (
+    <div ref={ref} className="relative">
+      {/* Hidden input for form required validation */}
+      <input type="text" value={value} onChange={() => {}} required={required} className="sr-only" tabIndex={-1} />
+      <button
+        type="button"
+        onClick={() => { setOpen(o => !o); setQuery('') }}
+        className={clsx(
+          'input w-full flex items-center justify-between gap-2 text-left',
+          !selected && 'text-ink-400'
+        )}
+      >
+        <span className="truncate">{selected ? getLabel(selected) : placeholder}</span>
+        <ChevronDown size={14} className={clsx('shrink-0 text-ink-400 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <div className="absolute z-[60] w-full mt-1 bg-white border border-ink-200 rounded-xl shadow-xl overflow-hidden">
+          {/* Search input */}
+          <div className="p-2 border-b border-ink-100">
+            <div className="relative">
+              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400" />
+              <input
+                autoFocus
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Buscar..."
+                className="w-full pl-7 pr-2 py-1.5 text-sm outline-none bg-ink-50 rounded-lg"
+              />
+            </div>
+          </div>
+          {/* Options */}
+          <div className="max-h-52 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <p className="text-xs text-ink-400 text-center py-4">Sin resultados para "{query}"</p>
+            ) : filtered.map(opt => (
+              <button
+                key={getValue(opt)}
+                type="button"
+                onClick={() => { onChange(getValue(opt)); setOpen(false); setQuery('') }}
+                className={clsx(
+                  'w-full text-left px-3 py-2 text-sm transition-colors hover:bg-ink-50',
+                  getValue(opt) === value && 'bg-brand-50 text-brand-700 font-medium'
+                )}
+              >
+                {getLabel(opt)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 const SERIAL_STATUSES = {
   in_stock:  { label: 'En stock',   color: 'badge-green',  icon: CheckCircle2  },
@@ -51,11 +129,19 @@ function EditStockModal({ open, onClose, item, onSaved }) {
   const [shelf, setShelf] = useState('')
   const [bin, setBin] = useState('')
   const [saving, setSaving] = useState(false)
+  const [putawaySuggestion, setPutawaySuggestion] = useState(null)
 
   useEffect(() => {
     if (open && item) {
       setNewQty(String(item.current_qty))
       setAisle(item.aisle || '')
+      setPutawaySuggestion(null)
+      // Buscar sugerencia de putaway si no hay ubicación asignada
+      if (!item.aisle && !item.shelf && !item.bin) {
+        putawayAPI.suggest(item.product_id, item.warehouse_id)
+          .then(r => { if (r.data?.source) setPutawaySuggestion(r.data) })
+          .catch(() => {})
+      }
       setShelf(item.shelf || '')
       setBin(item.bin || '')
     }
@@ -152,10 +238,26 @@ function EditStockModal({ open, onClose, item, onSaved }) {
 
           {/* Ubicación física */}
           <div className="divider" />
-          <div className="flex items-center gap-2 mb-2">
-            <MapPin size={14} className="text-brand-500" />
-            <span className="text-xs font-semibold text-ink-600 uppercase tracking-wide">Ubicación física</span>
-            <span className="text-xs text-ink-400">(opcional)</span>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <MapPin size={14} className="text-brand-500" />
+              <span className="text-xs font-semibold text-ink-600 uppercase tracking-wide">Ubicación física</span>
+              <span className="text-xs text-ink-400">(opcional)</span>
+            </div>
+            {putawaySuggestion && (
+              <button
+                type="button"
+                onClick={() => {
+                  setAisle(putawaySuggestion.aisle || '')
+                  setShelf(putawaySuggestion.shelf || '')
+                  setBin(putawaySuggestion.bin || '')
+                  setPutawaySuggestion(null)
+                }}
+                className="text-xs text-brand-600 hover:text-brand-700 font-semibold flex items-center gap-1 bg-brand-50 px-2 py-1 rounded-lg border border-brand-200"
+              >
+                ✨ Usar sugerencia: {[putawaySuggestion.aisle, putawaySuggestion.shelf, putawaySuggestion.bin].filter(Boolean).join(' · ')}
+              </button>
+            )}
           </div>
           <div className="grid grid-cols-3 gap-2">
             {[
@@ -201,10 +303,12 @@ export default function StockPage() {
   const [serialModal, setSerialModal] = useState(false)
   const [serialForm, setSerialForm] = useState({ product_id: '', warehouse_id: '', serial_numbers: '', notes: '' })
   const [serialSaving, setSerialSaving] = useState(false)
+  const [stockSearch, setStockSearch] = useState('')
   const [form, setForm] = useState({ product_id: '', warehouse_id: '', type: 'entrada', quantity: 1, notes: '', expires_at: '', batch_code: '' })
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('current')
+  const [scannerOpen, setScannerOpen] = useState(false)
 
   const loadSerials = useCallback(() => {
     if (!hasFeature('serial_numbers')) return
@@ -233,7 +337,7 @@ export default function StockPage() {
   useEffect(() => { load() }, [])
   useEffect(() => { loadSerials() }, [loadSerials])
 
-  // Aplanar productos → filas por producto+almacén
+  // Aplanar productos → filas por producto+almacén, con filtrado por búsqueda
   const currentStockRows = products.flatMap(p =>
     (p.stock_by_warehouse || []).map(s => {
       const wh = warehouses.find(w => w.id === s.warehouse_id)
@@ -251,6 +355,14 @@ export default function StockPage() {
       }
     })
   )
+
+  const filteredStockRows = stockSearch
+    ? currentStockRows.filter(r =>
+        r.product_name.toLowerCase().includes(stockSearch.toLowerCase()) ||
+        r.warehouse_name.toLowerCase().includes(stockSearch.toLowerCase()) ||
+        [r.aisle, r.shelf, r.bin].filter(Boolean).join(' ').toLowerCase().includes(stockSearch.toLowerCase())
+      )
+    : currentStockRows
 
   const handleSave = async (e) => {
     e.preventDefault(); setSaving(true)
@@ -305,6 +417,22 @@ export default function StockPage() {
     }
   }
 
+  // ── Barcode scan handler ─────────────────────────────────────────
+  const handleScanDetected = (code) => {
+    const trimmed = code.trim()
+    // Search by barcode, then by SKU
+    const match = products.find(p =>
+      p.barcode === trimmed || p.sku === trimmed
+    )
+    if (match) {
+      setForm(f => ({ ...f, product_id: match.id }))
+      if (!modal) setModal(true) // open movement modal if not open
+      toast.success(`Producto encontrado: ${match.name}`)
+    } else {
+      toast.error(`Sin coincidencia para: "${trimmed}"`)
+    }
+  }
+
   const handleUpdateSerialStatus = async (id, status) => {
     try {
       await serialsAPI.update(id, { status })
@@ -319,7 +447,18 @@ export default function StockPage() {
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between">
         <h1 className="page-title">Stock</h1>
-        <button onClick={() => setModal(true)} className="btn-primary"><Plus size={16} /> Registrar movimiento</button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setScannerOpen(true)}
+            className="btn-secondary"
+            title="Escanear código de barras o QR"
+          >
+            <ScanLine size={16} /> Escanear
+          </button>
+          <button onClick={() => setModal(true)} className="btn-primary">
+            <Plus size={16} /> Registrar movimiento
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -347,7 +486,24 @@ export default function StockPage() {
 
       {/* Tab: Inventario actual */}
       {activeTab === 'current' && (
-        <div className="table-container">
+        <div className="space-y-3">
+          {/* Buscador de stock */}
+          <div className="relative max-w-sm">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+            <input
+              value={stockSearch}
+              onChange={e => setStockSearch(e.target.value)}
+              placeholder="Buscar producto, almacén o ubicación..."
+              className="input pl-9 text-sm"
+            />
+            {stockSearch && (
+              <button onClick={() => setStockSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+
+          <div className="table-container">
           <table className="table">
             <thead>
               <tr>
@@ -362,17 +518,17 @@ export default function StockPage() {
             <tbody>
               {loading ? (
                 [...Array(5)].map((_, i) => (
-                  <tr key={i}><td colSpan={4}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>
+                  <tr key={i}><td colSpan={6}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>
                 ))
-              ) : currentStockRows.length === 0 ? (
+              ) : filteredStockRows.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="text-center py-12 text-ink-400">
+                  <td colSpan={6} className="text-center py-12 text-ink-400">
                     <Warehouse size={32} className="mx-auto mb-2 opacity-40" />
-                    <p>Sin stock registrado</p>
-                    <p className="text-xs mt-1">Registra un movimiento de entrada para comenzar</p>
+                    <p>{stockSearch ? `Sin resultados para "${stockSearch}"` : 'Sin stock registrado'}</p>
+                    {!stockSearch && <p className="text-xs mt-1">Registra un movimiento de entrada para comenzar</p>}
                   </td>
                 </tr>
-              ) : currentStockRows.map((row, i) => {
+              ) : filteredStockRows.map((row, i) => {
                 const locationParts = [row.aisle, row.shelf, row.bin].filter(Boolean)
                 const locationText = locationParts.join(' · ')
                 return (
@@ -438,6 +594,7 @@ export default function StockPage() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -700,14 +857,15 @@ export default function StockPage() {
         <form onSubmit={handleSaveSerials} className="space-y-4">
           <div>
             <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Producto *</label>
-            <select
+            <SearchableSelect
+              options={products}
               value={serialForm.product_id}
-              onChange={e => setSerialForm(f => ({ ...f, product_id: e.target.value }))}
-              className="input" required
-            >
-              <option value="">Seleccionar...</option>
-              {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+              onChange={v => setSerialForm(f => ({ ...f, product_id: v }))}
+              getLabel={p => p.name}
+              getValue={p => p.id}
+              placeholder="Buscar producto..."
+              required
+            />
           </div>
           <div>
             <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Almacén *</label>
@@ -767,11 +925,30 @@ export default function StockPage() {
             </select>
           </div>
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Producto *</label>
-            <select value={form.product_id} onChange={e => setForm(f => ({ ...f, product_id: e.target.value }))} className="input" required>
-              <option value="">Seleccionar...</option>
-              {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+              Producto *
+            </label>
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <SearchableSelect
+                  options={products}
+                  value={form.product_id}
+                  onChange={v => setForm(f => ({ ...f, product_id: v }))}
+                  getLabel={p => p.name}
+                  getValue={p => p.id}
+                  placeholder="Buscar producto..."
+                  required
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setScannerOpen(true)}
+                className="btn-secondary px-3 shrink-0"
+                title="Escanear código de barras o QR"
+              >
+                <ScanLine size={16} />
+              </button>
+            </div>
           </div>
           <div>
             <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Almacén *</label>
@@ -832,6 +1009,13 @@ export default function StockPage() {
         onClose={() => setEditModal(null)}
         item={editModal}
         onSaved={load}
+      />
+
+      {/* Scanner de barras/QR */}
+      <BarcodeScannerModal
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onDetected={handleScanDetected}
       />
     </div>
   )

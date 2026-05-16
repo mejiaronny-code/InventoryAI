@@ -10,6 +10,7 @@ import asyncio
 from app.core.auth import require_staff, require_admin
 from app.core.supabase_client import supabase
 from app.models.schemas import StockMovementCreate, StockMovementOut, StockUpdate, LocationUpdate
+from app.services.notifications import send_low_stock_alert
 
 router = APIRouter(prefix="/stock", tags=["stock"])
 
@@ -21,11 +22,11 @@ async def list_movements(
     user: dict = Depends(require_staff),
 ):
     query = supabase.table("stock_movements")\
-        .select("*, products(name), warehouses(name)")\
+        .select("*, products!inner(name, company_id), warehouses(name)")\
+        .eq("products.company_id", user["company_id"])\
         .order("created_at", desc=True)\
         .limit(200)
 
-    # Filtrar por empresa via producto
     if product_id:
         query = query.eq("product_id", product_id)
     if warehouse_id:
@@ -54,15 +55,17 @@ async def create_movement(data: StockMovementCreate, user: dict = Depends(requir
         "created_by": user["id"],
     }
 
-    # Obtener stock actual
+    # Obtener stock actual (maybe_single evita error PGRST116 cuando no hay fila aún)
     current = supabase.table("product_warehouse_stock")\
         .select("quantity")\
         .eq("product_id", str(data.product_id))\
         .eq("warehouse_id", str(data.warehouse_id))\
-        .single()\
+        .maybe_single()\
         .execute()
 
-    current_qty = current.data["quantity"] if current.data else 0
+    # maybe_single() retorna None directamente (no objeto con .data) cuando no hay fila
+    current_row = current.data if current else None
+    current_qty = current_row["quantity"] if current_row else 0
 
     # Calcular nuevo stock
     if data.type == "entrada":
@@ -77,7 +80,7 @@ async def create_movement(data: StockMovementCreate, user: dict = Depends(requir
         new_qty = current_qty  # transferencia se maneja por separado
 
     # Actualizar stock
-    if current.data:
+    if current_row:
         supabase.table("product_warehouse_stock")\
             .update({"quantity": new_qty})\
             .eq("product_id", str(data.product_id))\
@@ -133,9 +136,9 @@ async def create_movement(data: StockMovementCreate, user: dict = Depends(requir
             .select("nearest_expiry")\
             .eq("product_id", str(data.product_id))\
             .eq("warehouse_id", str(data.warehouse_id))\
-            .single()\
+            .maybe_single()\
             .execute()
-        current_nearest = (current_expiry_res.data or {}).get("nearest_expiry")
+        current_nearest = ((current_expiry_res.data if current_expiry_res else None) or {}).get("nearest_expiry")
         # Guardar la más próxima
         if not current_nearest or expires_iso < current_nearest:
             supabase.table("product_warehouse_stock")\
@@ -166,19 +169,72 @@ async def create_movement(data: StockMovementCreate, user: dict = Depends(requir
         .select("min_stock_alert")\
         .eq("product_id", str(data.product_id))\
         .eq("warehouse_id", str(data.warehouse_id))\
-        .single()\
+        .maybe_single()\
         .execute()
 
-    if stock_alert.data and new_qty <= stock_alert.data.get("min_stock_alert", 5):
+    stock_alert_row = stock_alert.data if stock_alert else None
+    if stock_alert_row and new_qty <= stock_alert_row.get("min_stock_alert", 5):
         product = supabase.table("products").select("name, company_id").eq("id", str(data.product_id)).single().execute()
         if product.data:
+            company_id_alert = product.data["company_id"]
+            # Notificación de stock bajo
             supabase.table("notifications").insert({
-                "company_id": product.data["company_id"],
+                "company_id": company_id_alert,
                 "type": "low_stock",
                 "message": f"⚠️ Stock bajo: {product.data['name']} — {new_qty} unidades restantes",
                 "target_role": "all",
                 "metadata": {"product_id": str(data.product_id), "current_stock": new_qty},
             }).execute()
+            # Email de alerta al admin
+            try:
+                admin_res = supabase.table("user_profiles")\
+                    .select("id")\
+                    .eq("company_id", company_id_alert)\
+                    .eq("role", "admin")\
+                    .eq("is_active", True)\
+                    .limit(1)\
+                    .execute()
+                if admin_res.data:
+                    admin_id = admin_res.data[0]["id"]
+                    admin_auth = supabase.auth.admin.get_user_by_id(admin_id)
+                    admin_email = admin_auth.user.email if admin_auth and admin_auth.user else None
+                    if admin_email:
+                        min_alert_val = stock_alert_row.get("min_stock_alert", 5)
+                        company_res = supabase.table("companies").select("name").eq("id", company_id_alert).single().execute()
+                        company_name_alert = company_res.data["name"] if company_res.data else ""
+                        asyncio.create_task(send_low_stock_alert(
+                            to_email=admin_email,
+                            product_name=product.data["name"],
+                            current_stock=new_qty,
+                            company_name=company_name_alert,
+                            min_stock=min_alert_val,
+                        ))
+            except Exception:
+                pass  # No crítico
+
+            # Crear solicitud de reabastecimiento automática si no existe una pendiente
+            try:
+                existing_reorder = supabase.table("reorder_requests")\
+                    .select("id")\
+                    .eq("company_id", company_id_alert)\
+                    .eq("product_id", str(data.product_id))\
+                    .eq("warehouse_id", str(data.warehouse_id))\
+                    .eq("status", "pending")\
+                    .maybe_single().execute()
+                if not (existing_reorder and existing_reorder.data):
+                    min_alert = stock_alert_row.get("min_stock_alert", 5)
+                    supabase.table("reorder_requests").insert({
+                        "company_id":         company_id_alert,
+                        "product_id":         str(data.product_id),
+                        "warehouse_id":       str(data.warehouse_id),
+                        "requested_quantity": min_alert * 3,  # sugerir 3× el mínimo
+                        "current_stock":      new_qty,
+                        "min_stock_alert":    min_alert,
+                        "status":             "pending",
+                        "notes":              "Generado automáticamente por stock bajo",
+                    }).execute()
+            except Exception:
+                pass  # No crítico
 
     return {"message": "Movimiento registrado", "new_quantity": new_qty}
 

@@ -10,6 +10,8 @@ from app.models.schemas import CompanyCreate, CompanyUpdate, CompanyOut, BUSINES
 from typing import List
 from pydantic import BaseModel
 import httpx
+import asyncio
+from app.services.notifications import send_welcome_email, send_deletion_request_email
 
 class AssignUserBody(BaseModel):
     user_id: str
@@ -147,6 +149,22 @@ async def update_subscription(
     return {"message": "Suscripción actualizada"}
 
 
+@router.patch("/{company_id}/ai-rules-limit")
+async def set_ai_rules_limit(
+    company_id: str,
+    limit: int,
+    user: dict = Depends(require_super_admin),
+):
+    """Superadmin define el máximo de reglas IA para una empresa."""
+    company = supabase.table("companies").select("settings").eq("id", company_id).single().execute()
+    if not company.data:
+        raise HTTPException(404, "Empresa no encontrada")
+    current_settings = company.data.get("settings") or {}
+    current_settings["ai_rules_limit"] = max(0, limit)
+    supabase.table("companies").update({"settings": current_settings}).eq("id", company_id).execute()
+    return {"ai_rules_limit": current_settings["ai_rules_limit"]}
+
+
 @router.patch("/{company_id}/business-type")
 async def set_business_type(
     company_id: str,
@@ -275,6 +293,11 @@ async def create_company_user(
         "role": body.role,
     }).execute()
 
+    # Email de bienvenida
+    company_res = supabase.table("companies").select("name").eq("id", company_id).single().execute()
+    company_name = company_res.data["name"] if company_res.data else "tu empresa"
+    asyncio.create_task(send_welcome_email(body.email, body.full_name, company_name))
+
     return {"message": "Usuario creado", "user_id": user_id}
 
 
@@ -376,5 +399,9 @@ async def request_account_deletion(user: dict = Depends(require_admin)):
             "requested_by": requested_by,
         },
     }).execute()
+
+    admin_email = user.get("email", "")
+    if admin_email:
+        asyncio.create_task(send_deletion_request_email(company_name, requested_by, admin_email))
 
     return {"message": "Solicitud enviada correctamente"}

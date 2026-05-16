@@ -17,6 +17,10 @@ from app.routers import (
     batches,
     serials,
     reservations,
+    picking,
+    putaway,
+    reorder,
+    reports,
     chat,
     notifications,
     companies,
@@ -71,6 +75,10 @@ app.include_router(stock.router,         prefix=API_PREFIX)
 app.include_router(batches.router,       prefix=API_PREFIX)
 app.include_router(serials.router,       prefix=API_PREFIX)
 app.include_router(reservations.router,  prefix=API_PREFIX)
+app.include_router(picking.router,       prefix=API_PREFIX)
+app.include_router(putaway.router,       prefix=API_PREFIX)
+app.include_router(reorder.router,       prefix=API_PREFIX)
+app.include_router(reports.router,       prefix=API_PREFIX)
 app.include_router(chat.router,          prefix=API_PREFIX)
 app.include_router(notifications.router, prefix=API_PREFIX)
 app.include_router(dashboard.router,     prefix=API_PREFIX)

@@ -13,8 +13,22 @@ import {
   ShoppingBag, Zap, Filter
 } from 'lucide-react'
 import clsx from 'clsx'
+import { CURRENCIES } from '../../context/CompanyFeaturesContext'
 
-function ProductCard({ product, variants = [] }) {
+function buildFormatPrice(currencyCode) {
+  const info = CURRENCIES.find(c => c.code === currencyCode) || CURRENCIES[0]
+  const noDecimals = ['CLP', 'PYG', 'JPY']
+  const decimals = noDecimals.includes(currencyCode) ? 0 : 2
+  return (amount) => {
+    if (amount == null || isNaN(amount)) return `${info.symbol}0`
+    return `${info.symbol}${Number(amount).toLocaleString('es-419', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })}`
+  }
+}
+
+function ProductCard({ product, variants = [], formatPrice, showStock }) {
   const [expanded, setExpanded] = useState(false)
   const [selectedVariant, setSelectedVariant] = useState(null)
   const activeProduct = selectedVariant || product
@@ -96,7 +110,7 @@ function ProductCard({ product, variants = [] }) {
       <div className="flex items-center justify-between mt-auto">
         <div>
           <p className="text-xl font-extrabold text-brand-600">
-            ${displayPrice.toLocaleString()}
+            {formatPrice ? formatPrice(displayPrice) : `$${displayPrice.toLocaleString()}`}
           </p>
           <p className="text-xs text-ink-400">por {displayUnit}</p>
         </div>
@@ -105,7 +119,7 @@ function ProductCard({ product, variants = [] }) {
           (activeProduct.total_stock || 0) > 0 ? 'badge-green' : 'badge-red'
         )}>
           {(activeProduct.total_stock || 0) > 0
-            ? `${activeProduct.total_stock} en stock`
+            ? showStock ? `${activeProduct.total_stock} en stock` : 'En stock'
             : 'Sin stock'
           }
         </div>
@@ -146,6 +160,9 @@ export default function CompanyCatalogPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+
+  const formatPrice = buildFormatPrice(company?.settings?.currency || 'USD')
+  const showStock = company?.settings?.show_stock ?? true
 
   useEffect(() => {
     Promise.all([
@@ -300,7 +317,7 @@ export default function CompanyCatalogPage() {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             {filtered.map(p => (
-              <ProductCard key={p.id} product={p} variants={variantsByParent[p.id] || []} />
+              <ProductCard key={p.id} product={p} variants={variantsByParent[p.id] || []} formatPrice={formatPrice} showStock={showStock} />
             ))}
           </div>
         )}

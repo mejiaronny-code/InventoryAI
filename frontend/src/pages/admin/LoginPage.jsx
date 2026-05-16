@@ -2,7 +2,7 @@
  * pages/admin/LoginPage.jsx
  */
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { Zap, Eye, EyeOff, LogIn } from 'lucide-react'
 
@@ -63,9 +63,14 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
-                Contraseña
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide">
+                  Contraseña
+                </label>
+                <Link to="/forgot-password" className="text-xs text-brand-500 hover:text-brand-600 font-medium">
+                  ¿Olvidaste tu contraseña?
+                </Link>
+              </div>
               <div className="relative">
                 <input
                   type={showPw ? 'text' : 'password'}

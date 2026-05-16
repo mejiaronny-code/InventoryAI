@@ -121,9 +121,11 @@ export const authAPI = {
   me: () => api.get('/auth/me'),
   updateMe: (data) => api.put('/auth/me', data),
   refresh: (refreshToken) => api.post('/auth/refresh', null, { params: { refresh_token: refreshToken } }),
+  forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
   createEmployee: (data) => api.post('/auth/employees', data),
   listEmployees: () => api.get('/auth/employees'),
   deleteEmployee: (id) => api.delete(`/auth/employees/${id}`),
+  toggleEmployeeActive: (id) => api.patch(`/auth/employees/${id}/toggle-active`),
 }
 
 // ============================================================
@@ -139,6 +141,8 @@ export const companiesAPI = {
     api.patch(`/companies/${id}/subscription`, null, { params: { plan, status } }),
   setBusinessType: (id, business_type, features = null) =>
     api.patch(`/companies/${id}/business-type`, { business_type, features }),
+  setAiRulesLimit: (id, limit) =>
+    api.patch(`/companies/${id}/ai-rules-limit`, null, { params: { limit } }),
   listUsers: (id) => api.get(`/companies/${id}/users`),
   searchUser: (id, email) => api.get(`/companies/${id}/search-user`, { params: { email } }),
   assignUser: (id, data) => api.post(`/companies/${id}/assign-admin`, data),
@@ -241,6 +245,47 @@ export const reservationsAPI = {
   list: (params) => api.get('/reservations/', { params }),
   update: (id, data) => api.patch(`/reservations/${id}`, data),
   expireAll: () => api.post('/reservations/expire-all'),
+  deleteCancelled: () => api.delete('/reservations/cancelled'),
+}
+
+// ============================================================
+// REPORTS
+// ============================================================
+export const reportsAPI = {
+  aging: () => api.get('/reports/aging', { noCache: true }),
+  valuation: () => api.get('/reports/valuation', { noCache: true }),
+  importProducts: (products) => api.post('/reports/import/products', { products }),
+}
+
+// ============================================================
+// PUTAWAY RULES
+// ============================================================
+export const putawayAPI = {
+  list: () => api.get('/putaway/'),
+  suggest: (productId, warehouseId) =>
+    api.get('/putaway/suggest', { params: { product_id: productId, warehouse_id: warehouseId } }),
+  create: (data) => api.post('/putaway/', data),
+  update: (id, data) => api.patch(`/putaway/${id}`, data),
+  delete: (id) => api.delete(`/putaway/${id}`),
+}
+
+// ============================================================
+// REORDER
+// ============================================================
+export const reorderAPI = {
+  list: (params) => api.get('/reorder/', { params }),
+  create: (data) => api.post('/reorder/', data),
+  update: (id, data) => api.patch(`/reorder/${id}`, data),
+  delete: (id) => api.delete(`/reorder/${id}`),
+}
+
+// ============================================================
+// PICKING
+// ============================================================
+export const pickingAPI = {
+  list: (params) => api.get('/picking/', { params }),
+  confirmPick: (id) => api.patch(`/picking/${id}/confirm`),
+  completePick: (id) => api.patch(`/picking/${id}/complete`),
 }
 
 // ============================================================
@@ -283,6 +328,8 @@ export const notificationsAPI = {
   list: () => api.get('/notifications/'),
   markRead: (id) => api.patch(`/notifications/${id}/read`),
   markAllRead: () => api.patch('/notifications/read-all'),
+  deleteOne: (id) => api.delete(`/notifications/${id}`),
+  deleteRead: () => api.delete('/notifications/'),
 }
 
 export default api

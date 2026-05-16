@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     # AI APIs
     groq_api_key: str
     openai_api_key: str
+    deepinfra_api_key: str = ""
 
     # LangSmith
     langchain_tracing_v2: bool = True
@@ -28,6 +29,7 @@ class Settings(BaseSettings):
     # Email (opcional — Resend)
     resend_api_key: str = ""
     notification_from_email: str = "noreply@inventoryai.app"
+    support_email: str = ""  # Email del equipo de soporte (para solicitudes de eliminación)
 
     class Config:
         env_file = ".env"

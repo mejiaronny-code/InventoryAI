@@ -6,11 +6,13 @@ import { companiesAPI, authAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
 import { useDropzone } from 'react-dropzone'
 import toast from 'react-hot-toast'
-import { Save, Loader2, Settings, User, Upload, ImageIcon, AlertTriangle, X, Palette } from 'lucide-react'
+import { Save, Loader2, Settings, User, Upload, ImageIcon, AlertTriangle, X, Palette, DollarSign, Bot, Plus, ShoppingBag } from 'lucide-react'
+import { CURRENCIES } from '../../context/CompanyFeaturesContext'
 
 export default function SettingsPage() {
   const { user, updateUser } = useAuth()
-  const [form, setForm] = useState({ name: '', slug: '', logo_url: '', settings: { chat_welcome: '', primary_color: '#f97316' } })
+  const [form, setForm] = useState({ name: '', slug: '', logo_url: '', settings: { chat_welcome: '', primary_color: '#f97316', currency: 'USD', ai_rules: [] } })
+  const [newRule, setNewRule] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [profileName, setProfileName] = useState('')
@@ -30,8 +32,12 @@ export default function SettingsPage() {
         slug: c.slug || '',
         logo_url: c.logo_url || '',
         settings: {
-          chat_welcome: c.settings?.chat_welcome || '',
+          chat_welcome:  c.settings?.chat_welcome  || '',
           primary_color: c.settings?.primary_color || '#f97316',
+          currency:      c.settings?.currency      || 'USD',
+          ai_rules:      c.settings?.ai_rules      || [],
+          ai_rules_limit: c.settings?.ai_rules_limit ?? 5,
+          show_stock:    c.settings?.show_stock    ?? true,
         }
       })
     }).finally(() => setLoading(false))
@@ -188,6 +194,89 @@ export default function SettingsPage() {
           />
         </div>
 
+        {/* Reglas personalizadas de IA */}
+        {(() => {
+          const rules   = form.settings.ai_rules || []
+          const limit   = form.settings.ai_rules_limit ?? 5
+          const reached = rules.length >= limit
+
+          const addRule = () => {
+            const trimmed = newRule.trim()
+            if (!trimmed || reached) return
+            setForm(f => ({ ...f, settings: { ...f.settings, ai_rules: [...(f.settings.ai_rules || []), trimmed] } }))
+            setNewRule('')
+          }
+
+          const removeRule = (i) =>
+            setForm(f => ({ ...f, settings: { ...f.settings, ai_rules: f.settings.ai_rules.filter((_, idx) => idx !== i) } }))
+
+          return (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Bot size={17} className="text-brand-500" />
+                <h2 className="section-title">Reglas de comportamiento IA</h2>
+              </div>
+              <p className="text-xs text-ink-400 -mt-1">
+                Instrucciones que el asistente seguirá siempre en las conversaciones con tus clientes.
+                <span className="ml-2 font-semibold text-ink-600">{rules.length}/{limit} reglas</span>
+              </p>
+
+              {/* Lista de reglas */}
+              <div className="space-y-2">
+                {rules.length === 0 && (
+                  <p className="text-xs text-ink-400 italic py-2">Sin reglas configuradas aún.</p>
+                )}
+                {rules.map((rule, i) => (
+                  <div key={i} className="flex items-start gap-2 bg-ink-50 border border-ink-100 rounded-xl px-3 py-2">
+                    <span className="text-brand-500 font-bold text-xs mt-0.5">→</span>
+                    <p className="flex-1 text-sm text-ink-700">{rule}</p>
+                    <button
+                      type="button"
+                      onClick={() => removeRule(i)}
+                      className="text-ink-300 hover:text-red-500 transition-colors shrink-0"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Input nueva regla */}
+              {!reached ? (
+                <div className="space-y-1">
+                  <div className="flex gap-2">
+                    <input
+                      value={newRule}
+                      onChange={e => setNewRule(e.target.value.slice(0, 120))}
+                      onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addRule())}
+                      placeholder='Ej: "No menciones precios de costo, solo de venta"'
+                      className="input flex-1 text-sm"
+                      maxLength={120}
+                    />
+                    <button
+                      type="button"
+                      onClick={addRule}
+                      disabled={!newRule.trim()}
+                      className="btn-primary px-3"
+                    >
+                      <Plus size={15} />
+                    </button>
+                  </div>
+                  <div className="flex justify-end">
+                    <span className={`text-xs font-mono ${newRule.length >= 100 ? newRule.length >= 120 ? 'text-red-500' : 'text-amber-500' : 'text-ink-300'}`}>
+                      {newRule.length}/120
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                  Alcanzaste el límite de {limit} reglas. Contacta al soporte para aumentar el límite.
+                </p>
+              )}
+            </div>
+          )
+        })()}
+
         <div className="divider" />
 
         {/* Personalización de colores */}
@@ -241,6 +330,79 @@ export default function SettingsPage() {
             </div>
           </div>
         ))}
+
+        <div className="divider" />
+
+        {/* Moneda */}
+        <div className="flex items-center gap-2 mb-1">
+          <DollarSign size={17} className="text-brand-500" />
+          <h2 className="section-title">Moneda</h2>
+        </div>
+        <p className="text-xs text-ink-400 -mt-1">
+          Se usa para mostrar precios en el panel y el catálogo público.
+        </p>
+        <div>
+          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+            Moneda de la empresa
+          </label>
+          <select
+            value={form.settings.currency}
+            onChange={e => setForm(f => ({ ...f, settings: { ...f.settings, currency: e.target.value } }))}
+            className="input max-w-xs"
+          >
+            {CURRENCIES.map(c => (
+              <option key={c.code} value={c.code}>
+                {c.symbol} — {c.code} · {c.name}
+              </option>
+            ))}
+          </select>
+          {/* Preview */}
+          {(() => {
+            const sel = CURRENCIES.find(c => c.code === form.settings.currency)
+            return sel ? (
+              <p className="text-xs text-ink-400 mt-2">
+                Vista previa: <span className="font-semibold text-ink-700">{sel.symbol}1,250.00</span>
+                <span className="ml-2 badge badge-gray">{sel.code}</span>
+              </p>
+            ) : null
+          })()}
+        </div>
+
+        <div className="divider" />
+
+        {/* Catálogo público */}
+        <div className="flex items-center gap-2 mb-1">
+          <ShoppingBag size={17} className="text-brand-500" />
+          <h2 className="section-title">Catálogo público</h2>
+        </div>
+        <p className="text-xs text-ink-400 -mt-1">
+          Controla qué información ven tus clientes en el catálogo.
+        </p>
+
+        {/* Toggle mostrar stock */}
+        <div className="flex items-center justify-between gap-4 bg-ink-50 border border-ink-100 rounded-xl px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold text-ink-800">Mostrar cantidad en stock</p>
+            <p className="text-xs text-ink-400 mt-0.5">
+              {form.settings.show_stock
+                ? 'Los clientes ven el número exacto · Ej: "12 en stock"'
+                : 'Los clientes solo ven disponibilidad · Ej: "En stock" / "Sin stock"'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setForm(f => ({ ...f, settings: { ...f.settings, show_stock: !f.settings.show_stock } }))}
+            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+              form.settings.show_stock ? 'bg-brand-500' : 'bg-ink-300'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform ${
+                form.settings.show_stock ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
 
         <button type="submit" disabled={saving} className="btn-primary">
           {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}

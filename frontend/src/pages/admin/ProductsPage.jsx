@@ -3,16 +3,19 @@
  * CRUD completo de productos con generación automática de embeddings.
  */
 import { useState, useEffect, useCallback } from 'react'
-import { productsAPI, categoriesAPI, warehousesAPI, stockAPI } from '../../services/api'
+import { productsAPI, categoriesAPI, warehousesAPI, stockAPI, companiesAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
 import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import { useDropzone } from 'react-dropzone'
 import toast from 'react-hot-toast'
 import {
   Plus, Search, Pencil, Trash2, Package, X,
-  RefreshCw, Loader2, Upload, ImageIcon, Warehouse, Tag, Layers
+  RefreshCw, Loader2, Upload, ImageIcon, Warehouse, Tag, Layers,
+  QrCode, Printer, ScanLine
 } from 'lucide-react'
+import { QRCodeCanvas } from 'qrcode.react'
 import ProductImage from '../../components/shared/ProductImage'
+import BarcodeScannerModal from '../../components/shared/BarcodeScannerModal'
 import clsx from 'clsx'
 
 function Modal({ open, onClose, title, children }) {
@@ -138,6 +141,120 @@ function UnitsEditor({ baseUnit, units, onChange }) {
   )
 }
 
+// ── QR Label Modal ────────────────────────────────────────────────────
+function QRLabelModal({ open, onClose, product, companySlug }) {
+  const [labelCount, setLabelCount] = useState(1)
+  if (!open || !product) return null
+
+  // QR encodes the product catalog URL (or barcode if available)
+  const qrValue = product.barcode
+    ? product.barcode
+    : `${window.location.origin}/${companySlug || ''}?search=${encodeURIComponent(product.name)}`
+
+  const printLabels = (count) => {
+    const canvas = document.getElementById('qr-print-canvas')
+    if (!canvas) return
+    const dataUrl = canvas.toDataURL('image/png')
+
+    const labelHtml = Array.from({ length: count }, () => `
+      <div class="label">
+        <img src="${dataUrl}" alt="QR" />
+        <p class="name">${product.name.replace(/</g, '&lt;')}</p>
+        ${product.sku ? `<p class="sub">SKU: ${product.sku}</p>` : ''}
+        ${product.barcode ? `<p class="sub">${product.barcode}</p>` : ''}
+      </div>`).join('')
+
+    const win = window.open('', '_blank', 'width=900,height=700')
+    if (!win) { toast.error('Permite ventanas emergentes para imprimir'); return }
+    win.document.write(`<!DOCTYPE html><html><head>
+      <title>Etiquetas — ${product.name}</title>
+      <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:Arial,sans-serif;background:#fff}
+        .grid{display:flex;flex-wrap:wrap;gap:6mm;padding:10mm}
+        .label{
+          width:55mm;border:1px solid #ccc;border-radius:3mm;
+          padding:4mm;display:flex;flex-direction:column;
+          align-items:center;page-break-inside:avoid
+        }
+        .label img{width:90px;height:90px}
+        .name{font-size:8pt;font-weight:700;text-align:center;margin-top:3mm;line-height:1.2}
+        .sub{font-size:7pt;color:#555;margin-top:1mm;font-family:monospace}
+        @media print{body{margin:0}.grid{padding:5mm}}
+      </style>
+    </head><body>
+      <div class="grid">${labelHtml}</div>
+      <script>window.onload=()=>{window.print();setTimeout(()=>window.close(),500)}<\/script>
+    </body></html>`)
+    win.document.close()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="modal-box max-w-xs">
+        <div className="flex items-center justify-between p-5 border-b border-ink-100">
+          <h3 className="text-base font-bold text-ink-900 flex items-center gap-2">
+            <QrCode size={18} className="text-brand-500" /> Etiqueta QR
+          </h3>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
+        </div>
+
+        <div className="p-5 flex flex-col items-center gap-4">
+          {/* QR Code */}
+          <div className="p-3 bg-white border-2 border-ink-100 rounded-2xl shadow-sm">
+            <QRCodeCanvas
+              id="qr-print-canvas"
+              value={qrValue}
+              size={160}
+              level="M"
+              includeMargin={false}
+            />
+          </div>
+
+          {/* Product info */}
+          <div className="text-center">
+            <p className="font-bold text-ink-900 text-sm">{product.name}</p>
+            {product.sku && <p className="text-xs text-ink-400 font-mono mt-0.5">SKU: {product.sku}</p>}
+            {product.barcode && <p className="text-xs text-ink-400 font-mono mt-0.5">{product.barcode}</p>}
+            <p className="text-[10px] text-ink-300 mt-1.5 max-w-[200px] break-all">{qrValue}</p>
+          </div>
+
+          {/* Quantity selector + print */}
+          <div className="w-full pt-3 border-t border-ink-100 space-y-3">
+            <p className="text-xs font-semibold text-ink-500 uppercase tracking-wide text-center">
+              Cantidad de etiquetas
+            </p>
+            <div className="grid grid-cols-4 gap-2">
+              {[1, 4, 9, 16].map(n => (
+                <button
+                  key={n}
+                  onClick={() => setLabelCount(n)}
+                  className={clsx(
+                    'py-2 rounded-xl text-sm font-semibold border transition-colors',
+                    labelCount === n
+                      ? 'bg-brand-500 text-white border-brand-500'
+                      : 'bg-white text-ink-700 border-ink-200 hover:border-brand-300'
+                  )}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => printLabels(labelCount)}
+              className="btn-primary w-full justify-center"
+            >
+              <Printer size={15} />
+              Imprimir {labelCount} {labelCount === 1 ? 'etiqueta' : 'etiquetas'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ProductForm({ product, categories, warehouses, onSave, onClose }) {
   const { hasFeature } = useCompanyFeatures()
   const [form, setForm] = useState({
@@ -159,6 +276,7 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
   })
   const [variants, setVariants] = useState([])
   const [loadingVariants, setLoadingVariants] = useState(false)
+  const [barcodeScanOpen, setBarcodeScanOpen] = useState(false)
 
   // Cargar variantes si es un producto padre
   useEffect(() => {
@@ -261,7 +379,22 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
         </div>
         <div>
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Código de barras</label>
-          <input value={form.barcode} onChange={e => handleChange('barcode', e.target.value)} className="input font-mono" />
+          <div className="flex gap-2">
+            <input
+              value={form.barcode}
+              onChange={e => handleChange('barcode', e.target.value)}
+              className="input font-mono flex-1"
+              placeholder="Escribe o escanea..."
+            />
+            <button
+              type="button"
+              onClick={() => setBarcodeScanOpen(true)}
+              className="btn-secondary px-3 shrink-0"
+              title="Escanear con la cámara"
+            >
+              <ScanLine size={16} />
+            </button>
+          </div>
         </div>
         <div className="col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Categoría</label>
@@ -367,7 +500,7 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
                       ))}
                     </div>
                   </div>
-                  <span className="text-xs font-semibold text-brand-600">${Number(v.price).toLocaleString()}</span>
+                  <span className="text-xs font-semibold text-brand-600">{formatPrice(v.price)}</span>
                   <span className={clsx('badge text-[10px]', v.total_stock > 0 ? 'badge-green' : 'badge-red')}>
                     {v.total_stock}
                   </span>
@@ -452,6 +585,16 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
           {loading ? <><Loader2 size={15} className="animate-spin" /> Guardando...</> : 'Guardar'}
         </button>
       </div>
+
+      {/* Scanner de código de barras */}
+      <BarcodeScannerModal
+        open={barcodeScanOpen}
+        onClose={() => setBarcodeScanOpen(false)}
+        onDetected={(code) => {
+          handleChange('barcode', code)
+          setBarcodeScanOpen(false)
+        }}
+      />
     </form>
   )
 }
@@ -506,7 +649,7 @@ function StockDetailModal({ open, onClose, product, warehouses }) {
 
 export default function ProductsPage() {
   const { user } = useAuth()
-  const { hasFeature } = useCompanyFeatures()
+  const { hasFeature, formatPrice } = useCompanyFeatures()
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [warehouses, setWarehouses] = useState([])
@@ -515,6 +658,8 @@ export default function ProductsPage() {
   const [modal, setModal] = useState(null) // null | 'create' | product obj
   const [stockModal, setStockModal] = useState(null) // product obj para ver desglose
   const [confirmDelete, setConfirmDelete] = useState(null) // null | { id, name }
+  const [qrModal, setQrModal] = useState(null) // null | product obj
+  const [companySlug, setCompanySlug] = useState('')
 
   const load = () => {
     setLoading(true)
@@ -529,7 +674,10 @@ export default function ProductsPage() {
     }).finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    companiesAPI.getMe().then(r => { if (r.data?.slug) setCompanySlug(r.data.slug) }).catch(() => {})
+  }, [])
   useEffect(() => {
     const t = setTimeout(load, 400)
     return () => clearTimeout(t)
@@ -564,9 +712,26 @@ export default function ProductsPage() {
       </div>
 
       {/* Search */}
-      <div className="relative max-w-sm">
-        <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-400" />
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar productos..." className="input pl-10" />
+      <div className="flex flex-wrap gap-3 items-center">
+        <div className="relative flex-1 min-w-[220px] max-w-md">
+          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-400" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar por nombre, SKU, descripción..."
+            className="input pl-10"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700">
+              <X size={14} />
+            </button>
+          )}
+        </div>
+        {!loading && (
+          <span className="text-sm text-ink-400 shrink-0">
+            {products.length} resultado{products.length !== 1 ? 's' : ''}
+          </span>
+        )}
       </div>
 
       {/* Table */}
@@ -620,7 +785,7 @@ export default function ProductsPage() {
                   </td>
                   <td><span className="font-mono text-xs text-ink-500">{p.sku || '—'}</span></td>
                   <td><span className="text-xs text-ink-600">{cat?.name || '—'}</span></td>
-                  <td><span className="font-semibold text-brand-600">${Number(p.price).toLocaleString()}</span></td>
+                  <td><span className="font-semibold text-brand-600">{formatPrice(p.price)}</span></td>
                   <td>
                     <button
                       onClick={() => setStockModal(p)}
@@ -641,7 +806,10 @@ export default function ProductsPage() {
                         <button onClick={() => setModal(p)} className="btn-ghost p-2 text-ink-500" title="Editar">
                           <Pencil size={14} />
                         </button>
-                        <button onClick={() => handleRegenerateEmbedding(p.id)} className="btn-ghost p-2 text-brand-500" title="Regenerar embedding">
+                        <button onClick={() => setQrModal(p)} className="btn-ghost p-2 text-brand-500" title="Imprimir etiqueta QR">
+                          <QrCode size={14} />
+                        </button>
+                        <button onClick={() => handleRegenerateEmbedding(p.id)} className="btn-ghost p-2 text-ink-400" title="Regenerar embedding">
                           <RefreshCw size={14} />
                         </button>
                         <button onClick={() => setConfirmDelete({ id: p.id, name: p.name })} className="btn-ghost p-2 text-red-500 hover:bg-red-50" title="Desactivar">
@@ -708,6 +876,14 @@ export default function ProductsPage() {
         onClose={() => setStockModal(null)}
         product={stockModal}
         warehouses={warehouses}
+      />
+
+      {/* Modal QR / etiquetas */}
+      <QRLabelModal
+        open={!!qrModal}
+        onClose={() => setQrModal(null)}
+        product={qrModal}
+        companySlug={companySlug}
       />
     </div>
   )

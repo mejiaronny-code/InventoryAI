@@ -158,6 +158,7 @@ class ProductCreate(BaseModel):
     sku: Optional[str] = None
     barcode: Optional[str] = None
     price: float = 0
+    cost_price: Optional[float] = None
     unit: str = "unidad"
     category_id: Optional[UUID] = None
     images: List[str] = []
@@ -175,6 +176,7 @@ class ProductUpdate(BaseModel):
     sku: Optional[str] = None
     barcode: Optional[str] = None
     price: Optional[float] = None
+    cost_price: Optional[float] = None
     unit: Optional[str] = None
     category_id: Optional[UUID] = None
     images: Optional[List[str]] = None
@@ -195,6 +197,7 @@ class ProductOut(BaseModel):
     sku: Optional[str]
     barcode: Optional[str]
     price: float
+    cost_price: Optional[float] = None
     unit: str
     images: List[str]
     attributes: dict
@@ -298,7 +301,7 @@ class ReservationCreate(BaseModel):
     warehouse_id: UUID
     quantity: int = Field(gt=0)
     client_name: str
-    client_email: Optional[EmailStr] = None
+    client_email: EmailStr
     client_phone: Optional[str] = None
     notes: Optional[str] = None
 

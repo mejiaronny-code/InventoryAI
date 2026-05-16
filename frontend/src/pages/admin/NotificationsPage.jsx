@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react'
 import { notificationsAPI } from '../../services/api'
 import toast from 'react-hot-toast'
-import { Bell, CheckCheck, Package, AlertTriangle, CalendarCheck, Zap } from 'lucide-react'
+import { Bell, CheckCheck, Package, AlertTriangle, CalendarCheck, Zap, Trash2, X } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
@@ -28,6 +28,7 @@ const typeColor = {
 export default function NotificationsPage() {
   const [notifs, setNotifs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [deletingRead, setDeletingRead] = useState(false)
 
   const load = () => notificationsAPI.list().then(r => setNotifs(r.data)).finally(() => setLoading(false))
   useEffect(() => { load() }, [])
@@ -40,23 +41,53 @@ export default function NotificationsPage() {
   const markAll = async () => {
     await notificationsAPI.markAllRead()
     setNotifs(n => n.map(x => ({ ...x, read: true })))
-    toast.success('Todas marcadas')
+    toast.success('Todas marcadas como leídas')
+  }
+
+  const deleteOne = async (e, id) => {
+    e.stopPropagation()
+    await notificationsAPI.deleteOne(id)
+    setNotifs(n => n.filter(x => x.id !== id))
+  }
+
+  const deleteRead = async () => {
+    const readCount = notifs.filter(n => n.read).length
+    if (readCount === 0) { toast('No hay notificaciones leídas', { icon: '💬' }); return }
+    setDeletingRead(true)
+    try {
+      await notificationsAPI.deleteRead()
+      setNotifs(n => n.filter(x => !x.read))
+      toast.success(`${readCount} notificación${readCount > 1 ? 'es eliminadas' : ' eliminada'}`)
+    } catch { toast.error('Error al eliminar') } finally { setDeletingRead(false) }
   }
 
   const unread = notifs.filter(n => !n.read).length
+  const readCount = notifs.filter(n => n.read).length
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="page-title">Notificaciones</h1>
           {unread > 0 && <p className="text-sm text-ink-500 mt-0.5">{unread} sin leer</p>}
         </div>
-        {unread > 0 && (
-          <button onClick={markAll} className="btn-secondary text-sm">
-            <CheckCheck size={15} /> Marcar todas leídas
-          </button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {unread > 0 && (
+            <button onClick={markAll} className="btn-secondary text-sm">
+              <CheckCheck size={15} /> Marcar todas leídas
+            </button>
+          )}
+          {readCount > 0 && (
+            <button
+              onClick={deleteRead}
+              disabled={deletingRead}
+              className="btn-danger text-sm"
+            >
+              <Trash2 size={15} />
+              {deletingRead ? 'Eliminando...' : `Eliminar leídas (${readCount})`}
+            </button>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -78,8 +109,8 @@ export default function NotificationsPage() {
                 key={n.id}
                 onClick={() => !n.read && markRead(n.id)}
                 className={clsx(
-                  'card p-4 flex items-start gap-4 cursor-pointer transition-all',
-                  !n.read && 'border-brand-200 bg-brand-50/30 hover:bg-brand-50',
+                  'card p-4 flex items-start gap-4 transition-all group',
+                  !n.read && 'border-brand-200 bg-brand-50/30 hover:bg-brand-50 cursor-pointer',
                   n.read && 'opacity-60'
                 )}
               >
@@ -94,7 +125,16 @@ export default function NotificationsPage() {
                     {format(new Date(n.created_at), "d 'de' MMM, HH:mm", { locale: es })}
                   </p>
                 </div>
-                {!n.read && <div className="w-2 h-2 rounded-full bg-brand-500 mt-1.5 shrink-0" />}
+                <div className="flex items-center gap-2 shrink-0">
+                  {!n.read && <div className="w-2 h-2 rounded-full bg-brand-500 mt-1" />}
+                  <button
+                    onClick={(e) => deleteOne(e, n.id)}
+                    className="p-1.5 rounded-lg text-ink-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+                    title="Eliminar"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
               </div>
             )
           })}

@@ -50,13 +50,15 @@ const FEATURE_LABELS = {
 function BusinessTypeModal({ company, onClose, onSaved }) {
   const [btype, setBtype] = useState(company.business_type || 'general')
   const [customFeatures, setCustomFeatures] = useState(company.features || {})
+  const [aiRulesLimit, setAiRulesLimit] = useState(company.settings?.ai_rules_limit ?? 5)
   const [saving, setSaving] = useState(false)
 
   const handleSave = async () => {
     setSaving(true)
     try {
       await companiesAPI.setBusinessType(company.id, btype, btype === 'custom' ? customFeatures : null)
-      toast.success('Tipo de negocio actualizado')
+      await companiesAPI.setAiRulesLimit(company.id, aiRulesLimit)
+      toast.success('Configuración actualizada')
       onSaved()
       onClose()
     } catch { toast.error('Error al guardar') }
@@ -145,6 +147,39 @@ function BusinessTypeModal({ company, onClose, onSaved }) {
               ))}
             </div>
           )}
+
+          {/* Límite de reglas IA */}
+          <div className="border-t border-ink-100 pt-4">
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-2">
+              Límite de reglas de IA
+            </label>
+            <p className="text-xs text-ink-400 mb-2">Máximo de instrucciones personalizadas que el admin puede configurar.</p>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={aiRulesLimit}
+                onChange={e => setAiRulesLimit(Number(e.target.value))}
+                className="input w-24 text-center font-mono"
+              />
+              <div className="flex gap-2">
+                {[3, 5, 10, 20].map(n => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setAiRulesLimit(n)}
+                    className={clsx(
+                      'px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all',
+                      aiRulesLimit === n ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300'
+                    )}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
 
           <div className="flex gap-3 pt-1">
             <button onClick={onClose} className="btn-secondary flex-1 justify-center">Cancelar</button>
@@ -450,7 +485,7 @@ export default function SuperAdminCompaniesPage() {
           </thead>
           <tbody>
             {loading ? (
-              [...Array(4)].map((_, i) => <tr key={i}><td colSpan={5}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>)
+              [...Array(4)].map((_, i) => <tr key={i}><td colSpan={6}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>)
             ) : companies.map(c => {
               const sub = c.subscriptions || {}
               return (
