@@ -134,6 +134,29 @@ async def create_public_reservation(company_slug: str, data: ReservationCreate):
     }
 
 
+@router.get("/public/by-email")
+async def get_reservations_by_email(company_slug: str, email: str):
+    """Historial de reservas de un cliente por email (sin login)."""
+    company = supabase.table("companies")\
+        .select("id")\
+        .eq("slug", company_slug)\
+        .single()\
+        .execute()
+
+    if not company.data:
+        raise HTTPException(404, "Empresa no encontrada")
+
+    result = supabase.table("reservations")\
+        .select("*, products(name, unit, price), warehouses(name)")\
+        .eq("company_id", company.data["id"])\
+        .eq("client_email", email.lower().strip())\
+        .order("created_at", desc=True)\
+        .limit(50)\
+        .execute()
+
+    return result.data or []
+
+
 @router.get("/public/{reservation_code}")
 async def get_public_reservation(reservation_code: str, company_slug: str):
     """Consulta pública de reserva por código (para el cliente sin login)."""

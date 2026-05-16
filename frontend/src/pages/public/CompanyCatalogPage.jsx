@@ -233,10 +233,13 @@ export default function CompanyCatalogPage() {
               <Zap size={10} className="text-brand-500" /> Chat IA disponible
             </p>
           </div>
-          <div className="hidden sm:flex items-center gap-2 text-xs text-ink-400 bg-ink-50 px-3 py-1.5 rounded-full border border-ink-100">
+          <button
+            onClick={() => navigate(`/${companySlug}/mis-reservas`)}
+            className="hidden sm:flex items-center gap-1.5 text-xs text-brand-600 bg-brand-50 px-3 py-1.5 rounded-full border border-brand-100 hover:bg-brand-100 transition-colors"
+          >
             <ShoppingBag size={13} />
-            {products.length} productos
-          </div>
+            Mis reservas
+          </button>
         </div>
       </header>
 

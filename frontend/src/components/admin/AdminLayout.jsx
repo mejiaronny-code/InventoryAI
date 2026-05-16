@@ -14,7 +14,7 @@ import {
   LayoutDashboard, Package, Tag, Warehouse, BarChart3,
   CalendarCheck, Bell, Settings, Users, LogOut, Menu, X,
   Zap, AlertTriangle, Activity, Hash, ClipboardList,
-  ShoppingCart, ClipboardCheck, FileBarChart
+  ShoppingCart, ClipboardCheck, FileBarChart, FileUp
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -30,6 +30,7 @@ const navItems = [
   { to: '/admin/reorder',       icon: ShoppingCart,    label: 'Reabastecimiento',  roles: ['admin'] },
   { to: '/admin/conteo',        icon: ClipboardCheck,  label: 'Conteo cíclico',    roles: ['admin','employee'] },
   { to: '/admin/reports',       icon: FileBarChart,    label: 'Reportes',          roles: ['admin'] },
+  { to: '/admin/import',        icon: FileUp,          label: 'Importar CSV',      roles: ['admin'] },
   { to: '/admin/notifications', icon: Bell,            label: 'Notificaciones',    roles: ['admin','employee'] },
   { to: '/admin/activity',      icon: Activity,        label: 'Actividad',         roles: ['admin','employee'] },
   { to: '/admin/employees',     icon: Users,           label: 'Empleados',         roles: ['admin'] },

@@ -242,6 +242,7 @@ export const serialsAPI = {
 export const reservationsAPI = {
   createPublic: (slug, data) => api.post(`/reservations/public/${slug}`, data),
   getPublic: (slug, code) => api.get(`/reservations/public/${code}`, { params: { company_slug: slug } }),
+  getByEmail: (slug, email) => api.get('/reservations/public/by-email', { params: { company_slug: slug, email } }),
   list: (params) => api.get('/reservations/', { params }),
   update: (id, data) => api.patch(`/reservations/${id}`, data),
   expireAll: () => api.post('/reservations/expire-all'),

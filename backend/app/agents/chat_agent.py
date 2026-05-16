@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 # ── Modelos DeepInfra ─────────────────────────────────────────────────
 DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
-CHAT_MODEL   = "Qwen/Qwen3-30B-A3B"
-VISION_MODEL = "Qwen/Qwen2.5-VL-32B-Instruct"
+CHAT_MODEL   = "Qwen/Qwen3.6-35B-A3B"
+VISION_MODEL = "Qwen/Qwen3.6-35B-A3B"  # mismo modelo — es multimodal
 
 # ── Mapa de monedas (igual que el frontend) ───────────────────────────
 CURRENCY_SYMBOLS: dict[str, str] = {
@@ -459,37 +459,64 @@ async def chat_with_image(
 
         user_image_url = f"data:{image_media_type};base64,{image_base64}"
 
-        # ── ETAPA 1: descripción corta para seedear la búsqueda ────────
-        seed_resp = await client.chat.completions.create(
+        import json as _json, re as _re
+
+        # ── FASE 1: Extraer atributos estructurados de la imagen ───────
+        attr_resp = await client.chat.completions.create(
             model=VISION_MODEL,
-            max_tokens=40,
+            max_tokens=120,
             temperature=0.1,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             messages=[{
                 "role": "user",
                 "content": [
                     {"type": "image_url", "image_url": {"url": user_image_url}},
-                    {"type": "text", "text": "En máximo 8 palabras: ¿qué tipo de producto aparece en la imagen?"},
+                    {
+                        "type": "text",
+                        "text": (
+                            "Analiza esta imagen y responde SOLO con este JSON (sin texto extra):\n"
+                            '{"type": "tipo de producto en español", '
+                            '"brand": "marca si la ves escrita o reconoces el logo, si no null", '
+                            '"colors": ["color1", "color2"], '
+                            '"style": "descripción breve del estilo/uso", '
+                            '"search_query": "frase de búsqueda de 5-10 palabras para encontrar este producto"}'
+                        ),
+                    },
                 ],
             }],
         )
-        seed_description = (seed_resp.choices[0].message.content or "").strip().strip('"').strip("'")
-        logger.info(f"Seed descripción: {seed_description}")
+        attr_raw = (attr_resp.choices[0].message.content or "").strip()
+        logger.info(f"Atributos imagen: {attr_raw[:300]}")
 
-        # ── ETAPA 2: candidatos vía búsqueda semántica + keyword ──────
-        query_embedding = await generate_embedding(f"{seed_description} {user_text}".strip())
+        attrs = {}
+        json_m = _re.search(r'\{.*\}', attr_raw, _re.DOTALL)
+        if json_m:
+            try:
+                attrs = _json.loads(json_m.group())
+            except Exception:
+                pass
+
+        product_type  = attrs.get("type", "producto")
+        brand         = attrs.get("brand") or ""
+        colors        = attrs.get("colors") or []
+        search_query  = attrs.get("search_query") or f"{product_type} {brand} {' '.join(colors)}".strip()
+        logger.info(f"Tipo: {product_type} | Marca: {brand} | Colores: {colors} | Query: {search_query}")
+
+        # ── FASE 2: Búsqueda semántica + keyword ──────────────────────
+        query_embedding = await generate_embedding(f"{search_query} {user_text}".strip())
 
         rpc_result = supabase.rpc("search_products_semantic", {
             "query_embedding":   query_embedding,
             "company_id_filter": company_id,
-            "match_threshold":   0.15,
+            "match_threshold":   0.10,
             "match_count":       8,
         }).execute()
 
         candidate_ids = [p["id"] for p in (rpc_result.data or [])]
 
-        if len(candidate_ids) < 4:
-            keywords = [w for w in seed_description.lower().split() if len(w) > 3][:2]
-            for kw in keywords:
+        # Complementar con keyword del tipo de producto
+        for kw in [product_type] + ([brand] if brand else []):
+            if len(kw) > 2:
                 kw_res = supabase.table("products") \
                     .select("id").eq("company_id", company_id).eq("is_active", True) \
                     .ilike("name", f"%{kw}%").limit(4).execute()
@@ -498,135 +525,135 @@ async def chat_with_image(
                         candidate_ids.append(row["id"])
 
         if not candidate_ids:
+            _log_ai_usage(company_id, session_id, VISION_MODEL)
             return (
-                "No encontré productos en el inventario que puedan coincidir con tu imagen. "
-                "¿Puedes describirlo con palabras?",
-                ["vision_search"],
+                f"🔍 Veo que es {product_type}{' ' + brand if brand else ''}. "
+                "No encontré ese tipo de producto en el inventario. "
+                "¿Puedes describirlo con más detalle?",
+                ["vision_no_candidates"],
             )
 
         details_res = supabase.table("products") \
-            .select("id, name, price, unit, description, images") \
-            .in_("id", candidate_ids[:6]) \
+            .select("id, name, price, unit, description, tags") \
+            .in_("id", candidate_ids[:8]) \
             .execute()
         candidates = details_res.data or []
 
-        with_images    = [(p, p["images"][0]) for p in candidates if p.get("images")]
-        without_images = [p for p in candidates if not p.get("images")]
-
-        # ── ETAPA 3a: comparación visual con productos que tienen foto ──
-        if with_images:
-            content: list = [
-                {"type": "text", "text": "Imagen que el cliente está buscando:"},
-                {"type": "image_url", "image_url": {"url": user_image_url}},
-                {"type": "text", "text": f"\nProductos disponibles en el inventario ({len(with_images)} opciones):"},
-            ]
-            for i, (product, img_url) in enumerate(with_images[:4]):
-                content.append({"type": "text", "text": f"\nOpción {i+1}: {product['name']}"})
-                content.append({"type": "image_url", "image_url": {"url": img_url}})
-
-            content.append({
-                "type": "text",
-                "text": (
-                    "\nCompara la imagen del cliente con las opciones del inventario y responde "
-                    "en UNA sola oración natural en español. Ejemplos de formato:\n"
-                    "- 'Es exactamente la Mochila Amarilla, mismo color y diseño.'\n"
-                    "- 'Se parece bastante a la Mochila Escolar Azul, misma forma pero diferente color.'\n"
-                    "- 'No encontré ningún producto en el inventario que coincida con la imagen.'\n"
-                    "Solo una oración, sin numeración, sin listas."
-                ),
-            })
-
-            comp_resp = await client.chat.completions.create(
-                model=VISION_MODEL,
-                max_tokens=200,
-                temperature=0.2,
-                messages=[{"role": "user", "content": content}],
-            )
-            analysis = (comp_resp.choices[0].message.content or "").strip()
-            logger.info(f"Análisis visual: {analysis[:200]}")
-
-            matched_product = None
-            analysis_lower = analysis.lower()
-            for product, _ in with_images:
-                if product["name"].lower() in analysis_lower:
-                    matched_product = product
-                    break
-            if not matched_product and with_images:
-                matched_product = with_images[0][0]
-
-            stock_res   = supabase.table("product_warehouse_stock") \
-                .select("quantity").eq("product_id", matched_product["id"]).execute()
-            total_stock = sum(s["quantity"] for s in (stock_res.data or []))
-            stock_badge = (
-                (f"✅ {total_stock} en stock" if total_stock > 0 else "❌ Sin stock")
-                if show_stock else
-                ("✅ Disponible" if total_stock > 0 else "❌ Sin stock")
-            )
-
-            price_fmt = f"{float(matched_product['price']):,.2f}"
-            response = (
-                f"🔍 {analysis}\n\n"
-                f"**{matched_product['name']}**  {stock_badge}\n"
-                f"💰 {symbol}{price_fmt} / {matched_product['unit']}\n\n"
-                "¿Te interesa? Puedo hacer una reserva o darte más detalles."
-            )
-            _log_ai_usage(company_id, session_id, VISION_MODEL)
-            return response, ["vision_comparison"]
-
-        # ── ETAPA 3b: fallback sin fotos en inventario ─────────────────
+        # ── FASE 3: Puntuar cada candidato con texto (sin cargar URLs) ─
         catalog_text = "\n".join(
-            f"- {p['name']}: {(p.get('description') or 'sin descripción')[:120]}"
-            for p in without_images[:5]
+            f'- "{p["name"]}": {(p.get("description") or ""[:100])} tags:[{",".join(p.get("tags") or [])}]'
+            for p in candidates
         )
 
-        text_resp = await client.chat.completions.create(
+        score_resp = await client.chat.completions.create(
             model=VISION_MODEL,
-            max_tokens=200,
-            temperature=0.2,
+            max_tokens=400,
+            temperature=0.1,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             messages=[{
                 "role": "user",
                 "content": [
                     {"type": "image_url", "image_url": {"url": user_image_url}},
-                    {"type": "text", "text": (
-                        "Analiza el producto de la imagen con detalle: tipo, color, forma, material, uso.\n\n"
-                        f"Estos son los productos disponibles en el inventario:\n{catalog_text}\n\n"
-                        "¿Cuál coincide mejor con la imagen? Explica brevemente por qué. "
-                        "Si ninguno coincide, dilo. Responde en español, máximo 3 oraciones."
-                    )},
+                    {
+                        "type": "text",
+                        "text": (
+                            f"El producto de la imagen es: {product_type}"
+                            + (f", marca {brand}" if brand else "")
+                            + (f", colores {', '.join(colors)}" if colors else "")
+                            + f", estilo: {attrs.get('style', '')}.\n\n"
+                            f"Estos son los productos disponibles en el inventario:\n{catalog_text}\n\n"
+                            "Puntúa cada producto del inventario según qué tan similar es al de la imagen. "
+                            "Responde SOLO con este JSON:\n"
+                            '{"candidates": [{"name": "nombre exacto del producto", "score": 0-100, "reason": "una frase"}]}\n\n'
+                            "Criterios de score:\n"
+                            "- 85-100: mismo tipo Y misma marca (o sin marca conocida y muy parecido)\n"
+                            "- 60-84: mismo tipo de producto, diferente marca o color\n"
+                            "- 30-59: categoría parecida pero diferente uso o estilo\n"
+                            "- 0-29: producto completamente diferente\n"
+                            "Si el inventario tiene un producto del mismo tipo que la imagen, score mínimo 50."
+                        ),
+                    },
                 ],
             }],
         )
-        text_analysis = (text_resp.choices[0].message.content or "").strip()
-        logger.info(f"Análisis texto-fallback: {text_analysis[:200]}")
+        score_raw = (score_resp.choices[0].message.content or "").strip()
+        logger.info(f"Scores: {score_raw[:400]}")
 
-        matched_product = None
-        for p in without_images:
-            if p["name"].lower() in text_analysis.lower():
-                matched_product = p
-                break
-        if not matched_product and without_images:
-            matched_product = without_images[0]
+        scored_candidates = []
+        json_m2 = _re.search(r'\{.*\}', score_raw, _re.DOTALL)
+        if json_m2:
+            try:
+                scored_candidates = _json.loads(json_m2.group()).get("candidates", [])
+            except Exception:
+                pass
 
-        stock_res   = supabase.table("product_warehouse_stock") \
-            .select("quantity").eq("product_id", matched_product["id"]).execute()
-        total_stock = sum(s["quantity"] for s in (stock_res.data or []))
-        stock_badge = (
-            (f"✅ {total_stock} en stock" if total_stock > 0 else "❌ Sin stock")
-            if show_stock else
-            ("✅ Disponible" if total_stock > 0 else "❌ Sin stock")
-        )
+        # Mapear a productos reales
+        def find_product(name: str):
+            nl = name.lower()
+            for p in candidates:
+                if p["name"].lower() in nl or nl in p["name"].lower():
+                    return p
+            return None
 
-        price_fmt = f"{float(matched_product['price']):,.2f}"
-        response = (
-            f"🔍 {text_analysis}\n\n"
-            f"**{matched_product['name']}**  {stock_badge}\n"
-            f"💰 {symbol}{price_fmt} / {matched_product['unit']}\n\n"
-            "*(Los productos aún no tienen foto en el inventario — "
-            "agregar imágenes mejoraría la precisión de búsqueda)*\n\n"
-            "¿Es este el producto que buscas? Puedo hacer una reserva."
-        )
+        def _stock_badge(product):
+            res   = supabase.table("product_warehouse_stock") \
+                .select("quantity").eq("product_id", product["id"]).execute()
+            total = sum(s["quantity"] for s in (res.data or []))
+            if show_stock:
+                return f"✅ {total} en stock" if total > 0 else "❌ Sin stock"
+            return "✅ Disponible" if total > 0 else "❌ Sin stock"
+
+        scored_candidates.sort(key=lambda c: c.get("score", 0), reverse=True)
+
+        exact_match  = None
+        similar_list = []
+
+        for c in scored_candidates:
+            score   = c.get("score", 0)
+            product = find_product(c.get("name", ""))
+            if not product:
+                continue
+            if score >= 85 and not exact_match:
+                exact_match = (product, c)
+            elif 50 <= score < 85 and len(similar_list) < 3:
+                similar_list.append((product, c))
+
         _log_ai_usage(company_id, session_id, VISION_MODEL)
-        return response, ["vision_text_fallback"]
+
+        # ── CASO 1: Match exacto ───────────────────────────────────────
+        if exact_match:
+            product, c = exact_match
+            badge     = _stock_badge(product)
+            price_fmt = f"{float(product['price']):,.2f}"
+            return (
+                f"🎯 {c.get('reason', 'Producto encontrado')}\n\n"
+                f"**{product['name']}**  {badge}\n"
+                f"💰 {symbol}{price_fmt} / {product['unit']}\n\n"
+                "¿Te interesa? Puedo hacer una reserva o darte más detalles."
+            ), ["vision_exact_match"]
+
+        # ── CASO 2: Similares ──────────────────────────────────────────
+        if similar_list:
+            brand_str = f" {brand}" if brand else ""
+            lines = [f"🔍 No tenemos {product_type}{brand_str} exacto, pero encontré opciones similares:\n"]
+            for product, c in similar_list:
+                badge     = _stock_badge(product)
+                price_fmt = f"{float(product['price']):,.2f}"
+                lines.append(
+                    f"**{product['name']}**  {badge}\n"
+                    f"💰 {symbol}{price_fmt} / {product['unit']}"
+                )
+            lines.append("\n¿Alguna de estas te interesa?")
+            return "\n\n".join(lines), ["vision_similar"]
+
+        # ── CASO 3: Nada encontrado ────────────────────────────────────
+        brand_str = f" {brand}" if brand else ""
+        return (
+            f"🔍 Veo que buscas {product_type}{brand_str}. "
+            "No tenemos ese producto ni algo similar en el inventario.\n"
+            "¿Quieres que busque por otra característica?",
+            ["vision_no_match"]
+        )
 
     except Exception as e:
         logger.error(f"Error en chat_with_image: {e}")
@@ -637,8 +664,7 @@ async def chat_with_image(
 
 # Precios DeepInfra por 1M tokens (USD)
 _MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "Qwen/Qwen3-30B-A3B":            (0.08, 0.29),
-    "Qwen/Qwen2.5-VL-32B-Instruct":  (0.20, 0.60),
+    "Qwen/Qwen3.6-35B-A3B": (0.15, 0.95),
 }
 
 def _calculate_cost(model: str, tokens_in: int, tokens_out: int) -> float:

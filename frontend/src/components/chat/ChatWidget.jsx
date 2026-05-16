@@ -65,14 +65,14 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
   const inputRef = useRef(null)
 
   useEffect(() => {
-    if (open && messages.length === 0) {
+    if (open && messages.length === 0 && welcomeMessage) {
       setMessages([{
         role: 'assistant',
-        content: welcomeMessage || '¡Hola! 👋 Soy tu asistente de inventario. Puedo ayudarte a buscar productos, consultar precios y hacer reservas. ¿En qué te ayudo?',
+        content: welcomeMessage,
         timestamp: new Date(),
       }])
     }
-  }, [open])
+  }, [open, welcomeMessage])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })

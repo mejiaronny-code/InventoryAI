@@ -9,6 +9,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import HomePage from './pages/public/HomePage'
 import CompanyCatalogPage from './pages/public/CompanyCatalogPage'
 import ReservationStatusPage from './pages/public/ReservationStatusPage'
+import MyReservationsPage from './pages/public/MyReservationsPage'
 import NotFoundPage from './pages/public/NotFoundPage'
 import ResetPasswordPage from './pages/public/ResetPasswordPage'
 import ForgotPasswordPage from './pages/public/ForgotPasswordPage'
@@ -31,6 +32,7 @@ import PickingPage from './pages/admin/PickingPage'
 import ReorderPage from './pages/admin/ReorderPage'
 import ReconciliationPage from './pages/admin/ReconciliationPage'
 import ReportsPage from './pages/admin/ReportsPage'
+import ImportPage from './pages/admin/ImportPage'
 
 // Super Admin pages
 import SuperAdminLayout from './components/admin/SuperAdminLayout'
@@ -53,6 +55,7 @@ function AppRoutes() {
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/:companySlug" element={<CompanyCatalogPage />} />
+      <Route path="/:companySlug/mis-reservas" element={<MyReservationsPage />} />
       <Route path="/reserva/:code" element={<ReservationStatusPage />} />
 
       {/* ── Auth ── */}
@@ -81,6 +84,7 @@ function AppRoutes() {
         <Route path="reorder" element={<ReorderPage />} />
         <Route path="conteo" element={<ReconciliationPage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="import" element={<ImportPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route
           path="employees"

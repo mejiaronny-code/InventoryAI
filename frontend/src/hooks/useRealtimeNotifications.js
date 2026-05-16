@@ -1,59 +1,39 @@
 /**
  * hooks/useRealtimeNotifications.js
- * Hook para recibir notificaciones en tiempo real via Supabase Realtime.
- * Úsalo en el AdminLayout para mostrar nuevas notificaciones sin refrescar.
+ * Suscripción en tiempo real a nuevas notificaciones via Supabase Realtime.
+ * Se usa en AdminLayout para actualizar el badge sin recargar.
  */
-import { useEffect, useCallback } from 'react'
+import { useEffect, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
-import toast from 'react-hot-toast'
-import { Bell, AlertTriangle, CalendarCheck } from 'lucide-react'
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
 )
 
-const typeEmoji = {
-  new_reservation:      '📋',
-  reservation_expired:  '⌛',
-  low_stock:            '⚠️',
-  stock_out:            '🚫',
-  system:               '⚡',
-}
-
 /**
- * @param {string} companyId - UUID de la empresa del usuario autenticado
- * @param {function} onNew - Callback cuando llega una notificación nueva
+ * @param {string|null} companyId - ID de la empresa del usuario logueado
+ * @param {function} onNew - Callback que se llama cuando llega una notificación nueva
  */
 export function useRealtimeNotifications(companyId, onNew) {
+  const onNewRef = useRef(onNew)
+  onNewRef.current = onNew
+
   useEffect(() => {
     if (!companyId) return
 
     const channel = supabase
-      .channel(`notifications:${companyId}`)
+      .channel(`notifications_${companyId}`)
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event:  'INSERT',
           schema: 'public',
-          table: 'notifications',
+          table:  'notifications',
           filter: `company_id=eq.${companyId}`,
         },
         (payload) => {
-          const notif = payload.new
-          const emoji = typeEmoji[notif.type] || '🔔'
-
-          // Mostrar toast de notificación
-          toast(notif.message, {
-            icon: emoji,
-            duration: 5000,
-            style: {
-              borderLeft: '4px solid #f97316',
-            },
-          })
-
-          // Callback para actualizar contadores
-          if (onNew) onNew(notif)
+          onNewRef.current?.(payload.new)
         }
       )
       .subscribe()
@@ -61,5 +41,5 @@ export function useRealtimeNotifications(companyId, onNew) {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [companyId, onNew])
+  }, [companyId])
 }
