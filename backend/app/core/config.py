@@ -12,9 +12,9 @@ class Settings(BaseSettings):
     supabase_service_role_key: str
 
     # AI APIs
-    groq_api_key: str
-    openai_api_key: str
-    deepinfra_api_key: str = ""
+    groq_api_key: str = ""          # Legacy — ya no se usa
+    openai_api_key: str = ""        # Para embeddings (text-embedding-3-small)
+    deepinfra_api_key: str = ""     # Chat + visión (Qwen3)
 
     # LangSmith
     langchain_tracing_v2: bool = True
@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     # App
     app_secret_key: str = "dev-secret-key"
     frontend_url: str = "http://localhost:5173"
+    # Orígenes adicionales separados por coma (para Vercel previews, dominio custom, etc.)
+    extra_cors_origins: str = ""
     environment: str = "development"
 
     # Email (opcional — Resend)

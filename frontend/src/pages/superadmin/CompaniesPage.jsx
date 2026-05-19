@@ -70,15 +70,19 @@ function BusinessTypeModal({ company, onClose, onSaved }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box max-w-md">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
+      <div className="modal-box max-w-md flex flex-col max-h-[90vh]">
+
+        {/* Header — fijo */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-ink-100 shrink-0">
           <div className="flex items-center gap-2">
             <Building2 size={18} className="text-brand-500" />
             <h3 className="text-base font-bold text-ink-900">Tipo de negocio · {company.name}</h3>
           </div>
           <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
         </div>
-        <div className="p-6 space-y-5">
+
+        {/* Cuerpo — scrolleable */}
+        <div className="p-6 space-y-5 overflow-y-auto flex-1">
           <div>
             <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-2">
               Sector
@@ -154,7 +158,7 @@ function BusinessTypeModal({ company, onClose, onSaved }) {
               Límite de reglas de IA
             </label>
             <p className="text-xs text-ink-400 mb-2">Máximo de instrucciones personalizadas que el admin puede configurar.</p>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <input
                 type="number"
                 min={0}
@@ -180,14 +184,16 @@ function BusinessTypeModal({ company, onClose, onSaved }) {
               </div>
             </div>
           </div>
-
-          <div className="flex gap-3 pt-1">
-            <button onClick={onClose} className="btn-secondary flex-1 justify-center">Cancelar</button>
-            <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 justify-center">
-              {saving ? <Loader2 size={14} className="animate-spin" /> : 'Guardar'}
-            </button>
-          </div>
         </div>
+
+        {/* Footer — fijo */}
+        <div className="flex gap-3 px-6 py-4 border-t border-ink-100 shrink-0">
+          <button onClick={onClose} className="btn-secondary flex-1 justify-center">Cancelar</button>
+          <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 justify-center">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : 'Guardar'}
+          </button>
+        </div>
+
       </div>
     </div>
   )
