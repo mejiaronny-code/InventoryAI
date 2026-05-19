@@ -235,7 +235,7 @@ export default function CompanyCatalogPage() {
           </div>
           <button
             onClick={() => navigate(`/${companySlug}/mis-reservas`)}
-            className="hidden sm:flex items-center gap-1.5 text-xs text-brand-600 bg-brand-50 px-3 py-1.5 rounded-full border border-brand-100 hover:bg-brand-100 transition-colors"
+            className="flex items-center gap-1.5 text-xs text-brand-600 bg-brand-50 px-3 py-1.5 rounded-full border border-brand-100 hover:bg-brand-100 transition-colors"
           >
             <ShoppingBag size={13} />
             Mis reservas

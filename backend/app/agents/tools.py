@@ -76,9 +76,17 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
             if not available:
                 return "Los productos encontrados están sin stock disponible."
 
-            # 5. Formatear respuesta
+            # 5. Obtener imágenes de los productos disponibles
+            top = available[:5]
+            img_res = supabase_client.table("products")\
+                .select("id, images")\
+                .in_("id", [p["id"] for p in top])\
+                .execute()
+            img_map = {r["id"]: (r.get("images") or []) for r in (img_res.data or [])}
+
+            # 6. Formatear respuesta
             lines = [f"Encontré {len(available)} producto(s):\n"]
-            for p in available[:5]:
+            for p in top:
                 stock_val = p.get("total_stock", 0)
                 stock_str = (
                     f"{stock_val} unidades" if show_stock
@@ -86,8 +94,11 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 )
                 price_fmt = f"{float(p['price']):,.2f}"
                 tags_str = ", ".join(p.get("tags") or [])
+                imgs = img_map.get(p["id"], [])
+                img_line = f"  ![{p['name']}]({imgs[0]})\n" if imgs else ""
                 lines.append(
                     f"• **{p['name']}** (ID: {p['id']})\n"
+                    f"{img_line}"
                     f"  Precio: {currency_symbol}{price_fmt} / {p['unit']}\n"
                     f"  Stock: {stock_str}\n"
                     + (f"  Etiquetas: {tags_str}\n" if tags_str else "")
@@ -107,7 +118,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
         """
         try:
             result = supabase_client.table("products")\
-                .select("*, categories(name, reservation_time_hours)")\
+                .select("*, categories(name, reservation_time_hours), images")\
                 .eq("id", product_id)\
                 .eq("company_id", company_id)\
                 .single()\
@@ -159,8 +170,11 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                     units_lines += f"  - {u['name']} (factor: {u['factor']}) → {currency_symbol}{price_u}\n"
 
             price_fmt = f"{float(p['price']):,.2f}"
+            imgs = p.get("images") or []
+            img_line = f"![{p['name']}]({imgs[0]})\n" if imgs else ""
             return (
                 f"**{p['name']}**\n"
+                f"{img_line}"
                 f"SKU: {p.get('sku', 'N/A')} | Código: {p.get('barcode', 'N/A')}\n"
                 f"Precio: {currency_symbol}{price_fmt} / {p['unit']}\n"
                 f"Categoría: {cat.get('name', 'Sin categoría')}\n"

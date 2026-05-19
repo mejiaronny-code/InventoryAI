@@ -24,7 +24,9 @@ async def get_picking_list(
     ubicación física del producto (pasillo/estante/bin), ordenadas por
     ubicación para minimizar recorrido en el almacén.
     """
-    company_id = user["company_id"]
+    company_id = user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
 
     # 1. Obtener reservas activas
     valid_statuses = ["pending", "confirmed"] if not status or status == "all" else [status]
@@ -131,7 +133,9 @@ async def get_picking_list(
 @router.patch("/{reservation_id}/confirm")
 async def confirm_pick(reservation_id: str, user: dict = Depends(require_staff)):
     """Marca una reserva como 'confirmed' (ítem recogido por el picker)."""
-    company_id = user["company_id"]
+    company_id = user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
 
     existing = await asyncio.to_thread(
         lambda: supabase.table("reservations")
@@ -159,7 +163,9 @@ async def confirm_pick(reservation_id: str, user: dict = Depends(require_staff))
 @router.patch("/{reservation_id}/complete")
 async def complete_pick(reservation_id: str, user: dict = Depends(require_staff)):
     """Marca una reserva como 'completed' (entregada al cliente)."""
-    company_id = user["company_id"]
+    company_id = user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
 
     existing = await asyncio.to_thread(
         lambda: supabase.table("reservations")

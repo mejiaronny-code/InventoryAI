@@ -14,6 +14,10 @@ function parseMarkdown(text) {
   return text
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(
+      /!\[([^\]]*)\]\((https?:\/\/[^\)]+)\)/g,
+      '<img src="$2" alt="$1" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" />'
+    )
     .replace(/\n/g, '<br/>')
 }
 

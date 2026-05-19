@@ -6,9 +6,21 @@ Se crean cuando stock < min_stock_alert; el admin las gestiona aquí.
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 import asyncio
+import httpx
 
 from app.core.auth import require_staff, require_admin
 from app.core.supabase_client import supabase
+
+
+async def _run_with_retry(fn, retries: int = 2):
+    """Ejecuta una llamada a Supabase y reintenta si hay error de conexión HTTP/2."""
+    for attempt in range(retries + 1):
+        try:
+            return await asyncio.to_thread(fn)
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as e:
+            if attempt == retries:
+                raise
+            await asyncio.sleep(0.3 * (attempt + 1))
 
 router = APIRouter(prefix="/reorder", tags=["reorder"])
 
@@ -20,20 +32,25 @@ async def list_requests(
     status: Optional[str] = None,
     user: dict = Depends(require_staff),
 ):
-    company_id = user["company_id"]
+    company_id = user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
+
     query = supabase.table("reorder_requests")\
         .select("*, products(name, unit, sku), warehouses(name)")\
         .eq("company_id", company_id)\
         .order("created_at", desc=True)
     if status:
         query = query.eq("status", status)
-    result = await asyncio.to_thread(lambda: query.execute())
+    result = await _run_with_retry(lambda: query.execute())
     return result.data or []
 
 
 @router.post("/")
 async def create_request(data: dict, user: dict = Depends(require_admin)):
-    company_id = user["company_id"]
+    company_id = user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
     if not data.get("product_id") or not data.get("warehouse_id"):
         raise HTTPException(400, "product_id y warehouse_id son requeridos")
 
@@ -78,7 +95,9 @@ async def create_request(data: dict, user: dict = Depends(require_admin)):
 
 @router.patch("/{request_id}")
 async def update_request(request_id: str, data: dict, user: dict = Depends(require_admin)):
-    company_id = user["company_id"]
+    company_id = user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
     existing = await asyncio.to_thread(
         lambda: supabase.table("reorder_requests")
             .select("id, status")
@@ -102,7 +121,9 @@ async def update_request(request_id: str, data: dict, user: dict = Depends(requi
 
 @router.delete("/{request_id}")
 async def delete_request(request_id: str, user: dict = Depends(require_admin)):
-    company_id = user["company_id"]
+    company_id = user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
     existing = await asyncio.to_thread(
         lambda: supabase.table("reorder_requests")
             .select("id").eq("id", request_id).eq("company_id", company_id)
