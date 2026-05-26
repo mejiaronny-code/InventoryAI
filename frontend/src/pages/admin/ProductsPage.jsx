@@ -367,7 +367,15 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
         </div>
         <div>
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Precio</label>
-          <input type="number" step="0.01" value={form.price} onChange={e => handleChange('price', e.target.value)} className="input" />
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={form.price}
+            onChange={e => handleChange('price', e.target.value)}
+            onFocus={e => { if (parseFloat(e.target.value) === 0) e.target.select() }}
+            className="input"
+          />
         </div>
         <div>
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Unidad</label>

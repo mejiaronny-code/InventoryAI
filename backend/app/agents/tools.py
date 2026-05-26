@@ -132,26 +132,18 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
 
             # Stock por almacén
             stock_result = supabase_client.table("product_warehouse_stock")\
-                .select("quantity, min_stock_alert, aisle, shelf, bin, warehouses(name, location)")\
+                .select("quantity, min_stock_alert, store_location, warehouses(name, location)")\
                 .eq("product_id", product_id)\
                 .execute()
 
             stock_lines = []
             for s in (stock_result.data or []):
                 wh = s.get("warehouses", {}) or {}
-                aisle = s.get("aisle") or ""
-                shelf = s.get("shelf") or ""
-                bin_  = s.get("bin")   or ""
-                has_location = any([aisle, shelf, bin_])
-                if has_location:
-                    loc_parts = []
-                    if aisle: loc_parts.append(f"Pasillo: {aisle}")
-                    if shelf: loc_parts.append(f"Estante: {shelf}")
-                    if bin_:  loc_parts.append(f"Posición: {bin_}")
-                    loc_str = " · ".join(loc_parts)
-                    location_info = f" | 📍 {loc_str}"
+                store_loc = s.get("store_location") or ""
+                if store_loc:
+                    location_info = f" | 📍 {store_loc}"
                 else:
-                    location_info = " | 📍 Ubicación física no registrada"
+                    location_info = " | 📍 Ubicación en tienda no registrada"
                 qty_str = f"{s['quantity']} unidades" if show_stock else ("disponible" if s['quantity'] > 0 else "sin stock")
                 stock_lines.append(
                     f"  - {wh.get('name', 'Almacén')}: {qty_str}{location_info}"
@@ -200,7 +192,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
         try:
             # Stock total
             stock_result = supabase_client.table("product_warehouse_stock")\
-                .select("quantity, warehouse_id, aisle, shelf, bin, warehouses(name)")\
+                .select("quantity, warehouse_id, store_location, warehouses(name)")\
                 .eq("product_id", product_id)\
                 .execute()
 
@@ -229,17 +221,11 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 reserved = reserved_by_wh.get(wh_id, 0)
                 available = s["quantity"] - reserved
                 total_available += max(available, 0)
-                aisle = s.get("aisle") or ""
-                shelf = s.get("shelf") or ""
-                bin_  = s.get("bin")   or ""
-                if any([aisle, shelf, bin_]):
-                    parts = []
-                    if aisle: parts.append(f"Pasillo: {aisle}")
-                    if shelf: parts.append(f"Estante: {shelf}")
-                    if bin_:  parts.append(f"Posición: {bin_}")
-                    loc_str = f" — 📍 {' · '.join(parts)}"
+                store_loc = s.get("store_location") or ""
+                if store_loc:
+                    loc_str = f" — 📍 {store_loc}"
                 else:
-                    loc_str = " — 📍 Ubicación física no registrada"
+                    loc_str = " — 📍 Ubicación en tienda no disponible"
                 if show_stock:
                     lines.append(
                         f"  - {wh_name}: {s['quantity']} total - {reserved} reservados = **{max(available,0)} disponibles**"

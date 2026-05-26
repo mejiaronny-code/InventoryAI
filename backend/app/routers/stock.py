@@ -262,6 +262,34 @@ async def set_stock(data: StockUpdate, product_id: str, user: dict = Depends(req
             "min_stock_alert": data.min_stock_alert,
         }).execute()
 
+    # Verificar reabastecimiento automático
+    if data.quantity <= data.min_stock_alert:
+        product = supabase.table("products").select("name, company_id")\
+            .eq("id", product_id).single().execute()
+        if product.data:
+            company_id_alert = product.data["company_id"]
+            try:
+                existing_reorder = supabase.table("reorder_requests")\
+                    .select("id")\
+                    .eq("company_id", company_id_alert)\
+                    .eq("product_id", product_id)\
+                    .eq("warehouse_id", str(data.warehouse_id))\
+                    .eq("status", "pending")\
+                    .maybe_single().execute()
+                if not (existing_reorder and existing_reorder.data):
+                    supabase.table("reorder_requests").insert({
+                        "company_id":         company_id_alert,
+                        "product_id":         product_id,
+                        "warehouse_id":       str(data.warehouse_id),
+                        "requested_quantity": data.min_stock_alert * 3,
+                        "current_stock":      data.quantity,
+                        "min_stock_alert":    data.min_stock_alert,
+                        "status":             "pending",
+                        "notes":              "Generado automáticamente por stock bajo",
+                    }).execute()
+            except Exception:
+                pass
+
     return {"message": "Stock actualizado"}
 
 
@@ -324,11 +352,12 @@ async def get_expiring_products(
 
 @router.patch("/location")
 async def update_location(data: LocationUpdate, user: dict = Depends(require_staff)):
-    """Actualiza la ubicación física (pasillo/estante/bin) sin afectar la cantidad."""
+    """Actualiza la ubicación física (bodega + tienda) sin afectar la cantidad."""
     update_fields = {
-        "aisle": data.aisle or None,
-        "shelf": data.shelf or None,
-        "bin":   data.bin   or None,
+        "aisle":          data.aisle          or None,
+        "shelf":          data.shelf          or None,
+        "bin":            data.bin            or None,
+        "store_location": data.store_location or None,
     }
     existing = supabase.table("product_warehouse_stock")\
         .select("id")\

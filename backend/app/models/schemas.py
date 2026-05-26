@@ -107,11 +107,13 @@ class CategoryCreate(BaseModel):
     name: str
     description: Optional[str] = None
     reservation_time_hours: int = 24
+    max_reservation_qty: Optional[int] = None  # None = sin límite
 
 class CategoryUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     reservation_time_hours: Optional[int] = None
+    max_reservation_qty: Optional[int] = None
 
 class CategoryOut(BaseModel):
     id: UUID
@@ -119,6 +121,7 @@ class CategoryOut(BaseModel):
     name: str
     description: Optional[str]
     reservation_time_hours: int
+    max_reservation_qty: Optional[int] = None
     created_at: datetime
 
 
@@ -216,6 +219,7 @@ class StockByWarehouse(BaseModel):
     aisle: Optional[str] = None
     shelf: Optional[str] = None
     bin:   Optional[str] = None
+    store_location: Optional[str] = None   # Ubicación visible al cliente (ej: "Pasillo 3 - Estante B")
     nearest_expiry: Optional[datetime] = None
 
 class ProductWithStock(ProductOut):
@@ -271,6 +275,7 @@ class LocationUpdate(BaseModel):
     aisle: Optional[str] = None
     shelf: Optional[str] = None
     bin:   Optional[str] = None
+    store_location: Optional[str] = None
 
 class StockMovementCreate(BaseModel):
     product_id: UUID

@@ -356,16 +356,25 @@ function PickingRow({ item, isPicked, isCompleting, onToggle, onConfirm, onCompl
         </div>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
-          {/* Ubicación */}
+          {/* Ubicación bodega */}
           <div className="flex items-center gap-1">
-            <MapPin size={11} className="text-brand-500 shrink-0" />
+            <MapPin size={11} className="text-ink-400 shrink-0" />
             <span className={clsx(
               'text-xs font-semibold',
-              item.location_label === 'Sin ubicación' ? 'text-ink-300 italic' : 'text-brand-700'
+              item.location_label === 'Sin ubicación' ? 'text-ink-300 italic' : 'text-ink-700'
             )}>
-              {item.location_label}
+              Bodega: {item.location_label}
             </span>
           </div>
+          {/* Ubicación tienda */}
+          {item.store_location && (
+            <div className="flex items-center gap-1">
+              <MapPin size={11} className="text-brand-500 shrink-0" />
+              <span className="text-xs font-semibold text-brand-700">
+                Tienda: {item.store_location}
+              </span>
+            </div>
+          )}
 
           {/* Cantidad */}
           <div className="flex items-center gap-1">

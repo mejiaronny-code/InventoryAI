@@ -128,6 +128,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
   const [aisle, setAisle] = useState('')
   const [shelf, setShelf] = useState('')
   const [bin, setBin] = useState('')
+  const [storeLocation, setStoreLocation] = useState('')
   const [saving, setSaving] = useState(false)
   const [putawaySuggestion, setPutawaySuggestion] = useState(null)
 
@@ -135,6 +136,9 @@ function EditStockModal({ open, onClose, item, onSaved }) {
     if (open && item) {
       setNewQty(String(item.current_qty))
       setAisle(item.aisle || '')
+      setShelf(item.shelf || '')
+      setBin(item.bin || '')
+      setStoreLocation(item.store_location || '')
       setPutawaySuggestion(null)
       // Buscar sugerencia de putaway si no hay ubicación asignada
       if (!item.aisle && !item.shelf && !item.bin) {
@@ -142,8 +146,6 @@ function EditStockModal({ open, onClose, item, onSaved }) {
           .then(r => { if (r.data?.source) setPutawaySuggestion(r.data) })
           .catch(() => {})
       }
-      setShelf(item.shelf || '')
-      setBin(item.bin || '')
     }
   }, [open, item])
 
@@ -171,6 +173,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
         aisle: aisle || null,
         shelf: shelf || null,
         bin: bin || null,
+        store_location: storeLocation || null,
       }))
       await Promise.all(tasks)
       toast.success('Stock actualizado')
@@ -236,13 +239,13 @@ function EditStockModal({ open, onClose, item, onSaved }) {
             Se registrará como <span className="font-semibold text-ink-600">ajuste manual</span> en el historial.
           </p>
 
-          {/* Ubicación física */}
+          {/* Ubicación de bodega (empleados / picking) */}
           <div className="divider" />
           <div className="flex items-center justify-between gap-2 mb-2">
             <div className="flex items-center gap-2">
-              <MapPin size={14} className="text-brand-500" />
-              <span className="text-xs font-semibold text-ink-600 uppercase tracking-wide">Ubicación física</span>
-              <span className="text-xs text-ink-400">(opcional)</span>
+              <MapPin size={14} className="text-ink-500" />
+              <span className="text-xs font-semibold text-ink-600 uppercase tracking-wide">Ubicación en bodega</span>
+              <span className="text-xs text-ink-400">· solo empleados</span>
             </div>
             {putawaySuggestion && (
               <button
@@ -255,7 +258,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
                 }}
                 className="text-xs text-brand-600 hover:text-brand-700 font-semibold flex items-center gap-1 bg-brand-50 px-2 py-1 rounded-lg border border-brand-200"
               >
-                ✨ Usar sugerencia: {[putawaySuggestion.aisle, putawaySuggestion.shelf, putawaySuggestion.bin].filter(Boolean).join(' · ')}
+                ✨ Sugerencia: {[putawaySuggestion.aisle, putawaySuggestion.shelf, putawaySuggestion.bin].filter(Boolean).join(' · ')}
               </button>
             )}
           </div>
@@ -267,15 +270,23 @@ function EditStockModal({ open, onClose, item, onSaved }) {
             ].map(({ label, value, set, placeholder }) => (
               <div key={label}>
                 <label className="text-xs text-ink-400 block mb-1">{label}</label>
-                <input
-                  value={value}
-                  onChange={e => set(e.target.value)}
-                  className="input text-sm text-center"
-                  placeholder={placeholder}
-                />
+                <input value={value} onChange={e => set(e.target.value)} className="input text-sm text-center" placeholder={placeholder} />
               </div>
             ))}
           </div>
+
+          {/* Ubicación en tienda (visible para clientes) */}
+          <div className="flex items-center gap-2 mt-3 mb-2">
+            <MapPin size={14} className="text-brand-500" />
+            <span className="text-xs font-semibold text-ink-600 uppercase tracking-wide">Ubicación en tienda</span>
+            <span className="text-xs text-brand-500">· visible para clientes</span>
+          </div>
+          <input
+            value={storeLocation}
+            onChange={e => setStoreLocation(e.target.value)}
+            className="input text-sm"
+            placeholder="Ej: Pasillo 3 - Estante B, Sección Deportes..."
+          />
 
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose} className="btn-secondary flex-1 justify-center">Cancelar</button>

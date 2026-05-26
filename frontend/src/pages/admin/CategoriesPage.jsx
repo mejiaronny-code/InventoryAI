@@ -32,14 +32,18 @@ export default function CategoriesPage() {
   const load = () => categoriesAPI.list().then(r => setCats(r.data))
   useEffect(() => { load() }, [])
 
-  const openCreate = () => { setForm({ name: '', description: '', reservation_time_hours: 24 }); setModal('create') }
-  const openEdit = (c) => { setForm({ name: c.name, description: c.description || '', reservation_time_hours: c.reservation_time_hours }); setModal(c) }
+  const openCreate = () => { setForm({ name: '', description: '', reservation_time_hours: 24, max_reservation_qty: '' }); setModal('create') }
+  const openEdit = (c) => { setForm({ name: c.name, description: c.description || '', reservation_time_hours: c.reservation_time_hours, max_reservation_qty: c.max_reservation_qty ?? '' }); setModal(c) }
 
   const handleSave = async (e) => {
     e.preventDefault(); setSaving(true)
     try {
-      if (modal === 'create') await categoriesAPI.create(form)
-      else await categoriesAPI.update(modal.id, form)
+      const payload = {
+        ...form,
+        max_reservation_qty: form.max_reservation_qty !== '' ? parseInt(form.max_reservation_qty) : null,
+      }
+      if (modal === 'create') await categoriesAPI.create(payload)
+      else await categoriesAPI.update(modal.id, payload)
       toast.success('Guardado'); setModal(null); load()
     } catch { toast.error('Error') } finally { setSaving(false) }
   }
@@ -72,7 +76,13 @@ export default function CategoriesPage() {
             </div>
             <h3 className="font-bold text-ink-900">{c.name}</h3>
             {c.description && <p className="text-xs text-ink-500 line-clamp-2">{c.description}</p>}
-            <span className="badge badge-orange text-xs self-start">⏱ {c.reservation_time_hours}h reserva</span>
+            <div className="flex gap-2 flex-wrap">
+              <span className="badge badge-orange text-xs">⏱ {c.reservation_time_hours}h reserva</span>
+              {c.max_reservation_qty
+                ? <span className="badge badge-gray text-xs">📦 Máx. {c.max_reservation_qty} por reserva</span>
+                : <span className="badge badge-gray text-xs opacity-50">Sin límite de cantidad</span>
+              }
+            </div>
           </div>
         ))}
         {cats.length === 0 && <p className="col-span-3 text-center text-ink-400 py-12">Sin categorías</p>}
@@ -104,6 +114,19 @@ export default function CategoriesPage() {
           <div>
             <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Tiempo reserva (horas)</label>
             <input type="number" value={form.reservation_time_hours} onChange={e => setForm(f => ({ ...f, reservation_time_hours: parseInt(e.target.value) }))} className="input" min={1} />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+              Máximo por reserva <span className="text-ink-400 font-normal normal-case">(dejar vacío = sin límite)</span>
+            </label>
+            <input
+              type="number"
+              value={form.max_reservation_qty}
+              onChange={e => setForm(f => ({ ...f, max_reservation_qty: e.target.value }))}
+              className="input"
+              min={1}
+              placeholder="Ej: 5"
+            />
           </div>
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={() => setModal(null)} className="btn-secondary flex-1 justify-center">Cancelar</button>

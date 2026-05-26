@@ -3,7 +3,7 @@ app/routers/categories.py
 """
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
-from app.core.auth import require_admin
+from app.core.auth import require_admin, require_staff
 from app.core.supabase_client import supabase
 from app.models.schemas import CategoryCreate, CategoryUpdate, CategoryOut
 
@@ -20,7 +20,7 @@ async def list_public_categories(company_slug: str):
 
 
 @router.get("/", response_model=List[CategoryOut])
-async def list_categories(user: dict = Depends(require_admin)):
+async def list_categories(user: dict = Depends(require_staff)):
     result = supabase.table("categories").select("*").eq("company_id", user["company_id"]).execute()
     return result.data or []
 

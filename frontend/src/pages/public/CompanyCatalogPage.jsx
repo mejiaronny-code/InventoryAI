@@ -2,15 +2,16 @@
  * pages/public/CompanyCatalogPage.jsx
  * Catálogo público de productos con chat IA flotante.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { productsAPI, categoriesAPI, companiesAPI } from '../../services/api'
+import { productsAPI, categoriesAPI, companiesAPI, reservationsAPI } from '../../services/api'
 import ChatWidget from '../../components/chat/ChatWidget'
 import ProductImage from '../../components/shared/ProductImage'
 import ThemeProvider from '../../components/shared/ThemeProvider'
 import {
-  Search, Package, Tag, ChevronLeft,
-  ShoppingBag, Zap, Filter
+  Search, Package, Tag, ChevronLeft, ChevronRight,
+  ShoppingBag, Zap, X, ShoppingCart, CheckCircle2,
+  Loader2, Phone, Mail, User, Hash, FileText, Minus, Plus, MapPin
 } from 'lucide-react'
 import clsx from 'clsx'
 import { CURRENCIES } from '../../context/CompanyFeaturesContext'
@@ -28,10 +29,51 @@ function buildFormatPrice(currencyCode) {
   }
 }
 
-function ProductCard({ product, variants = [], formatPrice, showStock }) {
-  const [expanded, setExpanded] = useState(false)
+/* ── Carrusel de imágenes ─────────────────────────────────────────── */
+function ImageCarousel({ images, alt, height = 'h-44' }) {
+  const [idx, setIdx] = useState(0)
+  const imgs = images?.length > 0 ? images : []
+
+  if (imgs.length === 0) return (
+    <ProductImage src={null} alt={alt} className={`w-full ${height} rounded-xl`} iconSize={36} />
+  )
+
+  const prev = (e) => { e.stopPropagation(); setIdx(i => (i - 1 + imgs.length) % imgs.length) }
+  const next = (e) => { e.stopPropagation(); setIdx(i => (i + 1) % imgs.length) }
+
+  return (
+    <div className={`relative w-full ${height} rounded-xl overflow-hidden group bg-ink-50`}>
+      <img src={imgs[idx]} alt={alt} className="w-full h-full object-contain p-2 transition-opacity duration-200" />
+      {imgs.length > 1 && (
+        <>
+          <button onClick={prev} className="absolute left-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <ChevronLeft size={15} />
+          </button>
+          <button onClick={next} className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <ChevronRight size={15} />
+          </button>
+          <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5">
+            {imgs.map((_, i) => (
+              <button key={i} onClick={(e) => { e.stopPropagation(); setIdx(i) }}
+                className={clsx('w-1.5 h-1.5 rounded-full transition-all', i === idx ? 'bg-white scale-125' : 'bg-white/50')}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/* ── Modal de detalle + reserva ───────────────────────────────────── */
+function ProductDetailModal({ product, variants, formatPrice, showStock, companySlug, categoryMaxQty, onClose }) {
+  const [step, setStep] = useState('detail') // 'detail' | 'form' | 'success'
   const [selectedVariant, setSelectedVariant] = useState(null)
+  const [imgIdx, setImgIdx] = useState(0)
+
   const activeProduct = selectedVariant || product
+  const imgs = product.images || []
+
   const extraUnits = activeProduct.units || []
   const allUnits = extraUnits.length > 0
     ? [{ name: activeProduct.unit, factor: 1 }, ...extraUnits]
@@ -42,113 +84,451 @@ function ProductCard({ product, variants = [], formatPrice, showStock }) {
     ? Number(activeProduct.price) * selectedUnit.factor
     : Number(activeProduct.price)
   const displayUnit = selectedUnit ? selectedUnit.name : activeProduct.unit
+  const totalStock = activeProduct.total_stock || 0
+  const maxQty = categoryMaxQty ? Math.min(totalStock, categoryMaxQty) : totalStock
+
+  // Reserva
+  const [form, setForm] = useState({ client_name: '', client_email: '', client_phone: '', quantity: 1, notes: '' })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [reservationCode, setReservationCode] = useState(null)
+
+  const handleReserve = async (e) => {
+    e.preventDefault()
+    setError('')
+    setSaving(true)
+    try {
+      // Elegir el almacén con más stock
+      const stocks = activeProduct.stock_by_warehouse || []
+      const bestWarehouse = [...stocks].sort((a, b) => b.quantity - a.quantity)[0]
+      if (!bestWarehouse) { setError('No hay almacén con stock disponible.'); setSaving(false); return }
+
+      const res = await reservationsAPI.createPublic(companySlug, {
+        product_id: activeProduct.id,
+        warehouse_id: bestWarehouse.warehouse_id,
+        quantity: form.quantity,
+        client_name: form.client_name.trim(),
+        client_email: form.client_email.trim().toLowerCase(),
+        client_phone: form.client_phone.trim() || undefined,
+        notes: form.notes.trim() || undefined,
+      })
+      setReservationCode(res.data.reservation_code)
+      setStep('success')
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Ocurrió un error. Intenta nuevamente.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Cerrar con Escape
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
 
   return (
-    <div className="card-hover p-5 flex flex-col gap-3" onClick={() => setExpanded(e => !e)}>
-      <ProductImage
-        src={product.images?.[0]}
-        alt={product.name}
-        className="w-full h-36 rounded-xl"
-        iconSize={36}
-      />
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
 
-      <div>
-        <h3 className="font-bold text-ink-900 text-sm leading-snug">{product.name}</h3>
-        {activeProduct.sku && <p className="text-ink-400 text-xs font-mono mt-0.5">SKU: {activeProduct.sku}</p>}
-      </div>
+      <div className="relative w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[95vh] sm:max-h-[90vh] overflow-hidden">
 
-      {/* Selector de variantes */}
-      {variants.length > 0 && (
-        <div className="flex gap-1 flex-wrap" onClick={e => e.stopPropagation()}>
-          <button
-            onClick={() => setSelectedVariant(null)}
-            className={clsx(
-              'px-2 py-0.5 rounded-lg text-[10px] font-semibold border transition-all',
-              !selectedVariant ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-500 border-ink-200 hover:border-brand-300'
+        {/* Handle móvil */}
+        <div className="sm:hidden flex justify-center pt-3 pb-1 shrink-0">
+          <div className="w-10 h-1 rounded-full bg-ink-200" />
+        </div>
+
+        {/* Botón cerrar */}
+        <button onClick={onClose}
+          className="absolute top-4 right-4 z-10 w-8 h-8 rounded-full bg-black/10 hover:bg-black/20 flex items-center justify-center transition-colors">
+          <X size={16} />
+        </button>
+
+        {/* ── PASO 1: Detalle ── */}
+        {step === 'detail' && (
+          <>
+            {/* Galería grande */}
+            {imgs.length > 0 && (
+              <div className="relative shrink-0 h-64 sm:h-72 bg-ink-50 overflow-hidden">
+                <img src={imgs[imgIdx]} alt={product.name} className="w-full h-full object-contain p-3" />
+                {imgs.length > 1 && (
+                  <>
+                    <button onClick={() => setImgIdx(i => (i - 1 + imgs.length) % imgs.length)}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center">
+                      <ChevronLeft size={16} />
+                    </button>
+                    <button onClick={() => setImgIdx(i => (i + 1) % imgs.length)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center">
+                      <ChevronRight size={16} />
+                    </button>
+                    <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1.5">
+                      {imgs.map((_, i) => (
+                        <button key={i} onClick={() => setImgIdx(i)}
+                          className={clsx('w-2 h-2 rounded-full transition-all', i === imgIdx ? 'bg-white scale-125' : 'bg-white/50')} />
+                      ))}
+                    </div>
+                    {/* Miniaturas */}
+                    <div className="absolute bottom-0 left-0 right-0 flex gap-2 px-3 pb-2 overflow-x-auto">
+                      {imgs.map((url, i) => (
+                        <button key={i} onClick={() => setImgIdx(i)}
+                          className={clsx('w-10 h-10 rounded-lg overflow-hidden border-2 shrink-0 transition-all bg-white',
+                            i === imgIdx ? 'border-white' : 'border-transparent opacity-60')}>
+                          <img src={url} alt="" className="w-full h-full object-contain p-0.5" />
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
             )}
-          >
-            Base
-          </button>
-          {variants.map(v => {
-            const attrs = Object.entries(v.variant_attributes || {}).map(([k, val]) => val).join(' / ')
-            return (
+
+            {/* Contenido scrolleable */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-5 space-y-4">
+
+                {/* Nombre y SKU */}
+                <div>
+                  <h2 className="text-xl font-bold text-ink-900 leading-tight">{product.name}</h2>
+                  {activeProduct.sku && (
+                    <p className="text-xs text-ink-400 font-mono mt-1 flex items-center gap-1">
+                      <Hash size={10} /> SKU: {activeProduct.sku}
+                    </p>
+                  )}
+                </div>
+
+                {/* Precio y stock */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-3xl font-extrabold text-brand-600">
+                      {formatPrice ? formatPrice(displayPrice) : `$${displayPrice.toLocaleString()}`}
+                    </p>
+                    <p className="text-xs text-ink-400 mt-0.5">por {displayUnit}</p>
+                  </div>
+                  <div className={clsx('badge text-sm px-3 py-1',
+                    totalStock > 0 ? 'badge-green' : 'badge-red')}>
+                    {totalStock > 0
+                      ? showStock ? `${totalStock} en stock` : 'En stock'
+                      : 'Sin stock'}
+                  </div>
+                </div>
+
+                {/* Variantes */}
+                {variants.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Variante</p>
+                    <div className="flex gap-2 flex-wrap">
+                      <button onClick={() => setSelectedVariant(null)}
+                        className={clsx('px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all',
+                          !selectedVariant ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300')}>
+                        Base
+                      </button>
+                      {variants.map(v => {
+                        const attrs = Object.values(v.variant_attributes || {}).join(' / ')
+                        return (
+                          <button key={v.id} onClick={() => setSelectedVariant(selectedVariant?.id === v.id ? null : v)}
+                            className={clsx('px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all',
+                              selectedVariant?.id === v.id ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300')}>
+                            {attrs || v.name}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Unidades */}
+                {allUnits.length > 1 && (
+                  <div>
+                    <p className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Unidad</p>
+                    <div className="flex gap-2 flex-wrap">
+                      {allUnits.map(u => (
+                        <button key={u.name} onClick={() => setSelectedUnit(u)}
+                          className={clsx('px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all',
+                            selectedUnit?.name === u.name ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300')}>
+                          {u.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Descripción */}
+                {product.description && (
+                  <div>
+                    <p className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-1.5">Descripción</p>
+                    <p className="text-sm text-ink-600 leading-relaxed">{product.description}</p>
+                  </div>
+                )}
+
+                {/* Usos */}
+                {product.use_cases && (
+                  <div className="bg-brand-50 rounded-xl p-3 border border-brand-100">
+                    <p className="text-xs font-semibold text-brand-700 mb-1">Usos recomendados</p>
+                    <p className="text-xs text-brand-600 leading-relaxed">{product.use_cases}</p>
+                  </div>
+                )}
+
+                {/* Ubicación en tienda */}
+                {(() => {
+                  const loc = activeProduct.stock_by_warehouse?.find(s => s.store_location)?.store_location
+                  return loc ? (
+                    <div className="flex items-center gap-2 bg-brand-50 border border-brand-100 rounded-xl px-3 py-2">
+                      <MapPin size={14} className="text-brand-500 shrink-0" />
+                      <div>
+                        <p className="text-[10px] font-semibold text-brand-600 uppercase tracking-wide">Dónde encontrarlo</p>
+                        <p className="text-sm font-medium text-brand-800">{loc}</p>
+                      </div>
+                    </div>
+                  ) : null
+                })()}
+
+                {/* Tags */}
+                {product.tags?.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {product.tags.map(tag => (
+                      <span key={tag} className="px-2 py-0.5 bg-ink-100 text-ink-500 rounded text-xs font-medium">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer fijo */}
+            <div className="p-4 border-t border-ink-100 shrink-0 bg-white">
               <button
-                key={v.id}
-                onClick={() => setSelectedVariant(selectedVariant?.id === v.id ? null : v)}
+                onClick={() => setStep('form')}
+                disabled={totalStock === 0}
                 className={clsx(
-                  'px-2 py-0.5 rounded-lg text-[10px] font-semibold border transition-all',
-                  selectedVariant?.id === v.id ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-500 border-ink-200 hover:border-brand-300'
+                  'w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-base transition-all',
+                  totalStock > 0
+                    ? 'bg-brand-500 hover:bg-brand-600 text-white shadow-md hover:shadow-lg active:scale-[0.98]'
+                    : 'bg-ink-100 text-ink-400 cursor-not-allowed'
                 )}
               >
-                {attrs || v.name}
+                <ShoppingCart size={18} />
+                {totalStock > 0 ? 'Reservar producto' : 'Sin stock disponible'}
               </button>
-            )
-          })}
-        </div>
-      )}
+            </div>
+          </>
+        )}
 
-      {/* Selector de unidades */}
-      {allUnits.length > 1 && (
-        <div className="flex gap-1 flex-wrap" onClick={e => e.stopPropagation()}>
-          {allUnits.map(u => (
-            <button
-              key={u.name}
-              onClick={() => setSelectedUnit(u)}
-              className={clsx(
-                'px-2 py-0.5 rounded-lg text-[10px] font-semibold border transition-all',
-                selectedUnit?.name === u.name
-                  ? 'bg-brand-500 text-white border-brand-500'
-                  : 'bg-white text-ink-500 border-ink-200 hover:border-brand-300'
-              )}
-            >
-              {u.name}
-            </button>
-          ))}
-        </div>
-      )}
+        {/* ── PASO 2: Formulario de reserva ── */}
+        {step === 'form' && (
+          <>
+            <div className="px-5 py-4 border-b border-ink-100 shrink-0 flex items-center gap-3">
+              <button onClick={() => setStep('detail')} className="p-1.5 rounded-lg hover:bg-ink-100">
+                <ChevronLeft size={18} />
+              </button>
+              <div>
+                <h3 className="font-bold text-ink-900 text-base">Reservar producto</h3>
+                <p className="text-xs text-ink-400 truncate max-w-[260px]">{product.name}</p>
+              </div>
+            </div>
 
-      <div className="flex items-center justify-between mt-auto">
-        <div>
-          <p className="text-xl font-extrabold text-brand-600">
-            {formatPrice ? formatPrice(displayPrice) : `$${displayPrice.toLocaleString()}`}
-          </p>
-          <p className="text-xs text-ink-400">por {displayUnit}</p>
-        </div>
-        <div className={clsx(
-          'badge',
-          (activeProduct.total_stock || 0) > 0 ? 'badge-green' : 'badge-red'
-        )}>
-          {(activeProduct.total_stock || 0) > 0
-            ? showStock ? `${activeProduct.total_stock} en stock` : 'En stock'
-            : 'Sin stock'
-          }
-        </div>
-      </div>
+            <form onSubmit={handleReserve} className="flex-1 overflow-y-auto">
+              <div className="p-5 space-y-4">
 
-      {product.tags?.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {product.tags.map(tag => (
-            <span key={tag} className="px-2 py-0.5 bg-ink-100 text-ink-500 rounded text-[10px] font-medium">
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
+                {/* Resumen del producto */}
+                <div className="flex items-center gap-3 bg-ink-50 rounded-xl p-3">
+                  {imgs[0]
+                    ? <img src={imgs[0]} alt={product.name} className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                    : <div className="w-12 h-12 rounded-lg bg-ink-200 flex items-center justify-center shrink-0"><Package size={18} className="text-ink-400" /></div>
+                  }
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-ink-900 text-sm truncate">{activeProduct.name}</p>
+                    <p className="text-brand-600 font-bold text-sm">{formatPrice ? formatPrice(displayPrice) : `$${displayPrice}`} <span className="text-ink-400 font-normal text-xs">por {displayUnit}</span></p>
+                  </div>
+                </div>
 
-      {expanded && product.description && (
-        <div className="border-t border-ink-100 pt-3 animate-fade-in">
-          <p className="text-xs text-ink-600 leading-relaxed">{product.description}</p>
-          {product.use_cases && (
-            <p className="text-xs text-ink-400 mt-2">
-              <span className="font-semibold text-brand-600">Usos:</span> {product.use_cases}
+                {/* Cantidad */}
+                <div>
+                  <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-2">Cantidad</label>
+                  <div className="flex items-center gap-3">
+                    <button type="button" onClick={() => setForm(f => ({ ...f, quantity: Math.max(1, f.quantity - 1) }))}
+                      className="w-9 h-9 rounded-xl border border-ink-200 flex items-center justify-center hover:bg-ink-50 transition-colors">
+                      <Minus size={14} />
+                    </button>
+                    <input type="number" min={1} max={maxQty} value={form.quantity}
+                      onChange={e => setForm(f => ({ ...f, quantity: Math.max(1, Math.min(maxQty, parseInt(e.target.value) || 1)) }))}
+                      className="input w-20 text-center font-bold text-lg" />
+                    <button type="button" onClick={() => setForm(f => ({ ...f, quantity: Math.min(maxQty, f.quantity + 1) }))}
+                      className="w-9 h-9 rounded-xl border border-ink-200 flex items-center justify-center hover:bg-ink-50 transition-colors">
+                      <Plus size={14} />
+                    </button>
+                    <div className="text-xs text-ink-400 leading-tight">
+                      {categoryMaxQty && <p className="text-brand-500 font-medium">máx. {categoryMaxQty} por reserva</p>}
+                      {showStock && <p>stock: {totalStock}</p>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Nombre */}
+                <div>
+                  <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                    Nombre completo *
+                  </label>
+                  <div className="relative">
+                    <User size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+                    <input required value={form.client_name}
+                      onChange={e => setForm(f => ({ ...f, client_name: e.target.value }))}
+                      placeholder="Tu nombre"
+                      className="input pl-9" />
+                  </div>
+                </div>
+
+                {/* Email */}
+                <div>
+                  <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                    Correo electrónico *
+                  </label>
+                  <div className="relative">
+                    <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+                    <input required type="email" value={form.client_email}
+                      onChange={e => setForm(f => ({ ...f, client_email: e.target.value }))}
+                      placeholder="tu@correo.com"
+                      className="input pl-9" />
+                  </div>
+                </div>
+
+                {/* Teléfono */}
+                <div>
+                  <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                    Teléfono <span className="text-ink-400 font-normal normal-case">(opcional)</span>
+                  </label>
+                  <div className="relative">
+                    <Phone size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+                    <input value={form.client_phone}
+                      onChange={e => setForm(f => ({ ...f, client_phone: e.target.value }))}
+                      placeholder="+504 9999-9999"
+                      className="input pl-9" />
+                  </div>
+                </div>
+
+                {/* Notas */}
+                <div>
+                  <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                    Notas <span className="text-ink-400 font-normal normal-case">(opcional)</span>
+                  </label>
+                  <div className="relative">
+                    <FileText size={15} className="absolute left-3 top-3 text-ink-400" />
+                    <textarea value={form.notes}
+                      onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                      placeholder="Especificaciones, horario de recogida..."
+                      rows={2}
+                      className="input pl-9 resize-none" />
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                    <p className="text-xs text-red-600">{error}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-ink-100 bg-white sticky bottom-0">
+                <button type="submit" disabled={saving}
+                  className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-brand-500 hover:bg-brand-600 text-white font-bold text-base transition-all shadow-md hover:shadow-lg active:scale-[0.98] disabled:opacity-60">
+                  {saving ? <Loader2 size={18} className="animate-spin" /> : <ShoppingCart size={18} />}
+                  {saving ? 'Reservando...' : 'Confirmar reserva'}
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+
+        {/* ── PASO 3: Éxito ── */}
+        {step === 'success' && (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center gap-5">
+            <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center">
+              <CheckCircle2 size={42} className="text-green-500" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-ink-900 mb-1">¡Reserva confirmada!</h3>
+              <p className="text-sm text-ink-500">Te enviamos los detalles a tu correo.</p>
+            </div>
+            <div className="bg-brand-50 border border-brand-200 rounded-2xl px-6 py-4 w-full">
+              <p className="text-xs text-brand-600 font-semibold uppercase tracking-wide mb-1">Código de reserva</p>
+              <p className="text-2xl font-extrabold text-brand-700 tracking-widest font-mono">{reservationCode}</p>
+            </div>
+            <p className="text-xs text-ink-400 leading-relaxed">
+              Guarda este código para consultar el estado de tu reserva en cualquier momento.
             </p>
-          )}
-        </div>
-      )}
+            <div className="flex flex-col gap-2 w-full">
+              <button onClick={onClose}
+                className="w-full py-3 rounded-2xl bg-brand-500 hover:bg-brand-600 text-white font-bold transition-all">
+                Seguir viendo productos
+              </button>
+            </div>
+          </div>
+        )}
+
+      </div>
     </div>
   )
 }
 
+/* ── Card del producto (simplificada) ────────────────────────────── */
+function ProductCard({ product, variants = [], formatPrice, showStock, onOpen }) {
+  const imgs = product.images || []
+  const totalStock = product.total_stock || 0
+
+  return (
+    <div
+      className="card-hover p-4 flex flex-col gap-3 cursor-pointer"
+      onClick={() => onOpen(product)}
+    >
+      <ImageCarousel images={imgs} alt={product.name} height="h-36" />
+
+      <div className="flex-1 flex flex-col gap-2">
+        <h3 className="font-bold text-ink-900 text-sm leading-snug line-clamp-2">{product.name}</h3>
+
+        {/* Variantes (chips pequeños) */}
+        {variants.length > 0 && (
+          <div className="flex gap-1 flex-wrap">
+            {variants.slice(0, 3).map(v => {
+              const attrs = Object.values(v.variant_attributes || {}).join('/')
+              return (
+                <span key={v.id} className="px-1.5 py-0.5 bg-ink-100 text-ink-500 rounded text-[10px] font-medium">
+                  {attrs || v.name}
+                </span>
+              )
+            })}
+            {variants.length > 3 && <span className="text-[10px] text-ink-400">+{variants.length - 3}</span>}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between mt-auto">
+          <div>
+            <p className="text-lg font-extrabold text-brand-600">
+              {formatPrice ? formatPrice(Number(product.price)) : `$${Number(product.price).toLocaleString()}`}
+            </p>
+            <p className="text-[10px] text-ink-400">por {product.unit}</p>
+          </div>
+          <div className={clsx('badge text-[10px]', totalStock > 0 ? 'badge-green' : 'badge-red')}>
+            {totalStock > 0 ? (showStock ? `${totalStock}` : '✓') : '✗'}
+          </div>
+        </div>
+
+        {/* Tags */}
+        {product.tags?.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {product.tags.slice(0, 2).map(tag => (
+              <span key={tag} className="px-1.5 py-0.5 bg-ink-100 text-ink-500 rounded text-[10px] font-medium">{tag}</span>
+            ))}
+            {product.tags.length > 2 && <span className="text-[10px] text-ink-400">+{product.tags.length - 2}</span>}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ── Página principal ─────────────────────────────────────────────── */
 export default function CompanyCatalogPage() {
   const { companySlug } = useParams()
   const navigate = useNavigate()
@@ -160,6 +540,7 @@ export default function CompanyCatalogPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+  const [detailProduct, setDetailProduct] = useState(null)
 
   const formatPrice = buildFormatPrice(company?.settings?.currency || 'USD')
   const showStock = company?.settings?.show_stock ?? true
@@ -174,7 +555,6 @@ export default function CompanyCatalogPage() {
     }).catch(() => setNotFound(true))
     .finally(() => setLoading(false))
 
-    // Get company info for chat welcome message
     companiesAPI.listPublic()
       .then(r => {
         const found = r.data.find(c => c.slug === companySlug)
@@ -185,16 +565,14 @@ export default function CompanyCatalogPage() {
 
   const allTags = [...new Set(products.flatMap(p => p.tags || []))].sort()
 
-  // Ocultar variantes (hijos) del grid principal — se muestran dentro del card del padre
   const filtered = products.filter(p => {
-    if (p.parent_product_id) return false  // variantes no van en la lista principal
+    if (p.parent_product_id) return false
     const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase())
     const matchCat = !selectedCat || p.category_id === selectedCat
     const matchTag = !selectedTag || (p.tags || []).includes(selectedTag)
     return matchSearch && matchCat && matchTag
   })
 
-  // Agrupar variantes por parent_product_id
   const variantsByParent = products.reduce((acc, p) => {
     if (p.parent_product_id) {
       if (!acc[p.parent_product_id]) acc[p.parent_product_id] = []
@@ -214,6 +592,7 @@ export default function CompanyCatalogPage() {
   return (
     <div className="min-h-screen bg-ink-50">
       <ThemeProvider settings={company?.settings} />
+
       {/* Header */}
       <header className="bg-white border-b border-ink-100 sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-4">
@@ -244,7 +623,7 @@ export default function CompanyCatalogPage() {
       </header>
 
       <div className="max-w-6xl mx-auto px-6 py-6">
-        {/* Filters */}
+        {/* Filtros */}
         <div className="flex flex-col gap-3 mb-6">
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
@@ -260,18 +639,15 @@ export default function CompanyCatalogPage() {
               <button
                 onClick={() => setSelectedCat(null)}
                 className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
-                  !selectedCat ? 'badge-orange' : 'badge-gray hover:badge-orange'
-                )}
+                  !selectedCat ? 'badge-orange' : 'badge-gray hover:badge-orange')}
               >
                 Todos
               </button>
               {categories.map(cat => (
-                <button
-                  key={cat.id}
+                <button key={cat.id}
                   onClick={() => setSelectedCat(cat.id === selectedCat ? null : cat.id)}
                   className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
-                    selectedCat === cat.id ? 'badge-orange' : 'badge-gray hover:badge-orange'
-                  )}
+                    selectedCat === cat.id ? 'badge-orange' : 'badge-gray hover:badge-orange')}
                 >
                   {cat.name}
                 </button>
@@ -282,8 +658,7 @@ export default function CompanyCatalogPage() {
             <div className="flex gap-2 flex-wrap items-center">
               <span className="text-xs text-ink-400 flex items-center gap-1"><Tag size={11} /> Etiquetas:</span>
               {allTags.map(tag => (
-                <button
-                  key={tag}
+                <button key={tag}
                   onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
                   className={clsx('inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all cursor-pointer',
                     selectedTag === tag
@@ -298,7 +673,7 @@ export default function CompanyCatalogPage() {
           )}
         </div>
 
-        {/* Products grid */}
+        {/* Grid de productos */}
         {loading ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             {[...Array(8)].map((_, i) => (
@@ -313,20 +688,38 @@ export default function CompanyCatalogPage() {
           <div className="text-center py-24">
             <Package size={48} className="text-ink-200 mx-auto mb-4" />
             <p className="text-ink-500 font-medium">Sin productos</p>
-            <p className="text-ink-400 text-sm mt-1">
-              Prueba con el chat IA para encontrar lo que buscas 💬
-            </p>
+            <p className="text-ink-400 text-sm mt-1">Prueba con el chat IA para encontrar lo que buscas 💬</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             {filtered.map(p => (
-              <ProductCard key={p.id} product={p} variants={variantsByParent[p.id] || []} formatPrice={formatPrice} showStock={showStock} />
+              <ProductCard
+                key={p.id}
+                product={p}
+                variants={variantsByParent[p.id] || []}
+                formatPrice={formatPrice}
+                showStock={showStock}
+                onOpen={setDetailProduct}
+              />
             ))}
           </div>
         )}
       </div>
 
-      {/* Chat widget flotante */}
+      {/* Modal de detalle */}
+      {detailProduct && (
+        <ProductDetailModal
+          product={detailProduct}
+          variants={variantsByParent[detailProduct.id] || []}
+          formatPrice={formatPrice}
+          showStock={showStock}
+          companySlug={companySlug}
+          categoryMaxQty={categories.find(c => c.id === detailProduct.category_id)?.max_reservation_qty ?? null}
+          onClose={() => setDetailProduct(null)}
+        />
+      )}
+
+      {/* Chat IA */}
       <ChatWidget
         companySlug={companySlug}
         welcomeMessage={company?.settings?.chat_welcome}

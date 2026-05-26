@@ -57,7 +57,7 @@ async def get_picking_list(
         ),
         asyncio.to_thread(
             lambda: supabase.table("product_warehouse_stock")
-                .select("product_id, warehouse_id, quantity, aisle, shelf, bin")
+                .select("product_id, warehouse_id, quantity, aisle, shelf, bin, store_location")
                 .in_("product_id", product_ids)
                 .execute()
         ),
@@ -92,6 +92,7 @@ async def get_picking_list(
         aisle = stock.get("aisle") or ""
         shelf = stock.get("shelf") or ""
         bin_  = stock.get("bin")   or ""
+        store_location = stock.get("store_location") or ""
 
         location_label = " · ".join(filter(None, [aisle, shelf, bin_])) or "Sin ubicación"
 
@@ -116,6 +117,7 @@ async def get_picking_list(
             "shelf":            shelf,
             "bin":              bin_,
             "location_label":   location_label,
+            "store_location":   store_location,
             "created_at":       r["created_at"],
         })
 
