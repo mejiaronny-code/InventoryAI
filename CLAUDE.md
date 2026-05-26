@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 InventoryAI is a multi-tenant SaaS for inventory management with an AI chat assistant. Each company gets isolated data, a public product catalog, and a configurable feature set.
 
-Stack: **FastAPI + Supabase** (backend) · **React + Vite + DaisyUI/Tailwind** (frontend) · **DeepInfra Qwen3** (chat + vision) · **OpenAI text-embedding-3-small** (semantic search) · LangSmith tracing.
+Stack: **FastAPI + Supabase** (backend) · **React + Vite + DaisyUI/Tailwind** (frontend) · **DeepInfra Qwen3** (chat + vision) · **DeepInfra Qwen3-Embedding-8B** (semantic search, 1536d MRL) · LangSmith tracing.
 
 Deployment target: **Render** (backend) + **Vercel** (frontend).
 
@@ -46,6 +46,7 @@ Copy `backend/.env.example` → `backend/.env` and fill required vars before run
 | `routers/` | One file per domain (see below) |
 | `agents/chat_agent.py` | LangChain agent with tools, Qwen3 via DeepInfra |
 | `agents/tools.py` | AI tools: product search, stock lookup, catalog, etc. |
+| `embeddings/embedding_service.py` | DeepInfra Qwen3-Embedding-8B (4096d), instruction-aware |
 | `services/notifications.py` | Email via Resend |
 
 All routes use prefix `/api/v1`. Multi-tenancy is enforced **manually** in Python — Supabase RLS is NOT active; every query filters by `company_id`.
@@ -133,8 +134,13 @@ if not company_id:
 ## What This App Does NOT Do
 
 - No payment processing (Stripe not integrated)
-- No barcode scanner (planned, not built)
-- No PDF export (planned, not built)
+- No PDF export — CSV/Excel export exists in ReportsPage; PDF generation (jsPDF/react-pdf) is not implemented
 - No N8n / external automation (must be added externally via webhooks)
-- No Supabase RLS — all access control is in Python
-- No real-time stock sync across tabs (Realtime is only used for notifications)
+- No real-time stock updates across tabs — Supabase Realtime is only wired for in-app notifications; stock numbers shown on screen may be stale if another user changed them without a page refresh
+
+## What This App DOES Do (non-obvious)
+
+- **Barcode/QR scanner**: `BarcodeScannerModal.jsx` uses `html5-qrcode` (lazy-loaded); available in StockPage and ProductsPage
+- **Supabase RLS**: Enabled on all tables with policies in `supabase/schema.sql`; the Python layer adds a second enforcement layer
+- **Instruction-aware semantic search**: `embedding_service.py` adds a task instruction prefix to search queries (not documents) for better Qwen3-Embedding retrieval
+- **Embedding model**: `POST /products/reembed-all` re-generates all company product embeddings (use after model changes)

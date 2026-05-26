@@ -9,11 +9,23 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 import asyncio
+import httpx
 
 from app.core.auth import require_staff, require_admin
 from app.core.supabase_client import supabase
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+async def _run_with_retry(fn, retries: int = 2):
+    """Reintenta la llamada a Supabase si la conexión HTTP/2 se cae en idle."""
+    for attempt in range(retries + 1):
+        try:
+            return await asyncio.to_thread(fn)
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError):
+            if attempt == retries:
+                raise
+            await asyncio.sleep(0.3 * (attempt + 1))
 
 
 # ── 4.1  Aging Report ─────────────────────────────────────────────────
@@ -27,21 +39,17 @@ async def aging_report(user: dict = Depends(require_staff)):
 
     # 1. Productos activos con stock
     products_res, movements_res = await asyncio.gather(
-        asyncio.to_thread(
-            lambda: supabase.table("products")
-                .select("id, name, sku, unit, category_id, images, "
-                        "product_warehouse_stock(quantity, warehouse_id)")
-                .eq("company_id", company_id)
-                .eq("is_active", True)
-                .execute()
-        ),
-        asyncio.to_thread(
-            lambda: supabase.table("stock_movements")
-                .select("product_id, created_at, products!inner(company_id)")
-                .eq("products.company_id", company_id)
-                .order("created_at", desc=True)
-                .execute()
-        ),
+        _run_with_retry(lambda: supabase.table("products")
+            .select("id, name, sku, unit, category_id, images, "
+                    "product_warehouse_stock(quantity, warehouse_id)")
+            .eq("company_id", company_id)
+            .eq("is_active", True)
+            .execute()),
+        _run_with_retry(lambda: supabase.table("stock_movements")
+            .select("product_id, created_at, products!inner(company_id)")
+            .eq("products.company_id", company_id)
+            .order("created_at", desc=True)
+            .execute()),
     )
 
     products = products_res.data or []
@@ -59,7 +67,7 @@ async def aging_report(user: dict = Depends(require_staff)):
     now = datetime.now(timezone.utc)
 
     # 2. Categorías para enriquecer
-    cat_res = await asyncio.to_thread(
+    cat_res = await _run_with_retry(
         lambda: supabase.table("categories")
             .select("id, name").eq("company_id", company_id).execute()
     )
@@ -114,7 +122,7 @@ async def valuation_report(user: dict = Depends(require_staff)):
     """
     company_id = user["company_id"]
 
-    products_res = await asyncio.to_thread(
+    products_res = await _run_with_retry(
         lambda: supabase.table("products")
             .select("id, name, sku, unit, price, cost_price, category_id, "
                     "product_warehouse_stock(quantity, warehouse_id, warehouses(name))")
@@ -124,7 +132,7 @@ async def valuation_report(user: dict = Depends(require_staff)):
     )
     products = products_res.data or []
 
-    cat_res = await asyncio.to_thread(
+    cat_res = await _run_with_retry(
         lambda: supabase.table("categories")
             .select("id, name").eq("company_id", company_id).execute()
     )

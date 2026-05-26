@@ -194,7 +194,19 @@ async def list_employees(user: dict = Depends(require_admin)):
         .select("id, full_name, role, is_active, created_at")\
         .eq("company_id", user["company_id"])\
         .execute()
-    return result.data or []
+    profiles = result.data or []
+
+    # Obtener emails desde Supabase Auth (auth.users)
+    try:
+        auth_users = supabase.auth.admin.list_users()
+        email_map = {u.id: u.email for u in auth_users}
+    except Exception:
+        email_map = {}
+
+    for p in profiles:
+        p["email"] = email_map.get(p["id"], "")
+
+    return profiles
 
 
 @router.patch("/employees/{employee_id}/toggle-active")

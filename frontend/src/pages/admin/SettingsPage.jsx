@@ -411,7 +411,7 @@ export default function SettingsPage() {
       </form>
       )}
 
-      {/* Zona de peligro — solo admins */}
+{/* Zona de peligro — solo admins */}
       {user?.role === 'admin' && (
         <div className="border border-red-200 bg-red-50/50 rounded-2xl p-6 space-y-4">
           <div className="flex items-center gap-2">

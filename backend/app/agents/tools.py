@@ -20,7 +20,37 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
     from app.embeddings.embedding_service import generate_embedding
 
     @tool
-    async def search_products(query: str, category_id: Optional[str] = None) -> str:
+    async def list_warehouses() -> str:
+        """
+        Retorna la lista de tiendas/almacenes de la empresa con sus nombres y ubicaciones.
+        Úsalo cuando el cliente mencione que está en una tienda o local específico,
+        o cuando pregunte qué tiendas existen, para poder filtrar el stock por tienda.
+        """
+        try:
+            result = supabase_client.table("warehouses")\
+                .select("id, name, location")\
+                .eq("company_id", company_id)\
+                .eq("is_active", True)\
+                .execute()
+
+            if not result.data:
+                return "No hay tiendas/almacenes registrados."
+
+            lines = ["Tiendas/almacenes disponibles:\n"]
+            for w in result.data:
+                loc = f" — {w['location']}" if w.get("location") else ""
+                lines.append(f"  • **{w['name']}** (ID: {w['id']}){loc}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error en list_warehouses: {e}")
+            return f"Error: {str(e)}"
+
+    @tool
+    async def search_products(
+        query: str,
+        category_id: Optional[str] = None,
+        warehouse_id: Optional[str] = None,
+    ) -> str:
         """
         Busca productos en el inventario usando búsqueda semántica (pgvector).
         Usa esto cuando el cliente pregunta por un producto, tipo de producto,
@@ -28,6 +58,9 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
         Parámetros:
         - query: texto de búsqueda del cliente
         - category_id: (opcional) UUID de categoría para filtrar
+        - warehouse_id: (opcional) UUID de almacén para filtrar — úsalo cuando el
+          cliente mencione que está en una tienda específica. Primero llama
+          list_warehouses() para obtener el ID correcto.
         """
         try:
             # 1. Generar embedding de la query
@@ -50,17 +83,24 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
 
             products = result.data
 
-            # 3. Filtrar por stock > 0
+            # 3. Obtener stock con ubicación por almacén
             available = []
             for p in products:
-                stock_result = supabase_client.table("product_warehouse_stock")\
-                    .select("quantity, warehouse_id")\
+                stock_q = supabase_client.table("product_warehouse_stock")\
+                    .select("quantity, warehouse_id, store_location, warehouses(name)")\
                     .eq("product_id", p["id"])\
                     .execute()
 
-                total_stock = sum(s["quantity"] for s in (stock_result.data or []))
+                stock_rows = stock_q.data or []
+
+                # Filtrar por almacén específico si se indicó
+                if warehouse_id:
+                    stock_rows = [s for s in stock_rows if s["warehouse_id"] == warehouse_id]
+
+                total_stock = sum(s["quantity"] for s in stock_rows if s["quantity"] > 0)
                 if total_stock > 0:
                     p["total_stock"] = total_stock
+                    p["stock_rows"] = stock_rows
                     available.append(p)
 
             # 4. Filtrar por categoría si se especifica
@@ -74,9 +114,11 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 available = [p for p in available if p["id"] in valid_ids]
 
             if not available:
+                if warehouse_id:
+                    return "No encontré ese producto disponible en esa tienda."
                 return "Los productos encontrados están sin stock disponible."
 
-            # 5. Obtener imágenes de los productos disponibles
+            # 5. Obtener imágenes
             top = available[:5]
             img_res = supabase_client.table("products")\
                 .select("id, images")\
@@ -87,20 +129,33 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
             # 6. Formatear respuesta
             lines = [f"Encontré {len(available)} producto(s):\n"]
             for p in top:
-                stock_val = p.get("total_stock", 0)
-                stock_str = (
-                    f"{stock_val} unidades" if show_stock
-                    else ("disponible" if stock_val > 0 else "sin stock")
-                )
                 price_fmt = f"{float(p['price']):,.2f}"
                 tags_str = ", ".join(p.get("tags") or [])
                 imgs = img_map.get(p["id"], [])
                 img_line = f"  ![{p['name']}]({imgs[0]})\n" if imgs else ""
+
+                # Líneas de ubicación por almacén
+                loc_lines = []
+                for s in (p.get("stock_rows") or []):
+                    if s["quantity"] <= 0:
+                        continue
+                    wh_name = (s.get("warehouses") or {}).get("name", "Almacén")
+                    store_loc = s.get("store_location") or ""
+                    qty_str = f"{s['quantity']} unidades" if show_stock else "disponible"
+                    loc_line = f"    🏪 {wh_name}: {qty_str}"
+                    if store_loc:
+                        loc_line += f" — 📍 {store_loc}"
+                    loc_lines.append(loc_line)
+
+                stock_block = "\n".join(loc_lines) if loc_lines else (
+                    f"  Stock: {p['total_stock']} unidades" if show_stock else "  Stock: disponible"
+                )
+
                 lines.append(
                     f"• **{p['name']}** (ID: {p['id']})\n"
                     f"{img_line}"
                     f"  Precio: {currency_symbol}{price_fmt} / {p['unit']}\n"
-                    f"  Stock: {stock_str}\n"
+                    f"{stock_block}\n"
                     + (f"  Etiquetas: {tags_str}\n" if tags_str else "")
                 )
             return "\n".join(lines)
@@ -613,6 +668,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
             return f"Error: {str(e)}"
 
     return [
+        list_warehouses,
         search_products,
         get_product_detail,
         get_stock_availability,

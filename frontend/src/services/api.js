@@ -193,6 +193,7 @@ export const productsAPI = {
   update: (id, data) => api.put(`/products/${id}`, data),
   delete: (id) => api.delete(`/products/${id}`),
   regenerateEmbedding: (id) => api.post(`/products/${id}/regenerate-embedding`),
+  reembedAll: () => api.post('/products/reembed-all'),
   getVariants: (id) => api.get(`/products/${id}/variants`),
   uploadImage: (file) => {
     const form = new FormData()

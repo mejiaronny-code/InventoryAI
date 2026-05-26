@@ -117,6 +117,7 @@ export default function EmployeesPage() {
             </div>
             <div>
               <p className="font-bold text-ink-900">{e.full_name || '—'}</p>
+              {e.email && <p className="text-xs text-ink-500 mt-0.5">{e.email}</p>}
               <p className="text-xs text-ink-400 mt-0.5">
                 {format(new Date(e.created_at), "d MMM yyyy", { locale: es })}
               </p>

@@ -32,7 +32,6 @@ import PickingPage from './pages/admin/PickingPage'
 import ReorderPage from './pages/admin/ReorderPage'
 import ReconciliationPage from './pages/admin/ReconciliationPage'
 import ReportsPage from './pages/admin/ReportsPage'
-import ImportPage from './pages/admin/ImportPage'
 
 // Super Admin pages
 import SuperAdminLayout from './components/admin/SuperAdminLayout'
@@ -84,7 +83,6 @@ function AppRoutes() {
         <Route path="reorder" element={<ReorderPage />} />
         <Route path="conteo" element={<ReconciliationPage />} />
         <Route path="reports" element={<ReportsPage />} />
-        <Route path="import" element={<ImportPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route
           path="employees"

@@ -264,6 +264,7 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
     sku: product?.sku || '',
     barcode: product?.barcode || '',
     price: product?.price || 0,
+    cost_price: product?.cost_price || '',
     unit: product?.unit || 'unidad',
     category_id: product?.category_id || '',
     reservation_time_hours: product?.reservation_time_hours || '',
@@ -322,6 +323,7 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
       const payload = {
         ...form,
         price: parseFloat(form.price) || 0,
+        cost_price: form.cost_price !== '' ? parseFloat(form.cost_price) || null : null,
         category_id: form.category_id || null,
         reservation_time_hours: form.reservation_time_hours ? parseInt(form.reservation_time_hours) : null,
         attributes: (() => { try { return JSON.parse(form.attributes) } catch { return {} } })(),
@@ -366,7 +368,7 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
           <input value={form.name} onChange={e => handleChange('name', e.target.value)} className="input" required />
         </div>
         <div>
-          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Precio</label>
+          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Precio de venta</label>
           <input
             type="number"
             step="0.01"
@@ -374,6 +376,21 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
             value={form.price}
             onChange={e => handleChange('price', e.target.value)}
             onFocus={e => { if (parseFloat(e.target.value) === 0) e.target.select() }}
+            className="input"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+            Precio de costo <span className="text-ink-300 font-normal normal-case">(opcional — usado en reportes de valuación)</span>
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={form.cost_price}
+            onChange={e => handleChange('cost_price', e.target.value)}
+            onFocus={e => { if (parseFloat(e.target.value) === 0) e.target.select() }}
+            placeholder="0.00"
             className="input"
           />
         </div>

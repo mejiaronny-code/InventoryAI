@@ -13,8 +13,8 @@ class Settings(BaseSettings):
 
     # AI APIs
     groq_api_key: str = ""          # Legacy — ya no se usa
-    openai_api_key: str = ""        # Para embeddings (text-embedding-3-small)
-    deepinfra_api_key: str = ""     # Chat + visión (Qwen3)
+    openai_api_key: str = ""        # Legacy — embeddings migrados a DeepInfra
+    deepinfra_api_key: str = ""     # Chat + visión + embeddings (Qwen3)
 
     # LangSmith
     langchain_tracing_v2: bool = True

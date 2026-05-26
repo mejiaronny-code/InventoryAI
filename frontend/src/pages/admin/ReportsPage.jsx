@@ -7,7 +7,7 @@
  *  - Importar CSV/Excel
  */
 import { useState, useEffect, useRef } from 'react'
-import { reportsAPI, productsAPI } from '../../services/api'
+import { reportsAPI, productsAPI, companiesAPI } from '../../services/api'
 import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import toast from 'react-hot-toast'
 import {
@@ -19,6 +19,182 @@ import ProductImage from '../../components/shared/ProductImage'
 import { format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
+
+// ── Utilidad: exportar a PDF ──────────────────────────────────────────
+// Carga una imagen desde URL y la convierte a base64
+async function loadImageAsBase64(url) {
+  if (!url) return null
+  try {
+    const res = await fetch(url)
+    const blob = await res.blob()
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return null
+  }
+}
+
+// Convierte hex (#rrggbb) a [r, g, b]
+function hexToRgb(hex) {
+  const clean = hex.replace('#', '')
+  const val = parseInt(clean.length === 3
+    ? clean.split('').map(c => c + c).join('')
+    : clean, 16)
+  return [(val >> 16) & 255, (val >> 8) & 255, val & 255]
+}
+
+async function buildPDFBase(title, companyName, brandColor = '#f97316', logoUrl = '') {
+  const [[{ default: jsPDF }, { default: autoTable }], logoBase64] = await Promise.all([
+    Promise.all([import('jspdf'), import('jspdf-autotable')]),
+    loadImageAsBase64(logoUrl),
+  ])
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
+  doc.autoTable = (opts) => autoTable(doc, opts)
+
+  const [r, g, b] = hexToRgb(brandColor)
+  const pageW = doc.internal.pageSize.width
+
+  // Encabezado con color de la empresa
+  doc.setFillColor(r, g, b)
+  doc.rect(0, 0, pageW, 50, 'F')
+
+  // Logo (si existe) — cuadrado de 36×36 a la izquierda
+  let textX = 18
+  if (logoBase64) {
+    try {
+      doc.addImage(logoBase64, 7, 7, 36, 36)
+      textX = 52
+    } catch { /* logo inválido — ignorar */ }
+  }
+
+  // Título y nombre empresa
+  doc.setTextColor(255, 255, 255)
+  doc.setFontSize(15)
+  doc.setFont('helvetica', 'bold')
+  doc.text(title, textX, 24)
+  if (companyName) {
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    doc.text(companyName, textX, 38)
+  }
+
+  // Fecha — derecha
+  const dateStr = format(new Date(), "d 'de' MMMM yyyy", { locale: es })
+  doc.setFontSize(9)
+  doc.text(dateStr, pageW - 18, 24, { align: 'right' })
+
+  doc.setTextColor(0, 0, 0)
+  doc._brandRgb = [r, g, b]
+  return doc
+}
+
+async function exportAgingPDF(data, companyName, brandColor, logoUrl) {
+  const doc = await buildPDFBase('Aging Report — Rotación de Inventario', companyName, brandColor, logoUrl)
+  const rgb = doc._brandRgb
+  doc.autoTable({
+    startY: 58,
+    head: [['Producto', 'SKU', 'Categoría', 'Stock', 'Último movimiento', 'Días sin mov.', 'Estado']],
+    body: data.map(p => [
+      p.product_name,
+      p.sku || '—',
+      p.category_name,
+      `${p.total_stock} ${p.unit}`,
+      p.last_movement ? format(parseISO(p.last_movement), 'dd/MM/yyyy') : 'Nunca',
+      p.days_idle != null ? `${p.days_idle}d` : '—',
+      p.bucket,
+    ]),
+    headStyles: { fillColor: rgb, textColor: 255, fontStyle: 'bold', fontSize: 9 },
+    bodyStyles: { fontSize: 8 },
+    alternateRowStyles: { fillColor: [249, 250, 251] },
+    columnStyles: { 0: { cellWidth: 140 }, 2: { cellWidth: 90 } },
+    margin: { left: 28, right: 28 },
+  })
+  addPageNumbers(doc)
+  doc.save('aging_report.pdf')
+}
+
+async function exportValuationPDF(data, formatPrice, companyName, brandColor, logoUrl) {
+  const doc = await buildPDFBase('Valuación de Inventario', companyName, brandColor, logoUrl)
+  const rgb = doc._brandRgb
+  // Resumen total
+  doc.setFillColor(254, 243, 199)
+  doc.roundedRect(28, 56, 250, 34, 6, 6, 'F')
+  doc.setFontSize(9)
+  doc.setTextColor(120, 80, 0)
+  doc.text('Valor total del inventario', 38, 70)
+  doc.setFontSize(15)
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(180, 100, 0)
+  doc.text(formatPrice(data.total_value), 38, 86)
+  doc.setTextColor(0, 0, 0)
+  doc.setFont('helvetica', 'normal')
+
+  doc.autoTable({
+    startY: 102,
+    head: [['Producto', 'SKU', 'Categoría', 'Stock', 'Costo unit.', 'Precio venta', 'Margen', 'Valor total']],
+    body: data.products.map(p => [
+      p.product_name,
+      p.sku || '—',
+      p.category_name,
+      `${p.total_stock} ${p.unit}`,
+      p.cost_price > 0 ? formatPrice(p.cost_price) : '—',
+      formatPrice(p.sale_price || 0),
+      p.margin_pct != null ? `${p.margin_pct}%` : '—',
+      formatPrice(p.total_value),
+    ]),
+    headStyles: { fillColor: rgb, textColor: 255, fontStyle: 'bold', fontSize: 9 },
+    bodyStyles: { fontSize: 8 },
+    alternateRowStyles: { fillColor: [249, 250, 251] },
+    columnStyles: { 0: { cellWidth: 130 } },
+    margin: { left: 28, right: 28 },
+  })
+  addPageNumbers(doc)
+  doc.save('valuacion_inventario.pdf')
+}
+
+async function exportProductsPDF(products, formatPrice, companyName, brandColor, logoUrl) {
+  const doc = await buildPDFBase('Catálogo de Productos', companyName, brandColor, logoUrl)
+  const rgb = doc._brandRgb
+  doc.autoTable({
+    startY: 58,
+    head: [['Producto', 'SKU', 'Precio', 'Costo', 'Unidad', 'Stock', 'Estado']],
+    body: products.map(p => [
+      p.name,
+      p.sku || '—',
+      formatPrice(p.price || 0),
+      p.cost_price ? formatPrice(p.cost_price) : '—',
+      p.unit,
+      p.total_stock || 0,
+      p.is_active ? 'Activo' : 'Inactivo',
+    ]),
+    headStyles: { fillColor: rgb, textColor: 255, fontStyle: 'bold', fontSize: 9 },
+    bodyStyles: { fontSize: 8 },
+    alternateRowStyles: { fillColor: [249, 250, 251] },
+    columnStyles: { 0: { cellWidth: 150 } },
+    margin: { left: 28, right: 28 },
+  })
+  addPageNumbers(doc)
+  doc.save('catalogo_productos.pdf')
+}
+
+function addPageNumbers(doc) {
+  const total = doc.internal.getNumberOfPages()
+  for (let i = 1; i <= total; i++) {
+    doc.setPage(i)
+    doc.setFontSize(8)
+    doc.setTextColor(160, 160, 160)
+    doc.text(
+      `Página ${i} de ${total}`,
+      doc.internal.pageSize.width / 2,
+      doc.internal.pageSize.height - 12,
+      { align: 'center' }
+    )
+  }
+}
 
 // ── Utilidad: exportar a CSV ──────────────────────────────────────────
 function exportCSV(filename, headers, rows) {
@@ -59,6 +235,10 @@ export default function ReportsPage() {
   const [valuationData, setValuationData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [agingBucket, setAgingBucket] = useState('all')
+  const [companyName, setCompanyName] = useState('')
+  const [brandColor, setBrandColor] = useState('#f97316')
+  const [logoUrl, setLogoUrl] = useState('')
+  const [pdfLoading, setPdfLoading] = useState('')   // key del reporte que está generando
 
   // Import state
   const [importRows, setImportRows] = useState([])
@@ -66,6 +246,14 @@ export default function ReportsPage() {
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const fileRef = useRef(null)
+
+  useEffect(() => {
+    companiesAPI.getMe().then(r => {
+      setCompanyName(r.data?.name || '')
+      setBrandColor(r.data?.settings?.primary_color || '#f97316')
+      setLogoUrl(r.data?.logo_url || '')
+    }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (activeTab === 'aging' && agingData.length === 0) loadAging()
@@ -130,6 +318,35 @@ export default function ReportsPage() {
         rows)
       toast.success('Exportado correctamente')
     } catch { toast.error('Error al exportar') }
+  }
+
+  // ── Export PDF handlers
+  const handleAgingPDF = async () => {
+    if (!agingData.length) { toast.error('Carga el reporte primero'); return }
+    setPdfLoading('aging')
+    try { await exportAgingPDF(filteredAging.length ? filteredAging : agingData, companyName, brandColor, logoUrl) }
+    catch (err) { console.error('PDF aging error:', err); toast.error(`Error PDF: ${err?.message || 'error desconocido'}`) }
+    finally { setPdfLoading('') }
+  }
+
+  const handleValuationPDF = async () => {
+    if (!valuationData) { toast.error('Carga la valuación primero'); return }
+    setPdfLoading('valuation')
+    try { await exportValuationPDF(valuationData, formatPrice, companyName, brandColor, logoUrl) }
+    catch (err) { console.error('PDF valuation error:', err); toast.error(`Error PDF: ${err?.message || 'error desconocido'}`) }
+    finally { setPdfLoading('') }
+  }
+
+  const handleProductsPDF = async () => {
+    setPdfLoading('products')
+    try {
+      const res = await productsAPI.list()
+      await exportProductsPDF(res.data || [], formatPrice, companyName, brandColor, logoUrl)
+    } catch (err) {
+      console.error('PDF productos error:', err)
+      toast.error(`Error al generar PDF: ${err?.message || 'error desconocido'}`)
+    }
+    finally { setPdfLoading('') }
   }
 
   // ── Download import template
@@ -244,7 +461,10 @@ export default function ReportsPage() {
             <div className="flex gap-2">
               <button onClick={loadAging} className="btn-secondary"><RefreshCw size={13} /></button>
               <button onClick={exportAging} className="btn-secondary" disabled={!agingData.length}>
-                <Download size={13} /> CSV
+                <FileSpreadsheet size={13} /> CSV
+              </button>
+              <button onClick={handleAgingPDF} className="btn-secondary" disabled={!agingData.length || pdfLoading === 'aging'}>
+                {pdfLoading === 'aging' ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />} PDF
               </button>
             </div>
           </div>
@@ -340,7 +560,10 @@ export default function ReportsPage() {
             <div className="flex gap-2">
               <button onClick={loadValuation} className="btn-secondary"><RefreshCw size={13} /></button>
               <button onClick={exportValuation} className="btn-secondary" disabled={!valuationData}>
-                <Download size={13} /> CSV
+                <FileSpreadsheet size={13} /> CSV
+              </button>
+              <button onClick={handleValuationPDF} className="btn-secondary" disabled={!valuationData || pdfLoading === 'valuation'}>
+                {pdfLoading === 'valuation' ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />} PDF
               </button>
             </div>
           </div>
@@ -423,35 +646,38 @@ export default function ReportsPage() {
       {activeTab === 'export' && (
         <div className="space-y-4 max-w-xl">
           <p className="text-sm text-ink-500">
-            Descarga tus datos en formato CSV compatible con Excel.
+            Descarga tus datos en CSV (Excel) o PDF con formato profesional.
           </p>
           {[
             {
+              key: 'products',
               title: 'Catálogo de productos',
               desc: 'Todos los productos con precio, costo, stock y tags.',
               icon: Package,
-              action: exportProducts,
+              csvAction: exportProducts,
+              pdfAction: handleProductsPDF,
             },
             {
+              key: 'aging',
               title: 'Aging Report',
-              desc: 'Productos por días sin movimiento.',
+              desc: 'Productos por días sin movimiento de stock.',
               icon: TrendingDown,
-              action: () => { if (!agingData.length) { loadAging().then(exportAging) } else exportAging() },
+              csvAction: () => { if (!agingData.length) { loadAging().then(exportAging) } else exportAging() },
+              pdfAction: handleAgingPDF,
             },
             {
+              key: 'valuation',
               title: 'Valuación de inventario',
               desc: 'Valor total por producto (requiere precio de costo).',
               icon: DollarSign,
-              action: () => { if (!valuationData) { loadValuation().then(exportValuation) } else exportValuation() },
+              csvAction: () => { if (!valuationData) { loadValuation().then(exportValuation) } else exportValuation() },
+              pdfAction: handleValuationPDF,
             },
           ].map(item => {
             const Icon = item.icon
+            const isLoading = pdfLoading === item.key
             return (
-              <button
-                key={item.title}
-                onClick={item.action}
-                className="w-full card p-4 flex items-center gap-4 hover:shadow-md transition-shadow text-left"
-              >
+              <div key={item.title} className="card p-4 flex items-center gap-4">
                 <div className="w-10 h-10 rounded-xl bg-brand-50 border border-brand-100 flex items-center justify-center shrink-0">
                   <Icon size={18} className="text-brand-600" />
                 </div>
@@ -459,10 +685,22 @@ export default function ReportsPage() {
                   <p className="font-semibold text-ink-900 text-sm">{item.title}</p>
                   <p className="text-xs text-ink-400 mt-0.5">{item.desc}</p>
                 </div>
-                <div className="flex items-center gap-1 text-xs font-semibold text-brand-600 bg-brand-50 px-2 py-1 rounded-lg">
-                  <FileSpreadsheet size={12} /> CSV
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    onClick={item.csvAction}
+                    className="flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded-lg transition-colors"
+                  >
+                    <FileSpreadsheet size={12} /> CSV
+                  </button>
+                  <button
+                    onClick={item.pdfAction}
+                    disabled={isLoading}
+                    className="flex items-center gap-1 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {isLoading ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />} PDF
+                  </button>
                 </div>
-              </button>
+              </div>
             )
           })}
         </div>

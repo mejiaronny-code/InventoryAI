@@ -7,6 +7,9 @@ from typing import Optional, List
 from uuid import UUID
 import httpx
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.core.auth import require_admin, require_staff, get_current_user
 from app.core.supabase_client import supabase
@@ -274,6 +277,50 @@ async def regenerate_embedding(product_id: str, user: dict = Depends(require_adm
         .execute()
 
     return {"message": "Embedding regenerado correctamente"}
+
+
+@router.post("/reembed-all")
+async def reembed_all_products(user: dict = Depends(require_admin)):
+    """
+    Re-genera los embeddings de TODOS los productos activos de la empresa.
+    Usar después de migrar el modelo de embeddings (ej. OpenAI → Qwen3).
+    Retorna el número de productos procesados y los fallidos.
+    """
+    company_id = user.get("company_id")
+    if not company_id:
+        raise HTTPException(401, "No se encontró la empresa asociada")
+
+    products_res = supabase.table("products")\
+        .select("id, name, description, use_cases")\
+        .eq("company_id", company_id)\
+        .eq("is_active", True)\
+        .execute()
+
+    products = products_res.data or []
+    if not products:
+        return {"message": "No hay productos activos", "processed": 0, "failed": 0}
+
+    processed, failed = 0, []
+
+    for p in products:
+        try:
+            embedding = await generate_product_embedding(
+                p["name"], p.get("description") or "", p.get("use_cases") or ""
+            )
+            supabase.table("products")\
+                .update({"embedding": embedding})\
+                .eq("id", p["id"])\
+                .execute()
+            processed += 1
+        except Exception as e:
+            logger.warning(f"Error re-embebiendo producto {p['id']}: {e}")
+            failed.append(p["id"])
+
+    return {
+        "message": f"Re-embedding completado: {processed} OK, {len(failed)} fallidos",
+        "processed": processed,
+        "failed": failed,
+    }
 
 
 @router.get("/{product_id}/variants")
