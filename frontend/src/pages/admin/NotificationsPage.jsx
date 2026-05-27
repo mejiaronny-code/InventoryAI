@@ -3,6 +3,8 @@
  */
 import { useState, useEffect } from 'react'
 import { notificationsAPI } from '../../services/api'
+import { useAuth } from '../../context/AuthContext'
+import { useRealtimeInserts } from '../../hooks/useRealtimeInserts'
 import toast from 'react-hot-toast'
 import { Bell, CheckCheck, Package, AlertTriangle, CalendarCheck, Zap, Trash2, X } from 'lucide-react'
 import { format } from 'date-fns'
@@ -26,12 +28,26 @@ const typeColor = {
 }
 
 export default function NotificationsPage() {
+  const { user } = useAuth()
   const [notifs, setNotifs] = useState([])
   const [loading, setLoading] = useState(true)
   const [deletingRead, setDeletingRead] = useState(false)
 
   const load = () => notificationsAPI.list().then(r => setNotifs(r.data)).finally(() => setLoading(false))
   useEffect(() => { load() }, [])
+
+  // Realtime: prepend nuevas notificaciones sin recargar
+  useRealtimeInserts({
+    companyId: user?.company_id,
+    table: 'notifications',
+    onEvent: (newNotif) => {
+      setNotifs(prev => {
+        // Evitar duplicados (puede llegar dos veces en dev con StrictMode)
+        if (prev.some(n => n.id === newNotif.id)) return prev
+        return [newNotif, ...prev]
+      })
+    },
+  })
 
   const markRead = async (id) => {
     await notificationsAPI.markRead(id)

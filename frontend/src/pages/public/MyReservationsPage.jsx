@@ -3,9 +3,10 @@
  * Historial público de reservas de un cliente por email.
  * Sin login — solo necesita su email y el slug de la empresa.
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { reservationsAPI } from '../../services/api'
+import { reservationsAPI, companiesAPI } from '../../services/api'
+import ThemeProvider from '../../components/shared/ThemeProvider'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { ChevronLeft, Mail, Search, Package, Clock, Loader2 } from 'lucide-react'
@@ -26,6 +27,16 @@ export default function MyReservationsPage() {
   const [reservations, setReservations] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [companySettings, setCompanySettings] = useState(null)
+
+  useEffect(() => {
+    companiesAPI.listPublic()
+      .then(r => {
+        const found = r.data.find(c => c.slug === companySlug)
+        if (found?.settings) setCompanySettings(found.settings)
+      })
+      .catch(() => {})
+  }, [companySlug])
 
   const handleSearch = async (e) => {
     e.preventDefault()
@@ -47,6 +58,7 @@ export default function MyReservationsPage() {
 
   return (
     <div className="min-h-screen bg-ink-50">
+      <ThemeProvider settings={companySettings} />
       {/* Header */}
       <header className="bg-white border-b border-ink-100 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 from app.core.auth import require_admin, require_staff, get_current_user
 from app.core.supabase_client import supabase
 from app.core.config import settings
-from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, StockByWarehouse
+from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, StockByWarehouse, VariantStockUpsert, VariantStockOut
 from app.embeddings.embedding_service import (
     generate_product_embedding,
     should_regenerate_embedding,
@@ -321,6 +321,123 @@ async def reembed_all_products(user: dict = Depends(require_admin)):
         "processed": processed,
         "failed": failed,
     }
+
+
+@router.get("/{product_id}/variant-stock")
+async def get_variant_stock(product_id: str, user: dict = Depends(require_staff)):
+    """Retorna el stock de todas las combinaciones de opciones de un producto."""
+    # Verificar que el producto pertenece a la empresa
+    prod = supabase.table("products")\
+        .select("id")\
+        .eq("id", product_id)\
+        .eq("company_id", user["company_id"])\
+        .maybe_single()\
+        .execute()
+    if not prod.data:
+        raise HTTPException(404, "Producto no encontrado")
+
+    result = supabase.table("product_variants_stock")\
+        .select("*")\
+        .eq("product_id", product_id)\
+        .execute()
+    return result.data or []
+
+
+@router.get("/public/{company_slug}/{product_id}/variant-stock")
+async def get_variant_stock_public(company_slug: str, product_id: str):
+    """Stock de variantes para el catálogo público."""
+    company = supabase.table("companies")\
+        .select("id")\
+        .eq("slug", company_slug)\
+        .eq("is_active", True)\
+        .single()\
+        .execute()
+    if not company.data:
+        raise HTTPException(404, "Empresa no encontrada")
+
+    result = supabase.table("product_variants_stock")\
+        .select("combination, quantity, warehouse_id")\
+        .eq("product_id", product_id)\
+        .execute()
+    return result.data or []
+
+
+@router.put("/{product_id}/variant-stock")
+async def upsert_variant_stock(
+    product_id: str,
+    items: List[VariantStockUpsert],
+    user: dict = Depends(require_admin),
+):
+    """
+    Upsert batch de stock por combinación.
+    Reemplaza todas las combinaciones del producto+almacén indicados.
+    """
+    company_id = user["company_id"]
+
+    # Verificar que el producto pertenece a la empresa
+    prod = supabase.table("products")\
+        .select("id")\
+        .eq("id", product_id)\
+        .eq("company_id", company_id)\
+        .maybe_single()\
+        .execute()
+    if not prod.data:
+        raise HTTPException(404, "Producto no encontrado")
+
+    if not items:
+        return {"message": "Sin cambios"}
+
+    # Agrupar por warehouse para hacer upserts
+    rows = [
+        {
+            "product_id": product_id,
+            "warehouse_id": str(item.warehouse_id),
+            "combination": item.combination,
+            "quantity": item.quantity,
+        }
+        for item in items
+    ]
+
+    result = supabase.table("product_variants_stock")\
+        .upsert(rows, on_conflict="product_id,warehouse_id,combination")\
+        .execute()
+
+    # ── Sincronizar stock general por almacén ────────────────────────
+    # Sumar todas las combinaciones de este producto por warehouse
+    # y actualizar product_warehouse_stock para que el catálogo muestre bien
+    from collections import defaultdict
+    all_vs = supabase.table("product_variants_stock")\
+        .select("warehouse_id, quantity")\
+        .eq("product_id", product_id)\
+        .execute()
+
+    totals: dict[str, int] = defaultdict(int)
+    for vs in (all_vs.data or []):
+        totals[vs["warehouse_id"]] += vs["quantity"]
+
+    for warehouse_id, total_qty in totals.items():
+        existing = supabase.table("product_warehouse_stock")\
+            .select("id")\
+            .eq("product_id", product_id)\
+            .eq("warehouse_id", warehouse_id)\
+            .maybe_single()\
+            .execute()
+
+        if existing.data:
+            supabase.table("product_warehouse_stock")\
+                .update({"quantity": total_qty})\
+                .eq("product_id", product_id)\
+                .eq("warehouse_id", warehouse_id)\
+                .execute()
+        else:
+            supabase.table("product_warehouse_stock").insert({
+                "product_id": product_id,
+                "warehouse_id": warehouse_id,
+                "quantity": total_qty,
+                "min_stock_alert": 5,
+            }).execute()
+
+    return {"message": f"{len(rows)} combinaciones guardadas", "data": result.data}
 
 
 @router.get("/{product_id}/variants")

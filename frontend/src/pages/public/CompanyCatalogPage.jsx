@@ -70,9 +70,50 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
   const [step, setStep] = useState('detail') // 'detail' | 'form' | 'success'
   const [selectedVariant, setSelectedVariant] = useState(null)
   const [imgIdx, setImgIdx] = useState(0)
+  const [selectedOptions, setSelectedOptions] = useState({}) // { "Color": "Rojo", "Talla": "M" }
+  const [variantStock, setVariantStock] = useState([])
+
+  const options = product.product_options || []
+
+  // Cargar stock de variantes si el producto tiene opciones
+  useEffect(() => {
+    if (options.length > 0 && product.id) {
+      productsAPI.getVariantStockPublic(companySlug, product.id)
+        .then(r => setVariantStock(r.data || []))
+        .catch(() => {})
+    }
+  }, [product.id])
+
+  // Obtener stock de la combinación seleccionada
+  const getVariantQty = () => {
+    if (!options.length || Object.keys(selectedOptions).length === 0) return null
+    const key = JSON.stringify(selectedOptions)
+    const total = variantStock
+      .filter(vs => JSON.stringify(vs.combination) === key)
+      .reduce((sum, vs) => sum + vs.quantity, 0)
+    return total
+  }
+
+  // Cuando cambia el color, cambiar la foto principal
+  const handleOptionSelect = (optName, valLabel) => {
+    const opt = options.find(o => o.name === optName)
+    setSelectedOptions(prev => ({ ...prev, [optName]: valLabel }))
+    // Si el tipo tiene imágenes, cambiar la foto
+    if (opt?.with_images) {
+      const val = opt.values.find(v => v.label === valLabel)
+      if (val?.image) {
+        // Insertar la imagen del color al inicio temporalmente
+        setImgIdx(-1) // señal para usar imagen de opción
+        setSelectedColorImg(val.image)
+      }
+    }
+  }
+
+  const [selectedColorImg, setSelectedColorImg] = useState(null)
 
   const activeProduct = selectedVariant || product
   const imgs = product.images || []
+  const displayImg = imgIdx === -1 && selectedColorImg ? selectedColorImg : (imgs[Math.max(0, imgIdx)] || null)
 
   const extraUnits = activeProduct.units || []
   const allUnits = extraUnits.length > 0
@@ -84,7 +125,8 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
     ? Number(activeProduct.price) * selectedUnit.factor
     : Number(activeProduct.price)
   const displayUnit = selectedUnit ? selectedUnit.name : activeProduct.unit
-  const totalStock = activeProduct.total_stock || 0
+  const variantQty = getVariantQty()
+  const totalStock = variantQty !== null ? variantQty : (activeProduct.total_stock || 0)
   const maxQty = categoryMaxQty ? Math.min(totalStock, categoryMaxQty) : totalStock
 
   // Reserva
@@ -103,6 +145,11 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
       const bestWarehouse = [...stocks].sort((a, b) => b.quantity - a.quantity)[0]
       if (!bestWarehouse) { setError('No hay almacén con stock disponible.'); setSaving(false); return }
 
+      // Incluir opciones seleccionadas en notas (separador · igual que el AI)
+      const optionsSummary = Object.entries(selectedOptions)
+        .map(([k, v]) => `${k}: ${v}`).join(' · ')
+      const notesWithOptions = [optionsSummary, form.notes.trim()].filter(Boolean).join(' — ')
+
       const res = await reservationsAPI.createPublic(companySlug, {
         product_id: activeProduct.id,
         warehouse_id: bestWarehouse.warehouse_id,
@@ -110,7 +157,7 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
         client_name: form.client_name.trim(),
         client_email: form.client_email.trim().toLowerCase(),
         client_phone: form.client_phone.trim() || undefined,
-        notes: form.notes.trim() || undefined,
+        notes: notesWithOptions || undefined,
       })
       setReservationCode(res.data.reservation_code)
       setStep('success')
@@ -149,10 +196,14 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
         {step === 'detail' && (
           <>
             {/* Galería grande */}
-            {imgs.length > 0 && (
+            {(imgs.length > 0 || selectedColorImg) && (
               <div className="relative shrink-0 h-64 sm:h-72 bg-ink-50 overflow-hidden">
-                <img src={imgs[imgIdx]} alt={product.name} className="w-full h-full object-contain p-3" />
-                {imgs.length > 1 && (
+                <img
+                  src={displayImg || imgs[0]}
+                  alt={product.name}
+                  className="w-full h-full object-contain p-3 transition-all duration-200"
+                />
+                {imgs.length > 1 && imgIdx !== -1 && (
                   <>
                     <button onClick={() => setImgIdx(i => (i - 1 + imgs.length) % imgs.length)}
                       className="absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center">
@@ -171,7 +222,7 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
                     {/* Miniaturas */}
                     <div className="absolute bottom-0 left-0 right-0 flex gap-2 px-3 pb-2 overflow-x-auto">
                       {imgs.map((url, i) => (
-                        <button key={i} onClick={() => setImgIdx(i)}
+                        <button key={i} onClick={() => { setImgIdx(i); setSelectedColorImg(null) }}
                           className={clsx('w-10 h-10 rounded-lg overflow-hidden border-2 shrink-0 transition-all bg-white',
                             i === imgIdx ? 'border-white' : 'border-transparent opacity-60')}>
                           <img src={url} alt="" className="w-full h-full object-contain p-0.5" />
@@ -213,29 +264,67 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
                   </div>
                 </div>
 
-                {/* Variantes */}
-                {variants.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Variante</p>
+                {/* Opciones: Color, Talla, etc. */}
+                {options.map(opt => (
+                  <div key={opt.name}>
+                    <p className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">
+                      {opt.name}
+                      {selectedOptions[opt.name] && (
+                        <span className="ml-2 font-normal normal-case text-ink-400">— {selectedOptions[opt.name]}</span>
+                      )}
+                    </p>
                     <div className="flex gap-2 flex-wrap">
-                      <button onClick={() => setSelectedVariant(null)}
-                        className={clsx('px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all',
-                          !selectedVariant ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300')}>
-                        Base
-                      </button>
-                      {variants.map(v => {
-                        const attrs = Object.values(v.variant_attributes || {}).join(' / ')
+                      {opt.values.map(val => {
+                        const isSelected = selectedOptions[opt.name] === val.label
+                        // Obtener stock de esta opción si tiene combinaciones
+                        const partialCombo = { ...selectedOptions, [opt.name]: val.label }
+                        const partialStock = variantStock
+                          .filter(vs => Object.entries(partialCombo).every(([k, v]) => vs.combination[k] === v))
+                          .reduce((sum, vs) => sum + vs.quantity, 0)
+                        const hasVariantStock = variantStock.length > 0
+                        const outOfStock = hasVariantStock && partialStock === 0
+
+                        if (opt.with_images && val.image) {
+                          return (
+                            <button
+                              key={val.label}
+                              onClick={() => handleOptionSelect(opt.name, val.label)}
+                              disabled={outOfStock}
+                              title={val.label}
+                              className={clsx(
+                                'w-12 h-12 rounded-xl border-2 overflow-hidden transition-all relative',
+                                isSelected ? 'border-brand-500 scale-105 shadow-md' : 'border-ink-200 hover:border-brand-300',
+                                outOfStock && 'opacity-40'
+                              )}
+                            >
+                              <img src={val.image} alt={val.label} className="w-full h-full object-cover" />
+                              {outOfStock && (
+                                <div className="absolute inset-0 bg-white/60 flex items-center justify-center">
+                                  <X size={12} className="text-red-500" />
+                                </div>
+                              )}
+                            </button>
+                          )
+                        }
                         return (
-                          <button key={v.id} onClick={() => setSelectedVariant(selectedVariant?.id === v.id ? null : v)}
-                            className={clsx('px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all',
-                              selectedVariant?.id === v.id ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300')}>
-                            {attrs || v.name}
+                          <button
+                            key={val.label}
+                            onClick={() => handleOptionSelect(opt.name, val.label)}
+                            disabled={outOfStock}
+                            className={clsx(
+                              'px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all',
+                              isSelected ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300',
+                              outOfStock && 'opacity-40 line-through'
+                            )}
+                          >
+                            {val.label}
+                            {outOfStock && <span className="ml-1 text-[9px]">✗</span>}
                           </button>
                         )
                       })}
                     </div>
                   </div>
-                )}
+                ))}
 
                 {/* Unidades */}
                 {allUnits.length > 1 && (
@@ -297,19 +386,25 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
             </div>
 
             {/* Footer fijo */}
-            <div className="p-4 border-t border-ink-100 shrink-0 bg-white">
+            <div className="p-4 border-t border-ink-100 shrink-0 bg-white space-y-2">
+              {/* Aviso si hay opciones sin seleccionar */}
+              {options.length > 0 && options.some(o => !selectedOptions[o.name]) && (
+                <p className="text-xs text-center text-amber-600 font-medium bg-amber-50 border border-amber-200 rounded-xl py-2 px-3">
+                  ⚠️ Elige {options.filter(o => !selectedOptions[o.name]).map(o => o.name.toLowerCase()).join(' y ')} antes de reservar
+                </p>
+              )}
               <button
                 onClick={() => setStep('form')}
-                disabled={totalStock === 0}
+                disabled={totalStock === 0 || (options.length > 0 && options.some(o => !selectedOptions[o.name]))}
                 className={clsx(
                   'w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-base transition-all',
-                  totalStock > 0
+                  totalStock > 0 && !(options.length > 0 && options.some(o => !selectedOptions[o.name]))
                     ? 'bg-brand-500 hover:bg-brand-600 text-white shadow-md hover:shadow-lg active:scale-[0.98]'
                     : 'bg-ink-100 text-ink-400 cursor-not-allowed'
                 )}
               >
                 <ShoppingCart size={18} />
-                {totalStock > 0 ? 'Reservar producto' : 'Sin stock disponible'}
+                {totalStock === 0 ? 'Sin stock disponible' : 'Reservar producto'}
               </button>
             </div>
           </>
@@ -332,15 +427,27 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
               <div className="p-5 space-y-4">
 
                 {/* Resumen del producto */}
-                <div className="flex items-center gap-3 bg-ink-50 rounded-xl p-3">
-                  {imgs[0]
-                    ? <img src={imgs[0]} alt={product.name} className="w-12 h-12 rounded-lg object-cover shrink-0" />
-                    : <div className="w-12 h-12 rounded-lg bg-ink-200 flex items-center justify-center shrink-0"><Package size={18} className="text-ink-400" /></div>
-                  }
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-ink-900 text-sm truncate">{activeProduct.name}</p>
-                    <p className="text-brand-600 font-bold text-sm">{formatPrice ? formatPrice(displayPrice) : `$${displayPrice}`} <span className="text-ink-400 font-normal text-xs">por {displayUnit}</span></p>
+                <div className="bg-ink-50 rounded-xl p-3 space-y-2">
+                  <div className="flex items-center gap-3">
+                    {(selectedColorImg || imgs[0])
+                      ? <img src={selectedColorImg || imgs[0]} alt={product.name} className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                      : <div className="w-12 h-12 rounded-lg bg-ink-200 flex items-center justify-center shrink-0"><Package size={18} className="text-ink-400" /></div>
+                    }
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-ink-900 text-sm truncate">{activeProduct.name}</p>
+                      <p className="text-brand-600 font-bold text-sm">{formatPrice ? formatPrice(displayPrice) : `$${displayPrice}`} <span className="text-ink-400 font-normal text-xs">por {displayUnit}</span></p>
+                    </div>
                   </div>
+                  {/* Opciones seleccionadas */}
+                  {Object.keys(selectedOptions).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1 border-t border-ink-200">
+                      {Object.entries(selectedOptions).map(([k, v]) => (
+                        <span key={k} className="inline-flex items-center gap-1 px-2 py-0.5 bg-brand-100 text-brand-700 rounded-lg text-xs font-semibold">
+                          {k}: {v}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Cantidad */}
@@ -639,7 +746,7 @@ export default function CompanyCatalogPage() {
               <button
                 onClick={() => setSelectedCat(null)}
                 className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
-                  !selectedCat ? 'badge-orange' : 'badge-gray hover:badge-orange')}
+                  !selectedCat ? 'bg-brand-500 text-white border-brand-500' : 'badge-gray hover:bg-brand-50 hover:text-brand-600 hover:border-brand-200')}
               >
                 Todos
               </button>
@@ -647,7 +754,7 @@ export default function CompanyCatalogPage() {
                 <button key={cat.id}
                   onClick={() => setSelectedCat(cat.id === selectedCat ? null : cat.id)}
                   className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
-                    selectedCat === cat.id ? 'badge-orange' : 'badge-gray hover:badge-orange')}
+                    selectedCat === cat.id ? 'bg-brand-500 text-white border-brand-500' : 'badge-gray hover:bg-brand-50 hover:text-brand-600 hover:border-brand-200')}
                 >
                   {cat.name}
                 </button>

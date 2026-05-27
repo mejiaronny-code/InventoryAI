@@ -195,6 +195,9 @@ export const productsAPI = {
   regenerateEmbedding: (id) => api.post(`/products/${id}/regenerate-embedding`),
   reembedAll: () => api.post('/products/reembed-all'),
   getVariants: (id) => api.get(`/products/${id}/variants`),
+  getVariantStock: (id) => api.get(`/products/${id}/variant-stock`),
+  upsertVariantStock: (id, items) => api.put(`/products/${id}/variant-stock`, items),
+  getVariantStockPublic: (slug, productId) => api.get(`/products/public/${slug}/${productId}/variant-stock`),
   uploadImage: (file) => {
     const form = new FormData()
     form.append('file', file)
@@ -245,6 +248,7 @@ export const reservationsAPI = {
   getPublic: (slug, code) => api.get(`/reservations/public/${code}`, { params: { company_slug: slug } }),
   getByEmail: (slug, email) => api.get('/reservations/public/by-email', { params: { company_slug: slug, email } }),
   list: (params) => api.get('/reservations/', { params }),
+  listFresh: (params) => api.get('/reservations/', { params, noCache: true }),
   update: (id, data) => api.patch(`/reservations/${id}`, data),
   expireAll: () => api.post('/reservations/expire-all'),
   deleteCancelled: () => api.delete('/reservations/cancelled'),

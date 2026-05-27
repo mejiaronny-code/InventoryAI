@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import secrets
 import string
 import asyncio
+import json
 
 from app.core.auth import require_admin, require_staff
 from app.core.supabase_client import supabase
@@ -207,6 +208,19 @@ async def update_reservation(
     data: ReservationUpdate,
     user: dict = Depends(require_staff),
 ):
+    company_id = user["company_id"]
+
+    # Obtener reserva actual antes de actualizar
+    current = supabase.table("reservations")\
+        .select("status, product_id, warehouse_id, quantity, notes")\
+        .eq("id", reservation_id)\
+        .eq("company_id", company_id)\
+        .single()\
+        .execute()
+
+    if not current.data:
+        raise HTTPException(404, "Reserva no encontrada")
+
     update_data = {"status": data.status, "updated_at": datetime.utcnow().isoformat()}
     if data.notes is not None:
         update_data["notes"] = data.notes
@@ -214,11 +228,91 @@ async def update_reservation(
     result = supabase.table("reservations")\
         .update(update_data)\
         .eq("id", reservation_id)\
-        .eq("company_id", user["company_id"])\
+        .eq("company_id", company_id)\
         .execute()
 
     if not result.data:
         raise HTTPException(404, "Reserva no encontrada")
+
+    # Al completar: decrementar stock general y variant stock si aplica
+    if data.status == "completed" and current.data["status"] != "completed":
+        res = current.data
+        product_id   = res["product_id"]
+        warehouse_id = res["warehouse_id"]
+        qty          = res["quantity"]
+        notes        = res.get("notes") or ""
+
+        # 1. Movimiento de salida en stock general
+        stock_row = supabase.table("product_warehouse_stock")\
+            .select("id, quantity")\
+            .eq("product_id", product_id)\
+            .eq("warehouse_id", warehouse_id)\
+            .maybe_single()\
+            .execute()
+
+        if stock_row.data:
+            new_qty = max(0, stock_row.data["quantity"] - qty)
+            supabase.table("product_warehouse_stock")\
+                .update({"quantity": new_qty})\
+                .eq("id", stock_row.data["id"])\
+                .execute()
+
+            supabase.table("stock_movements").insert({
+                "product_id":   product_id,
+                "warehouse_id": warehouse_id,
+                "company_id":   company_id,
+                "type":         "salida",
+                "quantity":     qty,
+                "notes":        f"Reserva completada{' · ' + notes if notes else ''}",
+            }).execute()
+
+        # 2. Decrementar variant stock si la reserva tenía opciones (ej: "Color: Verde")
+        if notes:
+            # Parsear notas → {"Color": "Verde", "Talla": "M"}
+            # Acepta separador "·" (AI) o "," (catálogo UI) — toma solo la primera parte
+            # antes de " — " por si el cliente añadió notas libres al final.
+            options_part = notes.split(" — ")[0]
+
+            combination: dict = {}
+            # Normalizar: reemplazar coma por · para unificar el split
+            normalized = options_part.replace(",", "·")
+            for part in normalized.split("·"):
+                part = part.strip()
+                if ":" in part:
+                    k, v = part.split(":", 1)
+                    k = k.strip()
+                    v = v.strip()
+                    if k:  # evitar claves vacías
+                        combination[k] = v
+
+            if combination:
+                # Buscar la combinación en variant stock
+                vs_rows = supabase.table("product_variants_stock")\
+                    .select("id, quantity, combination")\
+                    .eq("product_id", product_id)\
+                    .eq("warehouse_id", warehouse_id)\
+                    .execute()
+
+                for vs in (vs_rows.data or []):
+                    db_combo = vs.get("combination") or {}
+                    # Si combination llegó como string (edge case), parsear
+                    if isinstance(db_combo, str):
+                        try:
+                            db_combo = json.loads(db_combo)
+                        except Exception:
+                            db_combo = {}
+                    # Match case-insensitive: todas las claves de combination presentes
+                    if all(
+                        str(db_combo.get(k, "")).strip().lower() == v.lower()
+                        for k, v in combination.items()
+                    ):
+                        new_vs_qty = max(0, vs["quantity"] - qty)
+                        supabase.table("product_variants_stock")\
+                            .update({"quantity": new_vs_qty})\
+                            .eq("id", vs["id"])\
+                            .execute()
+                        break
+
     return result.data[0]
 
 

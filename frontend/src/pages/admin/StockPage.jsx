@@ -300,6 +300,222 @@ function EditStockModal({ open, onClose, item, onSaved }) {
   )
 }
 
+// ── VariantStockModal ─────────────────────────────────────────────────
+function VariantStockModal({ open, onClose, product, warehouses }) {
+  const [warehouseId, setWarehouseId] = useState('')
+  const [variantStock, setVariantStock] = useState([])
+  const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const options = product?.product_options || []
+
+  // Genera todas las combinaciones posibles
+  const buildCombinations = (opts) => {
+    if (!opts.length) return []
+    const result = [{}]
+    for (const opt of opts) {
+      const expanded = []
+      for (const existing of result) {
+        for (const val of opt.values) {
+          expanded.push({ ...existing, [opt.name]: val.label })
+        }
+      }
+      expanded.forEach(r => result.splice(0, result.length, ...expanded))
+      break
+    }
+    // Proper cartesian product
+    let combos = [[]]
+    for (const opt of opts) {
+      const newCombos = []
+      for (const combo of combos) {
+        for (const val of opt.values) {
+          newCombos.push([...combo, { key: opt.name, val: val.label }])
+        }
+      }
+      combos = newCombos
+    }
+    return combos.map(pairs => Object.fromEntries(pairs.map(p => [p.key, p.val])))
+  }
+
+  const combinations = buildCombinations(options)
+
+  useEffect(() => {
+    if (open && product?.id) {
+      setWarehouseId(warehouses[0]?.id || '')
+    }
+  }, [open, product?.id])
+
+  useEffect(() => {
+    if (!open || !product?.id || !warehouseId) return
+    setLoading(true)
+    productsAPI.getVariantStock(product.id)
+      .then(r => setVariantStock(r.data || []))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [open, product?.id, warehouseId])
+
+  const getQty = (combination) => {
+    const key = JSON.stringify(combination)
+    const found = variantStock.find(vs =>
+      vs.warehouse_id === warehouseId &&
+      JSON.stringify(vs.combination) === key
+    )
+    return found?.quantity ?? 0
+  }
+
+  const setQty = (combination, qty) => {
+    const key = JSON.stringify(combination)
+    setVariantStock(prev => {
+      const existing = prev.findIndex(vs =>
+        vs.warehouse_id === warehouseId &&
+        JSON.stringify(vs.combination) === key
+      )
+      if (existing >= 0) {
+        return prev.map((vs, i) => i === existing ? { ...vs, quantity: qty } : vs)
+      }
+      return [...prev, { warehouse_id: warehouseId, combination, quantity: qty }]
+    })
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const items = variantStock
+        .filter(vs => vs.warehouse_id === warehouseId)
+        .map(vs => ({
+          warehouse_id: vs.warehouse_id,
+          combination: vs.combination,
+          quantity: parseInt(vs.quantity) || 0,
+        }))
+      // Fill missing combinations with 0
+      for (const combo of combinations) {
+        const key = JSON.stringify(combo)
+        if (!items.find(it => JSON.stringify(it.combination) === key)) {
+          items.push({ warehouse_id: warehouseId, combination: combo, quantity: 0 })
+        }
+      }
+      await productsAPI.upsertVariantStock(product.id, items)
+      toast.success('Stock de variantes guardado')
+      onClose()
+    } catch {
+      toast.error('Error al guardar')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open || !product) return null
+
+  // Determina si hay 2 tipos de opción para mostrar la tabla cruzada
+  const type1 = options[0]
+  const type2 = options[1]
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="modal-box max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 border-b border-ink-100">
+          <div>
+            <h3 className="text-base font-bold text-ink-900 flex items-center gap-2">
+              <Layers size={16} className="text-brand-500" /> Stock por variante
+            </h3>
+            <p className="text-xs text-ink-400 mt-0.5">{product.name}</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* Selector de almacén */}
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Almacén</label>
+            <select value={warehouseId} onChange={e => setWarehouseId(e.target.value)} className="input">
+              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </div>
+
+          {loading ? (
+            <div className="text-center py-8 text-ink-400"><Loader2 size={20} className="animate-spin mx-auto" /></div>
+          ) : combinations.length === 0 ? (
+            <p className="text-sm text-ink-400 text-center py-6">Este producto no tiene opciones configuradas</p>
+          ) : type2 ? (
+            /* Tabla cruzada: tipo1 × tipo2 */
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr>
+                    <th className="text-left p-2 text-xs text-ink-500 font-semibold">{type1.name} \ {type2.name}</th>
+                    {type2.values.map(v2 => (
+                      <th key={v2.label} className="p-2 text-xs text-ink-600 font-semibold text-center min-w-[72px]">
+                        {v2.image
+                          ? <img src={v2.image} className="w-6 h-6 rounded object-cover mx-auto mb-0.5" alt="" />
+                          : null
+                        }
+                        {v2.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {type1.values.map(v1 => (
+                    <tr key={v1.label} className="border-t border-ink-50">
+                      <td className="p-2 font-medium text-ink-700 flex items-center gap-2">
+                        {v1.image && <img src={v1.image} className="w-6 h-6 rounded object-cover" alt="" />}
+                        {v1.label}
+                      </td>
+                      {type2.values.map(v2 => {
+                        const combo = { [type1.name]: v1.label, [type2.name]: v2.label }
+                        const qty = getQty(combo)
+                        return (
+                          <td key={v2.label} className="p-1.5 text-center">
+                            <input
+                              type="number" min="0"
+                              value={qty}
+                              onChange={e => setQty(combo, parseInt(e.target.value) || 0)}
+                              className="w-16 text-center input text-sm py-1 px-2"
+                            />
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            /* Lista simple: solo un tipo de opción */
+            <div className="space-y-2">
+              {type1.values.map(v1 => {
+                const combo = { [type1.name]: v1.label }
+                const qty = getQty(combo)
+                return (
+                  <div key={v1.label} className="flex items-center gap-3 p-2 rounded-xl border border-ink-100">
+                    {v1.image && <img src={v1.image} className="w-8 h-8 rounded-lg object-cover" alt="" />}
+                    <span className="flex-1 text-sm font-medium text-ink-700">{v1.label}</span>
+                    <input
+                      type="number" min="0"
+                      value={qty}
+                      onChange={e => setQty(combo, parseInt(e.target.value) || 0)}
+                      className="w-24 text-center input text-sm"
+                    />
+                    <span className="text-xs text-ink-400">unidades</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="btn-secondary flex-1 justify-center">Cancelar</button>
+            <button onClick={handleSave} disabled={saving} className="btn-primary flex-1 justify-center">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : 'Guardar stock'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function StockPage() {
   const { hasFeature } = useCompanyFeatures()
   const [movements, setMovements] = useState([])
@@ -320,6 +536,7 @@ export default function StockPage() {
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('current')
   const [scannerOpen, setScannerOpen] = useState(false)
+  const [variantStockModal, setVariantStockModal] = useState(null) // product obj
 
   const loadSerials = useCallback(() => {
     if (!hasFeature('serial_numbers')) return
@@ -356,6 +573,7 @@ export default function StockPage() {
         product_id: p.id,
         product_name: p.name,
         product_image: p.images?.[0] || null,
+        product_options: p.product_options || [],
         warehouse_id: s.warehouse_id,
         warehouse_name: wh?.name || s.warehouse_id,
         current_qty: s.quantity,
@@ -592,13 +810,24 @@ export default function StockPage() {
                     </td>
                   )}
                   <td>
-                    <button
-                      onClick={() => setEditModal(row)}
-                      className="btn-ghost p-2 text-ink-500"
-                      title="Editar stock y ubicación"
-                    >
-                      <Pencil size={14} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setEditModal(row)}
+                        className="btn-ghost p-2 text-ink-500"
+                        title="Editar stock y ubicación"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      {hasFeature('variants') && row.product_options?.length > 0 && (
+                        <button
+                          onClick={() => setVariantStockModal(products.find(p => p.id === row.product_id))}
+                          className="btn-ghost p-2 text-brand-500"
+                          title="Stock por variante (Color, Talla...)"
+                        >
+                          <Layers size={14} />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
                 )
@@ -1027,6 +1256,14 @@ export default function StockPage() {
         open={scannerOpen}
         onClose={() => setScannerOpen(false)}
         onDetected={handleScanDetected}
+      />
+
+      {/* Modal stock por variante */}
+      <VariantStockModal
+        open={!!variantStockModal}
+        onClose={() => setVariantStockModal(null)}
+        product={variantStockModal}
+        warehouses={warehouses}
       />
     </div>
   )

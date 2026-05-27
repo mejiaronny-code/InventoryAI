@@ -66,22 +66,56 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
             # 1. Generar embedding de la query
             query_embedding = await generate_embedding(query)
 
-            # 2. Llamar RPC semántica de Supabase
+            # 2. Búsqueda semántica
             rpc_params = {
                 "query_embedding": query_embedding,
                 "company_id_filter": company_id,
                 "match_threshold": 0.4,
-                "match_count": 8,
+                "match_count": 10,
             }
 
             result = supabase_client.rpc(
                 "search_products_semantic", rpc_params
             ).execute()
 
-            if not result.data:
-                return "No encontré productos que coincidan con tu búsqueda."
+            semantic_ids = [p["id"] for p in (result.data or [])]
+            products_map = {p["id"]: p for p in (result.data or [])}
 
-            products = result.data
+            # 2b. Fallback keyword — busca por nombre y por código de barras
+            # Quita 's' final para manejar plurales en español (mochilas→mochila)
+            kw_words = [w for w in query.lower().split() if len(w) > 3]
+            for word in kw_words[:3]:
+                search_term = word[:-1] if word.endswith("s") and len(word) > 4 else word
+                kw_res = supabase_client.table("products") \
+                    .select("id, name, price, unit, description, tags") \
+                    .eq("company_id", company_id) \
+                    .eq("is_active", True) \
+                    .ilike("name", f"%{search_term}%") \
+                    .limit(6) \
+                    .execute()
+                for p in (kw_res.data or []):
+                    if p["id"] not in products_map:
+                        products_map[p["id"]] = p
+
+            # 2c. Búsqueda por código de barras — si el query parece un código
+            # (una sola palabra alfanumérica sin espacios)
+            query_stripped = query.strip()
+            if " " not in query_stripped and len(query_stripped) >= 4:
+                bc_res = supabase_client.table("products") \
+                    .select("id, name, price, unit, description, tags") \
+                    .eq("company_id", company_id) \
+                    .eq("is_active", True) \
+                    .eq("barcode", query_stripped) \
+                    .limit(1) \
+                    .execute()
+                for p in (bc_res.data or []):
+                    if p["id"] not in products_map:
+                        products_map[p["id"]] = p
+
+            products = list(products_map.values())
+
+            if not products:
+                return "No encontré productos que coincidan con tu búsqueda."
 
             # 3. Obtener stock con ubicación por almacén
             available = []
@@ -98,6 +132,19 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                     stock_rows = [s for s in stock_rows if s["warehouse_id"] == warehouse_id]
 
                 total_stock = sum(s["quantity"] for s in stock_rows if s["quantity"] > 0)
+
+                # Si stock general = 0, revisar si hay variant stock
+                # (puede pasar si el sync falló pero las variantes tienen cantidad)
+                if total_stock == 0:
+                    vs_check = supabase_client.table("product_variants_stock")\
+                        .select("quantity")\
+                        .eq("product_id", p["id"])\
+                        .gt("quantity", 0)\
+                        .limit(1)\
+                        .execute()
+                    if vs_check.data:
+                        total_stock = sum(v["quantity"] for v in vs_check.data)
+
                 if total_stock > 0:
                     p["total_stock"] = total_stock
                     p["stock_rows"] = stock_rows
@@ -118,20 +165,37 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                     return "No encontré ese producto disponible en esa tienda."
                 return "Los productos encontrados están sin stock disponible."
 
-            # 5. Obtener imágenes
-            top = available[:5]
-            img_res = supabase_client.table("products")\
-                .select("id, images")\
-                .in_("id", [p["id"] for p in top])\
-                .execute()
-            img_map = {r["id"]: (r.get("images") or []) for r in (img_res.data or [])}
+            # 5. Obtener imágenes y opciones de producto
+            top = available[:6]
+            top_ids = [p["id"] for p in top]
+            try:
+                prod_res = supabase_client.table("products")\
+                    .select("id, images, product_options")\
+                    .in_("id", top_ids)\
+                    .execute()
+                prod_extra = {r["id"]: r for r in (prod_res.data or [])}
+            except Exception:
+                prod_extra = {}
+
+            # 5b. Obtener stock por combinación (variant stock) para los productos con opciones
+            vs_by_product: dict[str, list] = {}
+            try:
+                vs_res = supabase_client.table("product_variants_stock")\
+                    .select("product_id, combination, quantity")\
+                    .in_("product_id", top_ids)\
+                    .execute()
+                for vs in (vs_res.data or []):
+                    vs_by_product.setdefault(vs["product_id"], []).append(vs)
+            except Exception:
+                pass
 
             # 6. Formatear respuesta
             lines = [f"Encontré {len(available)} producto(s):\n"]
             for p in top:
                 price_fmt = f"{float(p['price']):,.2f}"
                 tags_str = ", ".join(p.get("tags") or [])
-                imgs = img_map.get(p["id"], [])
+                extra = prod_extra.get(p["id"], {})
+                imgs = extra.get("images") or []
                 img_line = f"  ![{p['name']}]({imgs[0]})\n" if imgs else ""
 
                 # Líneas de ubicación por almacén
@@ -151,11 +215,45 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                     f"  Stock: {p['total_stock']} unidades" if show_stock else "  Stock: disponible"
                 )
 
+                # Opciones del producto (Color, Talla, etc.) con stock por valor
+                product_options = extra.get("product_options") or []
+                if product_options:
+                    vs_list = vs_by_product.get(p["id"], [])
+                    vs_map = {
+                        "/".join(f"{k}:{v}" for k, v in vs["combination"].items()): vs["quantity"]
+                        for vs in vs_list
+                    }
+                    opt_lines = []
+                    for opt in product_options:
+                        has_images = any(val.get("image") for val in opt.get("values", []))
+                        opt_lines.append(f"  {opt['name']}:")
+                        for val in opt.get("values", []):
+                            label = val["label"]
+                            image_url = val.get("image", "")
+                            opt_stock = sum(
+                                qty for combo_key, qty in vs_map.items()
+                                if f"{opt['name']}:{label}" in combo_key
+                            )
+                            if vs_list:
+                                if opt_stock > 0:
+                                    stock_note = f" ({opt_stock} uds)" if show_stock else ""
+                                    status = f"{label}✓{stock_note}"
+                                else:
+                                    status = f"~~{label}~~"
+                            else:
+                                status = label
+                            img_tag = f" ![{label}]({image_url})" if image_url else ""
+                            opt_lines.append(f"    • {status}{img_tag}")
+                    options_block = "\n".join(opt_lines) + "\n"
+                else:
+                    options_block = "  [Sin opciones de color/talla/variante registradas]\n"
+
                 lines.append(
                     f"• **{p['name']}** (ID: {p['id']})\n"
                     f"{img_line}"
                     f"  Precio: {currency_symbol}{price_fmt} / {p['unit']}\n"
                     f"{stock_block}\n"
+                    + (options_block)
                     + (f"  Etiquetas: {tags_str}\n" if tags_str else "")
                 )
             return "\n".join(lines)
@@ -216,6 +314,43 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                     price_u = round(p['price'] * u['factor'], 2)
                     units_lines += f"  - {u['name']} (factor: {u['factor']}) → {currency_symbol}{price_u}\n"
 
+            # Opciones de producto (Color, Talla, etc.)
+            product_options = p.get("product_options") or []
+            options_lines = ""
+            if product_options:
+                # Stock por combinación
+                vs_result = supabase_client.table("product_variants_stock")\
+                    .select("combination, quantity")\
+                    .eq("product_id", product_id)\
+                    .execute()
+                vs_data = vs_result.data or []
+                vs_map = {
+                    "/".join(f"{k}:{v}" for k, v in vs["combination"].items()): vs["quantity"]
+                    for vs in vs_data
+                }
+
+                options_lines = "Opciones disponibles:\n"
+                for opt in product_options:
+                    has_images = opt.get("with_images", False)
+                    options_lines += f"  {opt['name']}:\n"
+                    for val in opt.get("values", []):
+                        label = val["label"]
+                        image_url = val.get("image", "")
+                        # Stock de esta opción (suma todas las combinaciones que la incluyen)
+                        opt_stock = sum(
+                            qty for combo_key, qty in vs_map.items()
+                            if f"{opt['name']}:{label}" in combo_key
+                        )
+                        stock_badge = ""
+                        if vs_data:
+                            if show_stock:
+                                stock_badge = f" ({opt_stock} uds)" if opt_stock > 0 else " ❌ sin stock"
+                            else:
+                                stock_badge = "" if opt_stock > 0 else " ❌ sin stock"
+                        # Incluir imagen si existe
+                        img_tag = f" — ![{label}]({image_url})" if image_url else ""
+                        options_lines += f"    • {label}{stock_badge}{img_tag}\n"
+
             price_fmt = f"{float(p['price']):,.2f}"
             imgs = p.get("images") or []
             img_line = f"![{p['name']}]({imgs[0]})\n" if imgs else ""
@@ -228,6 +363,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 + (f"Etiquetas: {tags_str}\n" if tags_str else "")
                 + f"\nDescripción: {p.get('description', 'Sin descripción')}\n\n"
                 f"Usos: {p.get('use_cases', 'No especificado')}\n\n"
+                + (options_lines + "\n" if options_lines else "")
                 + (units_lines + "\n" if units_lines else "")
                 + f"Stock por almacén:\n" + "\n".join(stock_lines or ["  Sin stock"]) + "\n\n"
                 f"Tiempo de reserva: {reservation_hours} horas"
@@ -314,7 +450,8 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
         quantity: int,
         client_name: str,
         client_email: str,
-        client_phone: str = ""
+        client_phone: str = "",
+        notes: str = "",
     ) -> str:
         """
         Crea una reserva de producto para el cliente.
@@ -402,6 +539,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 "status": "pending",
                 "reservation_code": reservation_code,
                 "expires_at": expires_at,
+                "notes": notes or None,
             }
 
             result = supabase_client.table("reservations")\

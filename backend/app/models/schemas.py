@@ -171,6 +171,7 @@ class ProductCreate(BaseModel):
     units: List[dict] = []
     parent_product_id: Optional[UUID] = None
     variant_attributes: dict = {}
+    product_options: List[dict] = []
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
@@ -189,6 +190,7 @@ class ProductUpdate(BaseModel):
     tags: Optional[List[str]] = None
     units: Optional[List[dict]] = None
     variant_attributes: Optional[dict] = None
+    product_options: Optional[List[dict]] = None
 
 class ProductOut(BaseModel):
     id: UUID
@@ -209,9 +211,27 @@ class ProductOut(BaseModel):
     units: List[dict] = []
     parent_product_id: Optional[UUID] = None
     variant_attributes: dict = {}
+    product_options: List[dict] = []
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+# ============================================================
+# VARIANT STOCK
+# ============================================================
+
+class VariantStockUpsert(BaseModel):
+    warehouse_id: UUID
+    combination: dict   # e.g. {"Color": "Rojo", "Talla": "M"}
+    quantity: int = Field(ge=0)
+
+class VariantStockOut(BaseModel):
+    id: UUID
+    product_id: UUID
+    warehouse_id: UUID
+    combination: dict
+    quantity: int
 
 class StockByWarehouse(BaseModel):
     warehouse_id: str

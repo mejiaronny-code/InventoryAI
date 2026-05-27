@@ -16,7 +16,7 @@ function parseMarkdown(text) {
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
     .replace(
       /!\[([^\]]*)\]\((https?:\/\/[^\)]+)\)/g,
-      '<img src="$2" alt="$1" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" />'
+      '<img src="$2" alt="$1" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" onerror="this.style.display=\'none\'" />'
     )
     .replace(/\n/g, '<br/>')
 }
@@ -179,10 +179,10 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
       )}>
         {/* Header */}
         <div className="bg-gradient-to-r from-brand-500 to-brand-600 px-4 py-3.5 flex items-center gap-3">
-          <div className="w-9 h-9 bg-white/20 rounded-xl flex items-center justify-center overflow-hidden shrink-0">
+          <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
             {companyLogo
-              ? <img src={companyLogo} alt="logo" className="w-full h-full object-contain p-1" />
-              : <Zap size={18} className="text-white" />
+              ? <img src={companyLogo} alt="logo" className="w-full h-full object-cover" />
+              : <Zap size={18} className="text-brand-500" />
             }
           </div>
           <div className="flex-1">

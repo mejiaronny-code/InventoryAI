@@ -10,7 +10,7 @@ import { useDropzone } from 'react-dropzone'
 import toast from 'react-hot-toast'
 import {
   Plus, Search, Pencil, Trash2, Package, X,
-  RefreshCw, Loader2, Upload, ImageIcon, Warehouse, Tag, Layers,
+  RefreshCw, Loader2, Upload, ImageIcon, Warehouse, Tag,
   QrCode, Printer, ScanLine
 } from 'lucide-react'
 import { QRCodeCanvas } from 'qrcode.react'
@@ -72,6 +72,161 @@ function TagInput({ tags, onChange }) {
         placeholder={tags.length === 0 ? 'Agregar etiqueta...' : ''}
         className="flex-1 min-w-[100px] bg-transparent outline-none text-xs text-ink-700 placeholder-ink-400"
       />
+    </div>
+  )
+}
+
+// ── ProductOptionsEditor ──────────────────────────────────────────────
+function ProductOptionsEditor({ options, onChange, onUploadImage }) {
+  const [newTypeName, setNewTypeName] = useState('')
+
+  const addType = () => {
+    const name = newTypeName.trim()
+    if (!name) return
+    if (options.some(o => o.name.toLowerCase() === name.toLowerCase())) return
+    onChange([...options, { name, with_images: false, values: [] }])
+    setNewTypeName('')
+  }
+
+  const updateType = (idx, patch) => {
+    onChange(options.map((o, i) => i === idx ? { ...o, ...patch } : o))
+  }
+
+  const removeType = (idx) => onChange(options.filter((_, i) => i !== idx))
+
+  const addValue = (typeIdx, label) => {
+    if (!label.trim()) return
+    const type = options[typeIdx]
+    if (type.values.some(v => v.label.toLowerCase() === label.toLowerCase())) return
+    const newValues = [...type.values, { label: label.trim(), image: '' }]
+    updateType(typeIdx, { values: newValues })
+  }
+
+  const removeValue = (typeIdx, valIdx) => {
+    const newValues = options[typeIdx].values.filter((_, i) => i !== valIdx)
+    updateType(typeIdx, { values: newValues })
+  }
+
+  const setValueImage = (typeIdx, valIdx, url) => {
+    const newValues = options[typeIdx].values.map((v, i) =>
+      i === valIdx ? { ...v, image: url } : v
+    )
+    updateType(typeIdx, { values: newValues })
+  }
+
+  return (
+    <div className="space-y-3">
+      {options.map((type, typeIdx) => (
+        <OptionTypeBlock
+          key={typeIdx}
+          type={type}
+          onUpdate={patch => updateType(typeIdx, patch)}
+          onRemove={() => removeType(typeIdx)}
+          onAddValue={label => addValue(typeIdx, label)}
+          onRemoveValue={valIdx => removeValue(typeIdx, valIdx)}
+          onSetValueImage={(valIdx, url) => setValueImage(typeIdx, valIdx, url)}
+          onUploadImage={onUploadImage}
+        />
+      ))}
+
+      <div className="flex gap-2">
+        <input
+          value={newTypeName}
+          onChange={e => setNewTypeName(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addType())}
+          placeholder="Ej: Color, Talla, Material, Tamaño..."
+          className="input text-sm flex-1"
+        />
+        <button type="button" onClick={addType} className="btn-secondary px-3 text-sm shrink-0">
+          <Plus size={14} /> Agregar tipo
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function OptionTypeBlock({ type, onUpdate, onRemove, onAddValue, onRemoveValue, onSetValueImage, onUploadImage }) {
+  const [newVal, setNewVal] = useState('')
+  const [uploadingIdx, setUploadingIdx] = useState(null)
+
+  const handleAdd = () => {
+    onAddValue(newVal)
+    setNewVal('')
+  }
+
+  const handleImageUpload = async (valIdx, file) => {
+    if (!file) return
+    setUploadingIdx(valIdx)
+    try {
+      const url = await onUploadImage(file)
+      onSetValueImage(valIdx, url)
+    } catch {
+      toast.error('Error al subir imagen')
+    } finally {
+      setUploadingIdx(null)
+    }
+  }
+
+  return (
+    <div className="border border-ink-200 rounded-xl overflow-hidden">
+      {/* Header del tipo */}
+      <div className="flex items-center gap-2 px-3 py-2 bg-ink-50 border-b border-ink-100">
+        <span className="font-semibold text-sm text-ink-800 flex-1">{type.name}</span>
+        <label className="flex items-center gap-1.5 text-xs text-ink-500 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={type.with_images}
+            onChange={e => onUpdate({ with_images: e.target.checked })}
+            className="w-3.5 h-3.5 rounded"
+          />
+          Con fotos
+        </label>
+        <button type="button" onClick={onRemove} className="text-red-400 hover:text-red-600 p-1">
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      {/* Valores */}
+      <div className="p-3 space-y-2">
+        {type.values.map((val, valIdx) => (
+          <div key={valIdx} className="flex items-center gap-2">
+            {type.with_images && (
+              <label className="w-8 h-8 rounded-lg border-2 border-dashed border-ink-200 flex items-center justify-center cursor-pointer hover:border-brand-300 shrink-0 overflow-hidden">
+                {uploadingIdx === valIdx
+                  ? <Loader2 size={12} className="animate-spin text-brand-500" />
+                  : val.image
+                    ? <img src={val.image} className="w-full h-full object-cover" alt="" />
+                    : <ImageIcon size={12} className="text-ink-300" />
+                }
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={e => handleImageUpload(valIdx, e.target.files[0])}
+                />
+              </label>
+            )}
+            <span className="flex-1 text-sm text-ink-700 font-medium">{val.label}</span>
+            <button type="button" onClick={() => onRemoveValue(valIdx)} className="text-red-400 hover:text-red-600">
+              <X size={13} />
+            </button>
+          </div>
+        ))}
+
+        {/* Agregar valor */}
+        <div className="flex gap-2 mt-1">
+          <input
+            value={newVal}
+            onChange={e => setNewVal(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleAdd())}
+            placeholder={`Ej: ${type.name === 'Color' ? 'Rojo, Azul, Negro' : type.name === 'Talla' ? 'S, M, L, XL' : 'valor...'}`}
+            className="input text-xs flex-1"
+          />
+          <button type="button" onClick={handleAdd} className="btn-ghost px-2 py-1 text-brand-600 text-xs border border-brand-200 rounded-lg hover:bg-brand-50">
+            <Plus size={12} /> Agregar
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -274,22 +429,10 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
     units: product?.units || [],
     variant_attributes: product?.variant_attributes || {},
     parent_product_id: product?.parent_product_id || null,
+    product_options: product?.product_options || [],
   })
-  const [variants, setVariants] = useState([])
-  const [loadingVariants, setLoadingVariants] = useState(false)
   const [barcodeScanOpen, setBarcodeScanOpen] = useState(false)
-
-  // Cargar variantes si es un producto padre
-  useEffect(() => {
-    if (product?.id && hasFeature('variants') && !product?.parent_product_id) {
-      setLoadingVariants(true)
-      productsAPI.getVariants(product.id)
-        .then(r => setVariants(r.data || []))
-        .catch(() => {})
-        .finally(() => setLoadingVariants(false))
-    }
-  }, [product?.id])
-  const [stockData, setStockData] = useState({ warehouse_id: '', quantity: 0, min_stock_alert: 5 })
+  const [stockData, setStockData] = useState({ warehouse_id: '', quantity: '', min_stock_alert: 5 })
   const [loading, setLoading] = useState(false)
   const [uploadingImg, setUploadingImg] = useState(false)
 
@@ -313,6 +456,11 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
   })
 
   const removeImage = (idx) => setForm(f => ({ ...f, images: f.images.filter((_, i) => i !== idx) }))
+
+  const uploadOptionImage = async (file) => {
+    const res = await productsAPI.uploadImage(file)
+    return res.data.url
+  }
 
   const handleChange = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -402,7 +550,7 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">SKU</label>
           <input value={form.sku} onChange={e => handleChange('sku', e.target.value)} className="input font-mono" />
         </div>
-        <div>
+        <div className="col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Código de barras</label>
           <div className="flex gap-2">
             <input
@@ -440,9 +588,11 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
           </label>
           <textarea value={form.use_cases} onChange={e => handleChange('use_cases', e.target.value)} rows={2} className="input resize-none" placeholder="¿Para qué se usa este producto?" />
         </div>
-        <div>
-          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Tiempo reserva (hs)</label>
-          <input type="number" value={form.reservation_time_hours} onChange={e => handleChange('reservation_time_hours', e.target.value)} className="input" placeholder="usa el de la categoría" />
+        <div className="col-span-2">
+          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+            Tiempo de reserva (horas) <span className="text-ink-400 font-normal normal-case">· opcional, sobreescribe el de la categoría</span>
+          </label>
+          <input type="number" min="1" value={form.reservation_time_hours} onChange={e => handleChange('reservation_time_hours', e.target.value)} className="input" placeholder="Ej: 48 — deja vacío para usar el de la categoría" />
         </div>
       </div>
 
@@ -456,85 +606,6 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
         </div>
       )}
 
-      {/* Variante: atributos de variante (si tiene padre) */}
-      {hasFeature('variants') && product?.parent_product_id && (
-        <div className="border border-brand-100 bg-brand-50 rounded-xl p-3">
-          <p className="text-xs font-bold text-brand-700 uppercase tracking-wide mb-2">Atributos de variante</p>
-          <p className="text-xs text-ink-500 mb-2">Ej: color=Rojo, talla=M</p>
-          <div className="space-y-2">
-            {Object.entries(form.variant_attributes).map(([k, v]) => (
-              <div key={k} className="flex items-center gap-2">
-                <span className="text-xs font-medium text-ink-600 w-20 shrink-0">{k}</span>
-                <input
-                  value={v}
-                  onChange={e => handleChange('variant_attributes', { ...form.variant_attributes, [k]: e.target.value })}
-                  className="input text-xs flex-1"
-                />
-                <button type="button" onClick={() => {
-                  const rest = { ...form.variant_attributes }
-                  delete rest[k]
-                  handleChange('variant_attributes', rest)
-                }} className="text-red-400 hover:text-red-600"><X size={12} /></button>
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={() => {
-                const key = window.prompt('Nombre del atributo (ej: color, talla, tamaño)')
-                if (key?.trim()) handleChange('variant_attributes', { ...form.variant_attributes, [key.trim()]: '' })
-              }}
-              className="text-xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
-            >
-              <Plus size={11} /> Agregar atributo
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Variantes existentes (solo en producto padre) */}
-      {hasFeature('variants') && product?.id && !product?.parent_product_id && (
-        <div className="border border-ink-100 rounded-xl overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2 bg-ink-50 border-b border-ink-100">
-            <p className="text-xs font-bold text-ink-600 uppercase tracking-wide flex items-center gap-1.5">
-              <Layers size={12} /> Variantes ({variants.length})
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                // Abrir formulario para crear variante (producto hijo)
-                onSave({ openVariant: product.id })
-              }}
-              className="text-xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1"
-            >
-              <Plus size={11} /> Agregar
-            </button>
-          </div>
-          {loadingVariants ? (
-            <div className="p-3 text-center text-xs text-ink-400">Cargando...</div>
-          ) : variants.length === 0 ? (
-            <div className="p-3 text-center text-xs text-ink-400">Sin variantes. Agrega la primera.</div>
-          ) : (
-            <div className="divide-y divide-ink-50">
-              {variants.map(v => (
-                <div key={v.id} className="flex items-center gap-2 px-3 py-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-ink-800">{v.name}</p>
-                    <div className="flex gap-1 flex-wrap mt-0.5">
-                      {Object.entries(v.variant_attributes || {}).map(([k, val]) => (
-                        <span key={k} className="text-[10px] bg-ink-100 text-ink-500 px-1.5 py-0.5 rounded">{k}: {val}</span>
-                      ))}
-                    </div>
-                  </div>
-                  <span className="text-xs font-semibold text-brand-600">{formatPrice(v.price)}</span>
-                  <span className={clsx('badge text-[10px]', v.total_stock > 0 ? 'badge-green' : 'badge-red')}>
-                    {v.total_stock}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Multi-unidad */}
       {hasFeature('multi_unit') && (
@@ -546,6 +617,20 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
             baseUnit={form.unit || 'unidad'}
             units={form.units}
             onChange={v => handleChange('units', v)}
+          />
+        </div>
+      )}
+
+      {/* Opciones de producto (Color, Talla, etc.) */}
+      {hasFeature('variants') && (
+        <div>
+          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+            Opciones <span className="text-ink-400 font-normal normal-case">· Color, Talla, Material, etc. (opcional)</span>
+          </label>
+          <ProductOptionsEditor
+            options={form.product_options}
+            onChange={v => handleChange('product_options', v)}
+            onUploadImage={uploadOptionImage}
           />
         </div>
       )}
@@ -598,7 +683,7 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
             </div>
             <div>
               <label className="text-xs text-ink-500 block mb-1">Cantidad</label>
-              <input type="number" value={stockData.quantity} onChange={e => setStockData(s => ({ ...s, quantity: e.target.value }))} className="input text-sm" />
+              <input type="number" min="1" value={stockData.quantity} onChange={e => setStockData(s => ({ ...s, quantity: e.target.value }))} placeholder="0" className="input text-sm" />
             </div>
           </div>
         </div>
@@ -800,11 +885,6 @@ export default function ProductsPage() {
                             {p.tags.length > 3 && <span className="text-[10px] text-ink-400">+{p.tags.length - 3}</span>}
                           </div>
                         )}
-                        {hasFeature('variants') && p.parent_product_id && (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded text-[10px] font-medium border border-purple-100 mt-1">
-                            <Layers size={8} /> Variante
-                          </span>
-                        )}
                       </div>
                     </div>
                   </td>
@@ -860,22 +940,9 @@ export default function ProductsPage() {
           product={modal === 'create' ? null : modal}
           categories={categories}
           warehouses={warehouses}
-          onSave={(extra) => {
+          onSave={() => {
             setModal(null)
             load()
-            // Si se solicitó crear una variante del producto padre
-            if (extra?.openVariant) {
-              const parent = products.find(p => p.id === extra.openVariant)
-              if (parent) {
-                setModal({
-                  ...parent,
-                  id: undefined, // nuevo producto
-                  name: `${parent.name} — Variante`,
-                  parent_product_id: parent.id,
-                  variant_attributes: {},
-                })
-              }
-            }
           }}
           onClose={() => setModal(null)}
         />

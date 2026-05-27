@@ -64,7 +64,18 @@ SYSTEM_PROMPT = """Eres el asistente de inventario de "{company_name}". Ayudas a
 - Al mostrar productos incluye SIEMPRE: nombre en negrita, precio con la moneda correcta, disponibilidad, y si el tool devuelve una imagen en formato ![nombre](url) DEBES incluirla tal cual en tu respuesta, nunca la omitas.
 - Para ubicaciones: reporta exactamente lo que diga el tool. Si no está registrada, díselo.
 
-PARA RESERVAR: pide primero nombre completo y email. Verifica stock. Solo entonces llama create_reservation. Muestra el código y la fecha de expiración.
+COLORES, TALLAS Y VARIANTES:
+- Cuando el cliente pide un color, talla, material u otra variante específica, busca los productos y luego analiza el bloque "Opciones disponibles" de cada resultado.
+- Muestra SOLO los productos que tengan esa opción marcada con ✓ (con stock). Si hay imagen para ese color, muéstrala.
+- Si un producto tiene el color/talla pedido marcado como ~~tachado~~ significa que no hay stock de esa variante — no lo ofrezcas.
+- Si ningún producto tiene la variante pedida con stock, díselo claramente: "No tenemos [producto] en [color/talla] actualmente."
+- Si los resultados no muestran bloque de opciones para ningún producto, significa que el inventario no tiene esa información registrada. En ese caso responde: "Encontramos [productos] pero no tenemos registrado si vienen en [color/talla] específico. Te recomendamos consultar directamente en tienda."
+- Cuando el cliente pregunta "¿qué colores/tallas tiene?" muestra TODAS las opciones disponibles con sus imágenes si las tiene.
+- Si pregunta por un color específico y el producto lo tiene, muestra SOLO la imagen de ese color (no todas).
+
+CONTEXTO DE IMAGEN: Si en el historial hay un mensaje con [PRODUCTO_ID:uuid], ese es el producto que el cliente vio en la imagen que envió. Si el cliente pide "muestramela", "más detalles", "cuéntame más", "ese mismo", "ese producto" u expresión similar, llama DIRECTAMENTE a get_product_detail con ese uuid — NO hagas una búsqueda nueva.
+
+PARA RESERVAR: pide primero nombre completo y email. Verifica stock. Solo entonces llama create_reservation. Muestra el código y la fecha de expiración. Si el cliente eligió un color, talla u otra variante, SIEMPRE inclúyela en el parámetro notes (ej: "Color: Verde", "Color: Azul · Talla: M").
 
 Moneda: {currency_info} — usa siempre este símbolo para precios.
 {stock_rule}
@@ -150,6 +161,7 @@ TOOL_DEFINITIONS = [
                     "client_name":  {"type": "string", "description": "Nombre completo del cliente — OBLIGATORIO, pedirlo antes"},
                     "client_email": {"type": "string", "description": "Email del cliente — OBLIGATORIO, pedirlo antes"},
                     "client_phone": {"type": ["string", "null"], "description": "Teléfono (opcional)"},
+                    "notes": {"type": ["string", "null"], "description": "Opciones seleccionadas por el cliente, ej: 'Color: Verde · Talla: M'. Incluir siempre si el cliente eligió color/talla/variante."},
                 },
                 "required": ["product_id", "warehouse_id", "quantity", "client_name", "client_email"],
             },
@@ -620,40 +632,65 @@ async def chat_with_image(
 
         _log_ai_usage(company_id, session_id, VISION_MODEL)
 
+        # ── Helper para guardar en historial ──────────────────────────
+        def _save_to_history(assistant_reply: str, found_product_id: str | None = None):
+            if session_id not in _history_store:
+                _history_store[session_id] = []
+            _history_store[session_id].append({
+                "role": "user",
+                "content": f"[Imagen enviada] {user_text}",
+            })
+            content = assistant_reply
+            if found_product_id:
+                content = f"[PRODUCTO_ID:{found_product_id}]\n{assistant_reply}"
+            _history_store[session_id].append({
+                "role": "assistant",
+                "content": content,
+            })
+            _history_store[session_id] = _history_store[session_id][-12:]
+
         # ── CASO 1: Match exacto ───────────────────────────────────────
         if exact_match:
             product, c = exact_match
             badge     = _stock_badge(product)
             price_fmt = f"{float(product['price']):,.2f}"
-            return (
+            reply = (
                 f"🎯 {c.get('reason', 'Producto encontrado')}\n\n"
                 f"**{product['name']}**  {badge}\n"
                 f"💰 {symbol}{price_fmt} / {product['unit']}\n\n"
                 "¿Te interesa? Puedo hacer una reserva o darte más detalles."
-            ), ["vision_exact_match"]
+            )
+            _save_to_history(reply, found_product_id=product["id"])
+            return reply, ["vision_exact_match"]
 
         # ── CASO 2: Similares ──────────────────────────────────────────
         if similar_list:
             brand_str = f" {brand}" if brand else ""
             lines = [f"🔍 No tenemos {product_type}{brand_str} exacto, pero encontré opciones similares:\n"]
-            for product, c in similar_list:
+            first_product_id = None
+            for i, (product, c) in enumerate(similar_list):
                 badge     = _stock_badge(product)
                 price_fmt = f"{float(product['price']):,.2f}"
                 lines.append(
                     f"**{product['name']}**  {badge}\n"
                     f"💰 {symbol}{price_fmt} / {product['unit']}"
                 )
+                if i == 0:
+                    first_product_id = product["id"]
             lines.append("\n¿Alguna de estas te interesa?")
-            return "\n\n".join(lines), ["vision_similar"]
+            reply = "\n\n".join(lines)
+            _save_to_history(reply, found_product_id=first_product_id)
+            return reply, ["vision_similar"]
 
         # ── CASO 3: Nada encontrado ────────────────────────────────────
         brand_str = f" {brand}" if brand else ""
-        return (
+        reply = (
             f"🔍 Veo que buscas {product_type}{brand_str}. "
             "No tenemos ese producto ni algo similar en el inventario.\n"
-            "¿Quieres que busque por otra característica?",
-            ["vision_no_match"]
+            "¿Quieres que busque por otra característica?"
         )
+        _save_to_history(reply)
+        return reply, ["vision_no_match"]
 
     except Exception as e:
         logger.error(f"Error en chat_with_image: {e}")

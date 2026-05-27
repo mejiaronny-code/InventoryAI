@@ -1,8 +1,10 @@
 /**
  * pages/admin/ReservationsPage.jsx
  */
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { reservationsAPI } from '../../services/api'
+import { useAuth } from '../../context/AuthContext'
+import { useRealtimeInserts } from '../../hooks/useRealtimeInserts'
 import toast from 'react-hot-toast'
 import { RefreshCw, CheckCircle, XCircle, Package, Clock, Search, Loader2, Trash2 } from 'lucide-react'
 import { format } from 'date-fns'
@@ -18,15 +20,19 @@ const statusConfig = {
 }
 
 export default function ReservationsPage() {
+  const { user } = useAuth()
   const [reservations, setReservations] = useState([])
   const [statusFilter, setStatusFilter] = useState('')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [liveIndicator, setLiveIndicator] = useState(false)
   // { id, action } — qué botón muestra spinner
   const [updating, setUpdating] = useState(null)
   const [deletingCancelled, setDeletingCancelled] = useState(false)
   // Set de IDs que acaban de cambiar de estado (para la animación de fila)
   const [flashedRows, setFlashedRows] = useState(new Set())
+  // Ref para evitar refetch mientras hay una acción en curso
+  const updatingRef = useRef(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -36,6 +42,37 @@ export default function ReservationsPage() {
   }, [statusFilter])
 
   useEffect(() => { load() }, [load])
+
+  // Realtime: nueva reserva → prepend silencioso
+  useRealtimeInserts({
+    companyId: user?.company_id,
+    table: 'reservations',
+    event: 'INSERT',
+    onEvent: () => {
+      // Solo refrescar si no hay una acción de botón en vuelo
+      if (updatingRef.current) return
+      // Mostrar indicador live brevemente
+      setLiveIndicator(true)
+      setTimeout(() => setLiveIndicator(false), 2000)
+      reservationsAPI.listFresh(statusFilter ? { status: statusFilter } : {})
+        .then(r => setReservations(r.data))
+        .catch(() => {})
+    },
+  })
+
+  // Realtime: cambio de estado → actualizar fila sin spinner de carga
+  useRealtimeInserts({
+    companyId: user?.company_id,
+    table: 'reservations',
+    event: 'UPDATE',
+    onEvent: (updated) => {
+      // Si este UPDATE lo causamos nosotros (optimistic update ya aplicado), ignorar
+      if (updatingRef.current?.id === updated.id) return
+      setReservations(prev =>
+        prev.map(r => r.id === updated.id ? { ...r, status: updated.status } : r)
+      )
+    },
+  })
 
   const filtered = useMemo(() => {
     if (!search.trim()) return reservations
@@ -49,7 +86,9 @@ export default function ReservationsPage() {
   }, [reservations, search])
 
   const handleStatus = async (id, newStatus) => {
-    setUpdating({ id, action: newStatus })
+    const update = { id, action: newStatus }
+    setUpdating(update)
+    updatingRef.current = update
 
     // Optimistic update — badge cambia de inmediato
     setReservations(prev =>
@@ -79,6 +118,7 @@ export default function ReservationsPage() {
       load()
     } finally {
       setUpdating(null)
+      updatingRef.current = null
     }
   }
 
@@ -107,7 +147,18 @@ export default function ReservationsPage() {
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="page-title">Reservas</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="page-title">Reservas</h1>
+          <span className={clsx(
+            'inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full transition-all duration-500',
+            liveIndicator
+              ? 'bg-green-100 text-green-700 scale-105'
+              : 'bg-ink-100 text-ink-400'
+          )}>
+            <span className={clsx('w-1.5 h-1.5 rounded-full', liveIndicator ? 'bg-green-500 animate-pulse' : 'bg-ink-300')} />
+            {liveIndicator ? 'Nueva reserva' : 'En vivo'}
+          </span>
+        </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={handleExpireAll} className="btn-ghost text-xs">
             <Clock size={14} /> Expirar vencidas
@@ -192,7 +243,12 @@ export default function ReservationsPage() {
                     <p className="font-medium text-ink-900 text-sm">{r.client_name}</p>
                     <p className="text-xs text-ink-400">{r.client_email}</p>
                   </td>
-                  <td className="text-sm text-ink-700">{r.products?.name || '—'}</td>
+                  <td className="text-sm text-ink-700">
+                    <p>{r.products?.name || '—'}</p>
+                    {r.notes && (
+                      <p className="text-xs text-brand-600 font-medium mt-0.5">{r.notes}</p>
+                    )}
+                  </td>
                   <td className="font-semibold">{r.quantity}</td>
                   <td>
                     <span className={clsx('badge transition-all duration-300', s.color)}>
