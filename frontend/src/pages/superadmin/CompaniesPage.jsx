@@ -51,6 +51,8 @@ function BusinessTypeModal({ company, onClose, onSaved }) {
   const [btype, setBtype] = useState(company.business_type || 'general')
   const [customFeatures, setCustomFeatures] = useState(company.features || {})
   const [aiRulesLimit, setAiRulesLimit] = useState(company.settings?.ai_rules_limit ?? 5)
+  const [chatDailyLimit, setChatDailyLimit] = useState(company.settings?.chat_daily_limit ?? 200)
+  const [knowledgeDocsLimit, setKnowledgeDocsLimit] = useState(company.settings?.knowledge_docs_limit ?? 5)
   const [saving, setSaving] = useState(false)
 
   const handleSave = async () => {
@@ -58,6 +60,8 @@ function BusinessTypeModal({ company, onClose, onSaved }) {
     try {
       await companiesAPI.setBusinessType(company.id, btype, btype === 'custom' ? customFeatures : null)
       await companiesAPI.setAiRulesLimit(company.id, aiRulesLimit)
+      await companiesAPI.setChatDailyLimit(company.id, chatDailyLimit)
+      await companiesAPI.setKnowledgeDocsLimit(company.id, knowledgeDocsLimit)
       toast.success('Configuración actualizada')
       onSaved()
       onClose()
@@ -176,6 +180,76 @@ function BusinessTypeModal({ company, onClose, onSaved }) {
                     className={clsx(
                       'px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all',
                       aiRulesLimit === n ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300'
+                    )}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Límite de mensajes diarios del chat IA */}
+          <div className="border-t border-ink-100 pt-4">
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-2">
+              Límite de mensajes diarios (Chat IA)
+            </label>
+            <p className="text-xs text-ink-400 mb-2">
+              Máximo de mensajes que esta empresa puede enviar al chat IA por día. Se renueva a medianoche.
+            </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <input
+                type="number"
+                min={1}
+                max={10000}
+                value={chatDailyLimit}
+                onChange={e => setChatDailyLimit(Number(e.target.value))}
+                className="input w-24 text-center font-mono"
+              />
+              <div className="flex gap-2">
+                {[50, 200, 500, 1000].map(n => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setChatDailyLimit(n)}
+                    className={clsx(
+                      'px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all',
+                      chatDailyLimit === n ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300'
+                    )}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Límite de documentos de la base de conocimiento */}
+          <div className="border-t border-ink-100 pt-4">
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-2">
+              Límite de documentos (Base de conocimiento)
+            </label>
+            <p className="text-xs text-ink-400 mb-2">
+              Máximo de documentos (PDF/Word/Markdown/texto) que la empresa puede subir para que el chat IA responda preguntas institucionales.
+            </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={knowledgeDocsLimit}
+                onChange={e => setKnowledgeDocsLimit(Number(e.target.value))}
+                className="input w-24 text-center font-mono"
+              />
+              <div className="flex gap-2">
+                {[3, 5, 10, 20].map(n => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setKnowledgeDocsLimit(n)}
+                    className={clsx(
+                      'px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all',
+                      knowledgeDocsLimit === n ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300'
                     )}
                   >
                     {n}

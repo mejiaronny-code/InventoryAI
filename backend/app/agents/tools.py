@@ -81,21 +81,51 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
             semantic_ids = [p["id"] for p in (result.data or [])]
             products_map = {p["id"]: p for p in (result.data or [])}
 
-            # 2b. Fallback keyword — busca por nombre y por código de barras
+            # 2b. Fallback keyword — busca por nombre, descripción, usos y TAGS.
             # Quita 's' final para manejar plurales en español (mochilas→mochila)
+            #
+            # IMPORTANTE: un producto puede no tener la palabra del cliente en
+            # su nombre pero sí en sus tags o usos recomendados (ej. un bolso
+            # llamado "Bolso Tote Rayas" con tag "playa" y use_cases que
+            # mencionan "ir a la playa"). Si solo buscamos en `name`, ese
+            # producto queda invisible para el chat — por eso buscamos en los
+            # 4 campos semánticamente relevantes.
             kw_words = [w for w in query.lower().split() if len(w) > 3]
             for word in kw_words[:3]:
                 search_term = word[:-1] if word.endswith("s") and len(word) > 4 else word
-                kw_res = supabase_client.table("products") \
+
+                base_q = supabase_client.table("products") \
                     .select("id, name, price, unit, description, tags") \
                     .eq("company_id", company_id) \
-                    .eq("is_active", True) \
-                    .ilike("name", f"%{search_term}%") \
-                    .limit(6) \
+                    .eq("is_active", True)
+
+                # Nombre, descripción y usos recomendados → coincidencia parcial (ilike)
+                kw_res = base_q \
+                    .or_(
+                        f"name.ilike.%{search_term}%,"
+                        f"description.ilike.%{search_term}%,"
+                        f"use_cases.ilike.%{search_term}%"
+                    ) \
+                    .limit(8) \
                     .execute()
                 for p in (kw_res.data or []):
                     if p["id"] not in products_map:
                         products_map[p["id"]] = p
+
+                # Tags → coincidencia exacta del término dentro del array
+                try:
+                    tag_res = supabase_client.table("products") \
+                        .select("id, name, price, unit, description, tags") \
+                        .eq("company_id", company_id) \
+                        .eq("is_active", True) \
+                        .contains("tags", [search_term]) \
+                        .limit(8) \
+                        .execute()
+                    for p in (tag_res.data or []):
+                        if p["id"] not in products_map:
+                            products_map[p["id"]] = p
+                except Exception:
+                    pass  # si la columna/sintaxis no soporta contains, no rompe la búsqueda
 
             # 2c. Búsqueda por código de barras — si el query parece un código
             # (una sola palabra alfanumérica sin espacios)
@@ -196,7 +226,15 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 tags_str = ", ".join(p.get("tags") or [])
                 extra = prod_extra.get(p["id"], {})
                 imgs = extra.get("images") or []
-                img_line = f"  ![{p['name']}]({imgs[0]})\n" if imgs else ""
+                product_options_check = extra.get("product_options") or []
+                # Si el producto tiene opciones con imágenes por color, NO mostrar
+                # la imagen principal — el AI debe mostrar solo la del color pedido
+                has_color_images = any(
+                    val.get("image")
+                    for opt in product_options_check
+                    for val in opt.get("values", [])
+                )
+                img_line = f"  ![{p['name']}]({imgs[0]})\n" if (imgs and not has_color_images) else ""
 
                 # Líneas de ubicación por almacén
                 loc_lines = []
@@ -249,7 +287,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                     options_block = "  [Sin opciones de color/talla/variante registradas]\n"
 
                 lines.append(
-                    f"• **{p['name']}** (ID: {p['id']})\n"
+                    f"• **{p['name']}** [ref:{p['id']}]\n"
                     f"{img_line}"
                     f"  Precio: {currency_symbol}{price_fmt} / {p['unit']}\n"
                     f"{stock_block}\n"
@@ -805,6 +843,51 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
             logger.error(f"Error en get_expiring_products: {e}")
             return f"Error: {str(e)}"
 
+    @tool
+    async def search_company_info(query: str) -> str:
+        """
+        Busca información institucional de la empresa en su base de conocimiento
+        (documentos PDF/Word/Markdown subidos por el administrador): horarios de
+        atención, ubicación de sucursales, políticas de devolución/garantía,
+        métodos de pago, envíos, preguntas frecuentes, etc.
+
+        Úsalo cuando el cliente pregunte algo que NO es sobre un producto del
+        catálogo sino sobre la empresa en sí — ej. "¿a qué hora abren?",
+        "¿tienen envíos a otras ciudades?", "¿cuál es su política de devoluciones?",
+        "¿dónde están ubicados?".
+
+        NO uses este tool para preguntas sobre productos, precios o stock — para
+        eso usa search_products.
+        """
+        try:
+            query_embedding = await generate_embedding(query)
+
+            result = supabase_client.rpc("search_company_knowledge", {
+                "query_embedding": query_embedding,
+                "company_id_filter": company_id,
+                "match_threshold": 0.35,
+                "match_count": 5,
+            }).execute()
+
+            chunks = result.data or []
+            if not chunks:
+                return (
+                    "No se encontró información sobre eso en los documentos de la empresa. "
+                    "Dile al cliente que no tienes esa información disponible — NO inventes una respuesta."
+                )
+
+            lines = ["Información encontrada en los documentos de la empresa:\n"]
+            for c in chunks:
+                lines.append(f"---\n{c['content'].strip()}")
+            lines.append(
+                "\n---\nResponde basándote ÚNICAMENTE en lo anterior. Si la respuesta exacta "
+                "no está ahí, dilo claramente — no completes con suposiciones."
+            )
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error en search_company_info: {e}")
+            return "No pude consultar la información de la empresa en este momento."
+
     return [
         list_warehouses,
         search_products,
@@ -816,4 +899,5 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
         get_expiring_products,
         get_batch_info,
         find_serial_number,
+        search_company_info,
     ]

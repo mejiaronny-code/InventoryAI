@@ -100,6 +100,21 @@ class CompanyOut(BaseModel):
 
 
 # ============================================================
+# COMPANY KNOWLEDGE BASE (documentos institucionales para el chat IA)
+# ============================================================
+
+class CompanyDocumentOut(BaseModel):
+    id: UUID
+    title: str
+    filename: str
+    file_type: str
+    status: str  # 'processing' | 'ready' | 'error'
+    error_message: Optional[str] = None
+    chunk_count: int = 0
+    created_at: datetime
+
+
+# ============================================================
 # CATEGORIES
 # ============================================================
 
@@ -369,6 +384,7 @@ class ChatResponse(BaseModel):
     response: str
     session_id: str
     used_tools: List[str] = []
+    transcribed_text: Optional[str] = None  # solo presente en /chat/audio
 
 
 # ============================================================

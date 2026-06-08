@@ -58,11 +58,14 @@ SYSTEM_PROMPT = """Eres el asistente de inventario de "{company_name}". Ayudas a
 
 {custom_rules_section}REGLAS GENERALES:
 - Antes de responder sobre productos, precios o stock SIEMPRE llama al tool correspondiente. Nunca inventes datos.
-- Si el tool no devuelve resultados, díselo al cliente claramente.
+- ⚠️ CRÍTICO — RECOMENDACIONES: Si el cliente pide una recomendación o sugerencia para una actividad, situación, ocasión o necesidad (ej. "qué me recomiendas para ir a la playa", "busco algo para regalar", "necesito algo para acampar", "qué tienen para una fiesta"), tu PRIMERA acción SIEMPRE debe ser llamar a search_products usando esa frase o palabras clave de la situación como query. NUNCA respondas con tipos de producto genéricos de tu propio conocimiento (ej. "te recomiendo sombrillas, protector solar, toallas...") — eso casi siempre será INCORRECTO porque esos productos pueden no existir en este catálogo. Solo después de buscar, recomienda lo que el tool realmente encontró. Si no hay resultados relevantes, dilo claramente — NUNCA inventes alternativas.
+- Si search_products no devuelve resultados relevantes en 1 búsqueda, NO sigas buscando el mismo tema con sinónimos. Responde: "No tenemos [lo que busca] en nuestro catálogo."
+- Si ya encontraste un producto en una búsqueda anterior y el cliente pide ver una variante (color, talla) de ese mismo producto, NO hagas una nueva búsqueda. Usa los datos que ya tienes — el bloque de opciones ya tiene las imágenes por color.
 - Responde en el idioma del cliente. Sé breve y amigable.
-- Nunca muestres IDs técnicos al cliente.
+- Los tools devuelven referencias internas como [ref:uuid] — NUNCA las muestres al cliente. Son solo para uso interno del agente.
 - Al mostrar productos incluye SIEMPRE: nombre en negrita, precio con la moneda correcta, disponibilidad, y si el tool devuelve una imagen en formato ![nombre](url) DEBES incluirla tal cual en tu respuesta, nunca la omitas.
 - Para ubicaciones: reporta exactamente lo que diga el tool. Si no está registrada, díselo.
+- INFORMACIÓN DE LA EMPRESA: si el cliente pregunta algo institucional — horarios de atención, ubicación de sucursales, políticas de devolución/garantía, métodos de pago, envíos, preguntas frecuentes — usa search_company_info (NO inventes esto, NO lo confundas con búsqueda de productos). Responde basándote ÚNICAMENTE en lo que el tool devuelva. Si no encuentra nada, dile al cliente que no tienes esa información disponible y sugiérele contactar directamente a la empresa.
 
 COLORES, TALLAS Y VARIANTES:
 - Cuando el cliente pide un color, talla, material u otra variante específica, busca los productos y luego analiza el bloque "Opciones disponibles" de cada resultado.
@@ -240,6 +243,28 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_company_info",
+            "description": (
+                "Busca información institucional de la empresa en sus documentos "
+                "(horarios, sucursales, políticas de devolución/garantía, métodos de "
+                "pago, envíos, preguntas frecuentes, etc.). Úsalo para preguntas sobre "
+                "la EMPRESA, no sobre productos del catálogo (para eso usa search_products)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Pregunta o tema a buscar en los documentos de la empresa",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -384,7 +409,30 @@ async def _run_agent(
 
     logger.warning(f"Sesión {session_id}: máximo de iteraciones alcanzado")
     _log_ai_usage(company_id, session_id, CHAT_MODEL, total_tokens_in, total_tokens_out)
-    return "No pude completar la solicitud. ¿Podrías reformularla?", used_tools
+    # Intentar una última respuesta con lo que se buscó
+    try:
+        final_resp = await client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[system_msg] + history[-12:] + [{
+                "role": "user",
+                "content": "Resume brevemente qué encontraste o no encontraste. Si no hay productos relevantes, díselo al cliente en una frase corta y amigable.",
+            }],
+            tools=TOOL_DEFINITIONS,
+            tool_choice="none",
+            max_tokens=256,
+            temperature=0.2,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        answer = (final_resp.choices[0].message.content or "").strip()
+        import re
+        answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
+        if answer:
+            history.append({"role": "assistant", "content": answer})
+            _history_store[session_id] = history[-12:]
+            return answer, used_tools
+    except Exception:
+        pass
+    return "No encontré productos relacionados con tu búsqueda en nuestro catálogo. ¿Puedo ayudarte con algo más?", used_tools
 
 
 # ── Función pública de chat ───────────────────────────────────────────

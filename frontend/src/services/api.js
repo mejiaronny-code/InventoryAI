@@ -143,6 +143,10 @@ export const companiesAPI = {
     api.patch(`/companies/${id}/business-type`, { business_type, features }),
   setAiRulesLimit: (id, limit) =>
     api.patch(`/companies/${id}/ai-rules-limit`, null, { params: { limit } }),
+  setChatDailyLimit: (id, limit) =>
+    api.patch(`/companies/${id}/chat-daily-limit`, null, { params: { limit } }),
+  setKnowledgeDocsLimit: (id, limit) =>
+    api.patch(`/companies/${id}/knowledge-docs-limit`, null, { params: { limit } }),
   listUsers: (id) => api.get(`/companies/${id}/users`),
   searchUser: (id, email) => api.get(`/companies/${id}/search-user`, { params: { email } }),
   assignUser: (id, data) => api.post(`/companies/${id}/assign-admin`, data),
@@ -158,6 +162,24 @@ export const companiesAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+}
+
+// ============================================================
+// KNOWLEDGE BASE (documentos institucionales para el chat IA)
+// ============================================================
+export const knowledgeAPI = {
+  listDocuments: () => api.get('/knowledge/documents'),
+  getDocumentsLimit: () => api.get('/knowledge/documents/limit'),
+  uploadDocument: (title, file) => {
+    const form = new FormData()
+    form.append('title', title)
+    form.append('file', file)
+    return api.post('/knowledge/documents/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+  },
+  deleteDocument: (documentId) => api.delete(`/knowledge/documents/${documentId}`),
 }
 
 // ============================================================
@@ -303,7 +325,7 @@ export const chatAPI = {
       session_id: sessionId,
       message,
       company_slug: companySlug,
-    }),
+    }, { timeout: 60000 }), // 60s — DeepInfra puede tener cold starts lentos
 
   sendImage: (sessionId, companySlug, imageFile, userText) => {
     const formData = new FormData()
@@ -314,6 +336,30 @@ export const chatAPI = {
     return api.post('/chat/image', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 60000, // más tiempo para visión
+    })
+  },
+
+  sendAudio: (sessionId, companySlug, audioBlob, filename = 'audio.webm') => {
+    const formData = new FormData()
+    formData.append('session_id', sessionId)
+    formData.append('company_slug', companySlug)
+    formData.append('audio', audioBlob, filename)
+    return api.post('/chat/audio', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 90000, // transcripción + respuesta del agente
+    })
+  },
+
+  // Solo transcribe — NO envía al agente. Usado para que el usuario
+  // revise/edite el texto antes de mandarlo (Whisper puede "alucinar"
+  // texto en otro idioma con audios cortos/silenciosos/ruidosos).
+  transcribeAudio: (companySlug, audioBlob, filename = 'audio.webm') => {
+    const formData = new FormData()
+    formData.append('company_slug', companySlug)
+    formData.append('audio', audioBlob, filename)
+    return api.post('/chat/transcribe', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
     })
   },
 }

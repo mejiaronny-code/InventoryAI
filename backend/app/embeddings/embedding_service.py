@@ -13,6 +13,7 @@ Ventajas:
 from openai import AsyncOpenAI
 from app.core.config import settings
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,30 @@ async def generate_product_embedding(
     """
     text = build_product_text(name, description, use_cases)
     return await generate_embedding(text, is_query=False)
+
+
+async def warmup_embedding_model() -> None:
+    """
+    Mantiene el modelo de embeddings caliente en DeepInfra.
+    Llamar periódicamente para evitar cold starts.
+    """
+    try:
+        await generate_embedding("warmup", is_query=False)
+        logger.info("Embedding model warm-up OK")
+    except Exception as e:
+        logger.warning(f"Embedding warm-up falló (no crítico): {e}")
+
+
+async def start_warmup_loop(interval_seconds: int = 600) -> None:
+    """
+    Loop infinito que hace warm-up cada `interval_seconds` (default: 10 min).
+    Correr como asyncio background task desde el lifespan de FastAPI.
+    """
+    # Esperar 30s al inicio para que el servidor esté completamente listo
+    await asyncio.sleep(30)
+    while True:
+        await warmup_embedding_model()
+        await asyncio.sleep(interval_seconds)
 
 
 def should_regenerate_embedding(old_data: dict, new_data: dict) -> bool:

@@ -8,11 +8,74 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 import base64
 import imghdr
+import logging
+from datetime import date
+from collections import defaultdict
+import threading
+
+logger = logging.getLogger(__name__)
 
 from app.models.schemas import ChatMessage, ChatResponse
 from app.agents.chat_agent import chat, chat_with_image
+from app.core.supabase_client import supabase
+from app.services.transcription import transcribe_audio, ALLOWED_AUDIO_TYPES, MAX_AUDIO_SIZE
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+# ── Rate limiter en memoria ───────────────────────────────────────────
+# Estructura: { "company_slug": { "2024-01-15": 42 } }
+# Se resetea automáticamente cada día nuevo.
+_DEFAULT_DAILY_LIMIT = 200
+_counts: dict[str, dict[str, int]] = defaultdict(dict)
+_counts_lock = threading.Lock()
+
+# Cache del límite por empresa para no ir a la DB en cada mensaje
+# { "company_slug": limit_int }  — se invalida al reiniciar el server
+_limit_cache: dict[str, int] = {}
+
+
+def _get_daily_limit(company_slug: str) -> int:
+    """Lee el límite desde el cache; si no está, consulta la DB."""
+    if company_slug in _limit_cache:
+        return _limit_cache[company_slug]
+    try:
+        res = supabase.table("companies")\
+            .select("settings")\
+            .eq("slug", company_slug)\
+            .single()\
+            .execute()
+        limit = (res.data or {}).get("settings", {}).get("chat_daily_limit", _DEFAULT_DAILY_LIMIT)
+        _limit_cache[company_slug] = int(limit)
+    except Exception:
+        _limit_cache[company_slug] = _DEFAULT_DAILY_LIMIT
+    return _limit_cache[company_slug]
+
+
+def _check_rate_limit(company_slug: str) -> None:
+    """
+    Lanza HTTP 429 si la empresa superó su límite diario configurado.
+    Limpia conteos de días anteriores para no acumular memoria.
+    """
+    today = date.today().isoformat()
+    limit = _get_daily_limit(company_slug)
+
+    with _counts_lock:
+        company = _counts[company_slug]
+
+        # Borrar días viejos para no acumular
+        stale = [d for d in company if d != today]
+        for d in stale:
+            del company[d]
+
+        current = company.get(today, 0)
+        if current >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Límite de {limit} mensajes diarios alcanzado. "
+                       "Se renueva automáticamente mañana.",
+            )
+        company[today] = current + 1
 
 
 @router.post("/message", response_model=ChatResponse)
@@ -23,6 +86,8 @@ async def send_message(data: ChatMessage):
     """
     if not data.message.strip():
         raise HTTPException(400, "El mensaje no puede estar vacío")
+
+    _check_rate_limit(data.company_slug)
 
     response, used_tools = await chat(
         session_id=data.session_id,
@@ -63,6 +128,8 @@ async def send_image_message(
     if len(image_bytes) > 10 * 1024 * 1024:  # 10MB máximo
         raise HTTPException(400, "La imagen no puede superar 10MB")
 
+    _check_rate_limit(company_slug)
+
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
     media_type = image.content_type or "image/jpeg"
 
@@ -79,3 +146,120 @@ async def send_image_message(
         session_id=session_id,
         used_tools=used_tools,
     )
+
+
+@router.post("/audio", response_model=ChatResponse)
+async def send_audio_message(
+    session_id: str = Form(...),
+    company_slug: str = Form(...),
+    audio: UploadFile = File(...),
+):
+    """
+    Transcribe una nota de voz con Whisper y la procesa DIRECTO como mensaje de chat
+    (sin posibilidad de revisión humana antes de enviarse).
+
+    ⚠️ Pensado para integraciones automatizadas donde NO hay UI para que el
+    usuario revise el texto (ej. WhatsApp voice notes vía n8n). Whisper puede
+    "alucinar" texto fluido en otro idioma cuando el audio es corto/silencioso/
+    ruidoso — en flujos con interfaz, usa /chat/transcribe + que el usuario
+    confirme/edite, y luego /chat/message.
+
+    Flujo:
+      1. Valida formato y tamaño del audio
+      2. Transcribe con DeepInfra Whisper large-v3-turbo
+      3. Envía el texto transcrito al agente IA (mismo que /chat/message)
+      4. Cuenta en el rate limit diario igual que un mensaje de texto
+    """
+    # Validar tipo de archivo
+    ct = (audio.content_type or "audio/webm").split(";")[0].strip()
+    if ct not in ALLOWED_AUDIO_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato de audio no soportado: {ct}. "
+                   f"Formatos válidos: webm, ogg, mp4, mp3, wav, flac.",
+        )
+
+    # Leer y validar tamaño
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="El archivo de audio está vacío.")
+    if len(audio_bytes) > MAX_AUDIO_SIZE:
+        raise HTTPException(status_code=413, detail="El audio no puede superar 25 MB.")
+
+    # Transcribir
+    try:
+        transcribed_text = await transcribe_audio(
+            audio_bytes,
+            audio.filename or "audio.webm",
+            audio.content_type or "audio/webm",
+        )
+    except Exception as e:
+        logger.error(f"Error transcribiendo audio: {e}")
+        raise HTTPException(status_code=502, detail="Error en el servicio de transcripción.")
+
+    if not transcribed_text:
+        raise HTTPException(status_code=422, detail="No se pudo detectar voz en el audio.")
+
+    # Contar en el rate limit (igual que un mensaje de texto)
+    _check_rate_limit(company_slug)
+
+    # Procesar como mensaje de chat normal
+    response, used_tools = await chat(
+        session_id=session_id,
+        message=transcribed_text,
+        company_slug=company_slug,
+    )
+
+    return ChatResponse(
+        response=response,
+        session_id=session_id,
+        used_tools=used_tools,
+        transcribed_text=transcribed_text,
+    )
+
+
+@router.post("/transcribe")
+async def transcribe_only(
+    company_slug: str = Form(...),
+    audio: UploadFile = File(...),
+):
+    """
+    Transcribe una nota de voz SIN enviarla al agente IA.
+
+    Pensado para flujos donde el usuario debe revisar/editar el texto
+    antes de mandarlo (ej. botón de micrófono en el chat del catálogo):
+    Whisper a veces "alucina" texto fluido en otro idioma cuando el audio
+    es corto, silencioso o con ruido — por eso NUNCA se debe enviar
+    directo al agente sin que el usuario lo confirme.
+
+    No cuenta para el rate limit diario — el conteo ocurre cuando el
+    usuario realmente envía el mensaje (vía /chat/message).
+    """
+    ct = (audio.content_type or "audio/webm").split(";")[0].strip()
+    if ct not in ALLOWED_AUDIO_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato de audio no soportado: {ct}. "
+                   f"Formatos válidos: webm, ogg, mp4, mp3, wav, flac.",
+        )
+
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="El archivo de audio está vacío.")
+    if len(audio_bytes) > MAX_AUDIO_SIZE:
+        raise HTTPException(status_code=413, detail="El audio no puede superar 25 MB.")
+
+    try:
+        transcribed_text = await transcribe_audio(
+            audio_bytes,
+            audio.filename or "audio.webm",
+            audio.content_type or "audio/webm",
+        )
+    except Exception as e:
+        logger.error(f"Error transcribiendo audio: {e}")
+        raise HTTPException(status_code=502, detail="Error en el servicio de transcripción.")
+
+    if not transcribed_text:
+        raise HTTPException(status_code=422, detail="No se pudo detectar voz en el audio. Intenta hablar más cerca del micrófono.")
+
+    return {"transcribed_text": transcribed_text}

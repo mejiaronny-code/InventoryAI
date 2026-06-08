@@ -7,7 +7,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { chatAPI } from '../../services/api'
 import { v4 as uuidv4 } from 'uuid'
-import { MessageCircle, X, Send, Image, Loader2, Bot, User, ImagePlus, Zap } from 'lucide-react'
+import { MessageCircle, X, Send, Image, Loader2, Bot, User, ImagePlus, Zap, Mic, Square } from 'lucide-react'
 import clsx from 'clsx'
 
 function parseMarkdown(text) {
@@ -64,9 +64,15 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
   })
   const [previewImage, setPreviewImage] = useState(null)
   const [imageFile, setImageFile] = useState(null)
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
   const fileRef = useRef(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
+  const recordingTimerRef = useRef(null)
+  const streamRef = useRef(null)
 
   useEffect(() => {
     if (open && messages.length === 0 && welcomeMessage) {
@@ -146,6 +152,113 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
     reader.readAsDataURL(file)
     e.target.value = ''
   }
+
+  const stopRecordingTimer = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current)
+      recordingTimerRef.current = null
+    }
+  }
+
+  const cleanupStream = () => {
+    streamRef.current?.getTracks().forEach(t => t.stop())
+    streamRef.current = null
+  }
+
+  // Transcribe el audio y coloca el texto en el campo de escritura para que
+  // el usuario lo revise/edite antes de enviarlo. NUNCA se envía directo al
+  // agente: Whisper puede "alucinar" texto fluido en otro idioma cuando el
+  // audio es corto, silencioso o con ruido de fondo.
+  const [transcribing, setTranscribing] = useState(false)
+  const transcribeAudioBlob = useCallback(async (blob) => {
+    if (!blob || blob.size === 0) return
+    setTranscribing(true)
+    try {
+      const res = await chatAPI.transcribeAudio(companySlug, blob, 'nota-de-voz.webm')
+      const text = res.data.transcribed_text || ''
+      setInput(prev => (prev.trim() ? `${prev.trim()} ${text}` : text))
+      setTimeout(() => inputRef.current?.focus(), 50)
+    } catch (e) {
+      const detail = e?.response?.data?.detail
+      addMessage('assistant', detail || 'No pude transcribir el audio. Intenta de nuevo o escribe tu mensaje directamente.')
+    } finally {
+      setTranscribing(false)
+    }
+  }, [companySlug])
+
+  const startRecording = useCallback(async () => {
+    if (loading || isRecording) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '')
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+      mediaRecorderRef.current = recorder
+      audioChunksRef.current = []
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+      recorder.onstop = () => {
+        stopRecordingTimer()
+        cleanupStream()
+        const blob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/webm' })
+        audioChunksRef.current = []
+        setIsRecording(false)
+        setRecordingSeconds(0)
+        transcribeAudioBlob(blob)
+      }
+
+      recorder.start()
+      setIsRecording(true)
+      setRecordingSeconds(0)
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(s => {
+          if (s >= 59) { // tope de 60s para evitar audios enormes
+            recorder.stop()
+            return s
+          }
+          return s + 1
+        })
+      }, 1000)
+    } catch (err) {
+      addMessage('assistant', 'No pude acceder al micrófono. Revisa los permisos del navegador.')
+    }
+  }, [loading, isRecording, transcribeAudioBlob])
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
+  }, [])
+
+  const cancelRecording = useCallback(() => {
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.onstop = null
+      if (mediaRecorderRef.current.state !== 'inactive') mediaRecorderRef.current.stop()
+    }
+    stopRecordingTimer()
+    cleanupStream()
+    audioChunksRef.current = []
+    setIsRecording(false)
+    setRecordingSeconds(0)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      stopRecordingTimer()
+      cleanupStream()
+    }
+  }, [])
+
+  const handleMicClick = () => {
+    if (isRecording) stopRecording()
+    else startRecording()
+  }
+
+  const formatRecTime = (s) => `0:${s.toString().padStart(2, '0')}`
 
   return (
     <>
@@ -248,6 +361,14 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Transcribing indicator */}
+        {transcribing && (
+          <div className="px-4 py-2.5 border-t border-ink-100 bg-brand-50 flex items-center gap-2.5 animate-fade-in">
+            <Loader2 size={14} className="animate-spin text-brand-500 shrink-0" />
+            <p className="text-xs text-brand-600 font-medium">Transcribiendo tu nota de voz…</p>
+          </div>
+        )}
+
         {/* Image preview bar */}
         {previewImage && (
           <div className="px-4 py-2 border-t border-ink-100 bg-white flex items-center gap-3">
@@ -267,48 +388,101 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
 
         {/* Input */}
         <div className="p-3 border-t border-ink-100 bg-white">
-          <div className="flex items-end gap-2">
-            {/* Image upload button */}
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="p-2.5 rounded-xl text-ink-400 hover:text-brand-500 hover:bg-brand-50 transition-colors shrink-0"
-              title="Buscar por imagen"
-              disabled={loading}
-            >
-              <ImagePlus size={18} />
-            </button>
-            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
+          {isRecording ? (
+            <div className="flex items-center gap-3 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5 animate-fade-in">
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+              </span>
+              <p className="flex-1 text-sm text-red-600 font-medium">
+                Grabando… {formatRecTime(recordingSeconds)}
+              </p>
+              <button
+                onClick={cancelRecording}
+                className="p-2 rounded-lg text-ink-400 hover:text-ink-600 hover:bg-white transition-colors"
+                title="Cancelar"
+              >
+                <X size={16} />
+              </button>
+              <button
+                onClick={stopRecording}
+                className="p-2 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors shadow-sm"
+                title="Enviar nota de voz"
+              >
+                <Square size={16} fill="currentColor" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-end gap-2">
+              {/* Image upload button */}
+              <button
+                onClick={() => fileRef.current?.click()}
+                className="p-2.5 rounded-xl text-ink-400 hover:text-brand-500 hover:bg-brand-50 transition-colors shrink-0"
+                title="Buscar por imagen"
+                disabled={loading}
+              >
+                <ImagePlus size={18} />
+              </button>
+              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
 
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={imageFile ? 'Pregunta sobre esta imagen...' : 'Escribe tu mensaje...'}
-              rows={1}
-              className="flex-1 input resize-none py-2.5 text-sm leading-relaxed max-h-24"
-              style={{ minHeight: '42px' }}
-              disabled={loading}
-            />
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={
+                  transcribing
+                    ? 'Transcribiendo audio...'
+                    : imageFile ? 'Pregunta sobre esta imagen...' : 'Escribe tu mensaje...'
+                }
+                rows={1}
+                className="flex-1 input resize-none py-2.5 text-sm leading-relaxed max-h-24"
+                style={{ minHeight: '42px' }}
+                disabled={loading || transcribing}
+              />
 
-            <button
-              onClick={handleSendText}
-              disabled={(!input.trim() && !imageFile) || loading}
-              className={clsx(
-                'p-2.5 rounded-xl shrink-0 transition-all',
-                (!input.trim() && !imageFile) || loading
-                  ? 'bg-ink-100 text-ink-400 cursor-not-allowed'
-                  : 'bg-brand-500 text-white hover:bg-brand-600 shadow-sm'
+              {/* Mostrar botón de enviar solo si hay texto/imagen; si no, mostrar micrófono.
+                  Así, una nota de voz transcrita SIEMPRE pasa primero por revisión del usuario
+                  antes de enviarse — Whisper puede transcribir mal audios cortos/ruidosos. */}
+              {(input.trim() || imageFile) ? (
+                <button
+                  onClick={handleSendText}
+                  disabled={loading || transcribing}
+                  title="Revisa el texto transcrito antes de enviar"
+                  className={clsx(
+                    'p-2.5 rounded-xl shrink-0 transition-all',
+                    (loading || transcribing)
+                      ? 'bg-ink-100 text-ink-400 cursor-not-allowed'
+                      : 'bg-brand-500 text-white hover:bg-brand-600 shadow-sm'
+                  )}
+                >
+                  {loading
+                    ? <Loader2 size={18} className="animate-spin" />
+                    : <Send size={18} />
+                  }
+                </button>
+              ) : (
+                <button
+                  onClick={handleMicClick}
+                  disabled={loading || transcribing}
+                  title="Grabar nota de voz"
+                  className={clsx(
+                    'p-2.5 rounded-xl shrink-0 transition-all',
+                    (loading || transcribing)
+                      ? 'bg-ink-100 text-ink-400 cursor-not-allowed'
+                      : 'bg-brand-500 text-white hover:bg-brand-600 shadow-sm'
+                  )}
+                >
+                  {transcribing
+                    ? <Loader2 size={18} className="animate-spin" />
+                    : <Mic size={18} />
+                  }
+                </button>
               )}
-            >
-              {loading
-                ? <Loader2 size={18} className="animate-spin" />
-                : <Send size={18} />
-              }
-            </button>
-          </div>
+            </div>
+          )}
           <p className="text-[10px] text-ink-400 text-center mt-2">
-            IA · Busca productos · Reserva fácil · 📸 Sube imagen
+            IA · Busca productos · Reserva fácil · 📸 Sube imagen · 🎤 Nota de voz (revisa antes de enviar)
           </p>
         </div>
       </div>

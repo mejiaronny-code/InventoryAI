@@ -165,6 +165,38 @@ async def set_ai_rules_limit(
     return {"ai_rules_limit": current_settings["ai_rules_limit"]}
 
 
+@router.patch("/{company_id}/chat-daily-limit")
+async def set_chat_daily_limit(
+    company_id: str,
+    limit: int,
+    user: dict = Depends(require_super_admin),
+):
+    """Superadmin define el límite de mensajes diarios del chat IA para una empresa."""
+    company = supabase.table("companies").select("settings").eq("id", company_id).single().execute()
+    if not company.data:
+        raise HTTPException(404, "Empresa no encontrada")
+    current_settings = company.data.get("settings") or {}
+    current_settings["chat_daily_limit"] = max(1, limit)
+    supabase.table("companies").update({"settings": current_settings}).eq("id", company_id).execute()
+    return {"chat_daily_limit": current_settings["chat_daily_limit"]}
+
+
+@router.patch("/{company_id}/knowledge-docs-limit")
+async def set_knowledge_docs_limit(
+    company_id: str,
+    limit: int,
+    user: dict = Depends(require_super_admin),
+):
+    """Superadmin define el máximo de documentos de la base de conocimiento (PDF/Word/MD) que la empresa puede subir."""
+    company = supabase.table("companies").select("settings").eq("id", company_id).single().execute()
+    if not company.data:
+        raise HTTPException(404, "Empresa no encontrada")
+    current_settings = company.data.get("settings") or {}
+    current_settings["knowledge_docs_limit"] = max(0, limit)
+    supabase.table("companies").update({"settings": current_settings}).eq("id", company_id).execute()
+    return {"knowledge_docs_limit": current_settings["knowledge_docs_limit"]}
+
+
 @router.patch("/{company_id}/business-type")
 async def set_business_type(
     company_id: str,
