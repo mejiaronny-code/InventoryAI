@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     notification_from_email: str = "noreply@inventoryai.app"
     support_email: str = ""  # Email del equipo de soporte (para solicitudes de eliminación)
 
+    # Integración con Papyrus (RAG) — endpoints de solo lectura protegidos
+    # por este header compartido. Vacío = endpoints de integración deshabilitados.
+    integration_service_key: str = ""
+
     class Config:
         env_file = ".env"
         case_sensitive = False

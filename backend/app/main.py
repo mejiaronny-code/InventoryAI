@@ -29,6 +29,7 @@ from app.routers import (
     companies,
     dashboard,
     knowledge,
+    integrations,
 )
 
 logging.basicConfig(
@@ -107,6 +108,7 @@ app.include_router(chat.router,          prefix=API_PREFIX)
 app.include_router(notifications.router, prefix=API_PREFIX)
 app.include_router(dashboard.router,     prefix=API_PREFIX)
 app.include_router(knowledge.router,     prefix=API_PREFIX)
+app.include_router(integrations.router,  prefix=API_PREFIX)
 
 
 # ── HEALTH CHECK ─────────────────────────────────────────────────────
