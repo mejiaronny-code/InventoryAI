@@ -15,7 +15,7 @@ function parseMarkdown(text) {
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
     .replace(
-      /!\[([^\]]*)\]\((https?:\/\/[^\)]+)\)/g,
+      /!\\?\[([^\]]*)\\?\]\\?\((https?:\/\/[^\)]+)\)\\?/g,
       '<img src="$2" alt="$1" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" onerror="this.style.display=\'none\'" />'
     )
     .replace(/\n/g, '<br/>')
@@ -283,15 +283,18 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
 
       {/* Chat panel */}
       <div className={clsx(
-        'fixed bottom-24 right-6 z-50 w-[360px] max-w-[calc(100vw-24px)]',
-        'bg-white rounded-2xl shadow-2xl border border-ink-100',
+        'fixed z-50',
+        'inset-0 sm:inset-auto sm:bottom-24 sm:right-6',
+        'w-full sm:w-[360px] sm:max-w-[calc(100vw-24px)]',
+        'h-[100dvh] sm:h-auto sm:max-h-[min(600px,calc(100dvh-7rem))]',
+        'bg-white rounded-none sm:rounded-2xl shadow-2xl border border-ink-100',
         'flex flex-col overflow-hidden transition-all duration-300 origin-bottom-right',
         open
           ? 'opacity-100 scale-100 pointer-events-auto'
           : 'opacity-0 scale-90 pointer-events-none'
       )}>
         {/* Header */}
-        <div className="bg-gradient-to-r from-brand-500 to-brand-600 px-4 py-3.5 flex items-center gap-3">
+        <div className="bg-gradient-to-r from-brand-500 to-brand-600 px-4 py-3.5 flex items-center gap-3 shrink-0">
           <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
             {companyLogo
               ? <img src={companyLogo} alt="logo" className="w-full h-full object-cover" />
@@ -311,7 +314,7 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[380px] bg-ink-50/30">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 bg-ink-50/30">
           {messages.map((msg, i) => (
             <div
               key={i}
@@ -363,7 +366,7 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
 
         {/* Transcribing indicator */}
         {transcribing && (
-          <div className="px-4 py-2.5 border-t border-ink-100 bg-brand-50 flex items-center gap-2.5 animate-fade-in">
+          <div className="shrink-0 px-4 py-2.5 border-t border-ink-100 bg-brand-50 flex items-center gap-2.5 animate-fade-in">
             <Loader2 size={14} className="animate-spin text-brand-500 shrink-0" />
             <p className="text-xs text-brand-600 font-medium">Transcribiendo tu nota de voz…</p>
           </div>
@@ -371,7 +374,7 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
 
         {/* Image preview bar */}
         {previewImage && (
-          <div className="px-4 py-2 border-t border-ink-100 bg-white flex items-center gap-3">
+          <div className="shrink-0 px-4 py-2 border-t border-ink-100 bg-white flex items-center gap-3">
             <img src={previewImage} alt="preview" className="w-12 h-12 object-cover rounded-lg border border-ink-200" />
             <div className="flex-1">
               <p className="text-xs font-medium text-ink-700">Imagen adjunta</p>
@@ -387,7 +390,7 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
         )}
 
         {/* Input */}
-        <div className="p-3 border-t border-ink-100 bg-white">
+        <div className="shrink-0 p-3 border-t border-ink-100 bg-white">
           {isRecording ? (
             <div className="flex items-center gap-3 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5 animate-fade-in">
               <span className="relative flex h-2.5 w-2.5 shrink-0">

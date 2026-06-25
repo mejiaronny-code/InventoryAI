@@ -15,7 +15,7 @@ export default function HomePage() {
 
   useEffect(() => {
     companiesAPI.listPublic()
-      .then(r => setCompanies(r.data))
+      .then(r => setCompanies(r.data.filter(c => c.features?.public_catalog !== false)))
       .finally(() => setLoading(false))
   }, [])
 

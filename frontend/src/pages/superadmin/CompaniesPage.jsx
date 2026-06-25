@@ -3,6 +3,7 @@
  */
 import { useState, useEffect } from 'react'
 import { companiesAPI } from '../../services/api'
+import { DEFAULT_FEATURES } from '../../context/CompanyFeaturesContext'
 import toast from 'react-hot-toast'
 import { Plus, X, Loader2, Users, UserPlus, Search, Building2, ChevronDown } from 'lucide-react'
 import clsx from 'clsx'
@@ -45,11 +46,12 @@ const FEATURE_LABELS = {
   tags:              'Etiquetas/Tags',
   barcodes_qr:       'Códigos QR / Barras',
   auto_reorder:      'Reorden automático',
+  public_catalog:    'Catálogo público (chat IA, reservas)',
 }
 
 function BusinessTypeModal({ company, onClose, onSaved }) {
   const [btype, setBtype] = useState(company.business_type || 'general')
-  const [customFeatures, setCustomFeatures] = useState(company.features || {})
+  const [customFeatures, setCustomFeatures] = useState({ ...DEFAULT_FEATURES, ...(company.features || {}) })
   const [aiRulesLimit, setAiRulesLimit] = useState(company.settings?.ai_rules_limit ?? 5)
   const [chatDailyLimit, setChatDailyLimit] = useState(company.settings?.chat_daily_limit ?? 200)
   const [knowledgeDocsLimit, setKnowledgeDocsLimit] = useState(company.settings?.knowledge_docs_limit ?? 5)
@@ -122,7 +124,7 @@ function BusinessTypeModal({ company, onClose, onSaved }) {
                   ropa:        { physical_location:true, tags:true, barcodes_qr:true, variants:true },
                   electronica: { physical_location:true, tags:true, barcodes_qr:true, serial_numbers:true, variants:true },
                 }
-                const on = presets[btype]?.[key] || false
+                const on = { ...DEFAULT_FEATURES, ...presets[btype] }[key] || false
                 return (
                   <div key={key} className="flex items-center gap-2">
                     <span className={`w-3 h-3 rounded-full shrink-0 ${on ? 'bg-green-400' : 'bg-ink-200'}`} />

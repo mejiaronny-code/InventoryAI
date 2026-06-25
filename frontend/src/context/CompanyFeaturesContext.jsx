@@ -16,6 +16,7 @@ const DEFAULT_FEATURES = {
   tags:              true,
   barcodes_qr:       true,
   auto_reorder:      false,
+  public_catalog:    true,
 }
 
 // ── Catálogo de monedas ───────────────────────────────────────────────

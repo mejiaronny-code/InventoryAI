@@ -62,6 +62,7 @@ DEFAULT_FEATURES = {
     "tags":              True,
     "barcodes_qr":       True,
     "auto_reorder":      False,
+    "public_catalog":    True,
 }
 
 BUSINESS_PRESETS: dict[str, dict] = {
@@ -183,6 +184,7 @@ class ProductCreate(BaseModel):
     attributes: dict = {}
     reservation_time_hours: Optional[int] = None
     tags: List[str] = []
+    is_featured: bool = False
     units: List[dict] = []
     parent_product_id: Optional[UUID] = None
     variant_attributes: dict = {}
@@ -203,6 +205,7 @@ class ProductUpdate(BaseModel):
     reservation_time_hours: Optional[int] = None
     is_active: Optional[bool] = None
     tags: Optional[List[str]] = None
+    is_featured: Optional[bool] = None
     units: Optional[List[dict]] = None
     variant_attributes: Optional[dict] = None
     product_options: Optional[List[dict]] = None
@@ -223,6 +226,7 @@ class ProductOut(BaseModel):
     attributes: dict
     reservation_time_hours: Optional[int]
     tags: List[str] = []
+    is_featured: bool = False
     units: List[dict] = []
     parent_product_id: Optional[UUID] = None
     variant_attributes: dict = {}
@@ -372,7 +376,9 @@ class ReservationOut(BaseModel):
 
 class ChatMessage(BaseModel):
     session_id: str
-    message: str
+    # Tope de longitud: un cliente real nunca escribe tanto. Sin esto, un bot
+    # podría mandar mensajes gigantes y disparar el costo de DeepInfra.
+    message: str = Field(..., max_length=2000)
     company_slug: str
 
 class ChatImageMessage(BaseModel):

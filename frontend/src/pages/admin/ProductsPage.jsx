@@ -11,7 +11,7 @@ import toast from 'react-hot-toast'
 import {
   Plus, Search, Pencil, Trash2, Package, X,
   RefreshCw, Loader2, Upload, ImageIcon, Warehouse, Tag,
-  QrCode, Printer, ScanLine
+  QrCode, Printer, ScanLine, Star
 } from 'lucide-react'
 import { QRCodeCanvas } from 'qrcode.react'
 import ProductImage from '../../components/shared/ProductImage'
@@ -426,6 +426,7 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
     attributes: JSON.stringify(product?.attributes || {}, null, 2),
     images: product?.images || [],
     tags: product?.tags || [],
+    is_featured: product?.is_featured || false,
     units: product?.units || [],
     variant_attributes: product?.variant_attributes || {},
     parent_product_id: product?.parent_product_id || null,
@@ -605,6 +606,27 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
           <TagInput tags={form.tags} onChange={v => handleChange('tags', v)} />
         </div>
       )}
+
+      {/* Producto destacado */}
+      <label className="flex items-center gap-3 p-3 rounded-xl border border-ink-100 hover:bg-ink-50 cursor-pointer">
+        <div
+          onClick={() => handleChange('is_featured', !form.is_featured)}
+          className={clsx(
+            'w-9 h-5 rounded-full transition-colors shrink-0 relative cursor-pointer',
+            form.is_featured ? 'bg-brand-500' : 'bg-ink-200'
+          )}
+        >
+          <span className={clsx(
+            'absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform',
+            form.is_featured ? 'translate-x-4' : 'translate-x-0.5'
+          )} />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Star size={14} className={form.is_featured ? 'text-brand-500' : 'text-ink-400'} />
+          <span className="text-sm font-medium text-ink-700">Producto destacado</span>
+        </div>
+        <span className="text-xs text-ink-400 ml-auto">El asistente IA lo recomienda primero</span>
+      </label>
 
 
       {/* Multi-unidad */}
@@ -873,7 +895,10 @@ export default function ProductsPage() {
                     <div className="flex items-center gap-3">
                       <ProductImage src={p.images?.[0]} className="w-9 h-9 rounded-lg" iconSize={14} />
                       <div>
-                        <p className="font-semibold text-ink-900 text-sm">{p.name}</p>
+                        <p className="font-semibold text-ink-900 text-sm flex items-center gap-1">
+                          {p.is_featured && <Star size={12} className="text-brand-500 fill-brand-500" />}
+                          {p.name}
+                        </p>
                         <p className="text-xs text-ink-400">{p.unit}</p>
                         {hasFeature('tags') && p.tags?.length > 0 && (
                           <div className="flex flex-wrap gap-1 mt-1">

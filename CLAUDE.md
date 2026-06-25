@@ -8,7 +8,15 @@ InventoryAI is a multi-tenant SaaS for inventory management with an AI chat assi
 
 Stack: **FastAPI + Supabase** (backend) · **React + Vite + DaisyUI/Tailwind** (frontend) · **DeepInfra Qwen3** (chat + vision) · **DeepInfra Qwen3-Embedding-8B** (semantic search, 1536d MRL) · LangSmith tracing.
 
-Deployment target: **Render** (backend) + **Vercel** (frontend).
+Deployment target: **Railway** (backend, Dockerfile-based) + **Vercel** (frontend).
+- Backend live at `https://inventoryai-production.up.railway.app` (Root Directory = `backend`, builder = Dockerfile)
+- Frontend live at `https://inventory-ai-ruddy.vercel.app` (Root Directory = `frontend`, framework = Vite)
+- `backend/railway.json` — `startCommand` must use `sh -c "... --port ${PORT:-8000}"` (shell form, so `$PORT` expands)
+- `backend/Dockerfile` `CMD` also uses shell form for the same reason
+- `backend/.dockerignore` excludes `venv/`, `__pycache__/`, `.git/` etc. from the Docker build context
+- Required env vars in Railway: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (must be `service_role`, not `anon`), `DEEPINFRA_API_KEY`, `APP_SECRET_KEY`, `ENVIRONMENT=production`, `FRONTEND_URL` (must match the Vercel URL exactly for CORS), `LANGCHAIN_TRACING_V2`, `RESEND_API_KEY`, `NOTIFICATION_FROM_EMAIL`, `SUPPORT_EMAIL`
+- `email-validator` is required in `requirements.txt` for Pydantic `EmailStr` fields (`auth.LoginRequest`, `ReservationCreate.client_email`, `UserProfileCreate.email`) — easy to miss since it's a transitive dep locally but not in a clean container
+- See `SECURITY_ROADMAP.md` for pending hardening (rate limiting by IP, message length caps, Cloudflare, Redis, billing alerts)
 
 ---
 
@@ -77,7 +85,14 @@ if not company_id:
 | `context/CompanyFeaturesContext.jsx` | Feature flags + currency formatting for admin pages |
 | `services/api.js` | Axios instance with JWT interceptor + GET response cache |
 
-**Feature flags** are stored as `features JSONB` on the `companies` table and exposed via `useCompanyFeatures()`. Every admin page reads flags to show/hide UI. Default features: `physical_location`, `tags`, `barcodes_qr`.
+**Feature flags** are stored as `features JSONB` on the `companies` table and exposed via `useCompanyFeatures()`. Every admin page reads flags to show/hide UI. Default features: `physical_location`, `tags`, `barcodes_qr`, `public_catalog` (see `DEFAULT_FEATURES` in `backend/app/models/schemas.py` and `frontend/src/context/CompanyFeaturesContext.jsx`).
+
+**`public_catalog` feature flag** — lets a company run InventoryAI purely as an internal ERP, hiding its public catalog/chat/reservations.
+- Defaults to `true` when missing (backward compatible).
+- Backend: `app/core/company_features.py` exports `get_active_company(slug)` (404 if company not found/inactive) and `require_public_catalog(company)` (404 if `features.public_catalog === False`). Used by `routers/products.py`, `categories.py`, `reservations.py`, `chat.py` (all message/image/audio/transcribe endpoints) on every public-facing endpoint.
+- `routers/companies.py` `list_companies_public()` (`GET /companies/`, no auth) now also selects `business_type` and `features` so the frontend can read the flag.
+- Frontend: `pages/public/HomePage.jsx` filters companies where `features?.public_catalog === false` out of the public directory entirely. `pages/public/CompanyCatalogPage.jsx` still resolves by slug and shows a "catálogo no disponible" screen if a disabled company's URL is visited directly.
+- Super admin toggle: `pages/superadmin/CompaniesPage.jsx` `FEATURE_LABELS` includes `public_catalog: 'Catálogo público (chat IA, reservas)'`. Fixed: `customFeatures` state now initializes as `{ ...DEFAULT_FEATURES, ...(company.features || {}) }` (imported from `CompanyFeaturesContext.jsx`), so a company with no `public_catalog` key in `features` shows the toggle as ON (matching real backend behavior). The non-custom "Features que se activarán" preview also merges each business-type preset with `DEFAULT_FEATURES` (`{ ...DEFAULT_FEATURES, ...presets[btype] }[key]`) so `public_catalog` shows as active for every sector preset, since none of the hardcoded presets (general/alimentos/farmacia/etc.) explicitly list it.
 
 **Theming:** Each company has a `brand_color` (hex). Applied as CSS `--brand` variable via ThemeProvider. All public-facing pages use this color.
 
@@ -113,6 +128,8 @@ if not company_id:
 **Picking lists:** Generated from reservations, items sorted by warehouse location (aisle/shelf/bin). Employees see both warehouse location and store location.
 
 **AI tools** (visible only to chat): `get_product_detail`, `get_stock_availability` — these expose only `store_location`, never internal warehouse coordinates.
+
+**Chat routing — generic catalog questions vs. institutional info:** "¿Qué me ofreces / qué tienen / qué venden?" must route to `search_products` (broad query) — it's a catalog browse request, NOT institutional. `search_company_info` is reserved for clearly institutional questions (horarios, ubicación, políticas, pagos, envíos). See `SYSTEM_PROMPT` in `chat_agent.py`.
 
 **Dual location:**
 - `aisle/shelf/bin` → warehouse internal, visible to employees and picking

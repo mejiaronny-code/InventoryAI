@@ -4,12 +4,12 @@ Endpoints del chat IA.
 - POST /chat/message → chat de texto (llama-3.3-70b)
 - POST /chat/image → búsqueda por imagen (llama-4-scout, solo cuando hay imagen)
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 import base64
 import imghdr
 import logging
-from datetime import date
+from datetime import date, datetime
 from collections import defaultdict
 import threading
 
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 from app.models.schemas import ChatMessage, ChatResponse
 from app.agents.chat_agent import chat, chat_with_image
 from app.core.supabase_client import supabase
+from app.core.company_features import get_active_company, require_public_catalog
 from app.services.transcription import transcribe_audio, ALLOWED_AUDIO_TYPES, MAX_AUDIO_SIZE
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -33,6 +34,58 @@ _counts_lock = threading.Lock()
 # Cache del límite por empresa para no ir a la DB en cada mensaje
 # { "company_slug": limit_int }  — se invalida al reiniciar el server
 _limit_cache: dict[str, int] = {}
+
+# ── Rate limiter por IP (anti-bot / anti-ráfaga) ──────────────────────
+# Además del tope diario por empresa, limita cuántas peticiones puede hacer
+# UNA misma IP por minuto. Evita que un bot agote la cuota de una empresa
+# legítima en segundos o dispare ráfagas de requests.
+# Estructura: { "ip": { "2024-01-15T14:30": 7 } }
+_IP_LIMIT_PER_MIN = 15
+_ip_counts: dict[str, dict[str, int]] = defaultdict(dict)
+_ip_lock = threading.Lock()
+_ip_request_counter = 0   # para el barrido global periódico
+
+
+def _client_ip(request: Request) -> str:
+    """IP real del cliente. En Railway/Vercel la IP viene en X-Forwarded-For."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_ip_rate_limit(request: Request) -> None:
+    """Lanza HTTP 429 si una IP supera _IP_LIMIT_PER_MIN peticiones por minuto."""
+    global _ip_request_counter
+    ip = _client_ip(request)
+    minute = datetime.utcnow().strftime("%Y-%m-%dT%H:%M")
+
+    with _ip_lock:
+        _ip_request_counter += 1
+        # Barrido global cada 500 requests: borra IPs cuyos conteos ya son viejos,
+        # para no acumular memoria indefinidamente (Redis sería la solución a escala).
+        if _ip_request_counter % 500 == 0:
+            for old_ip in [i for i, b in _ip_counts.items() if all(m != minute for m in b)]:
+                del _ip_counts[old_ip]
+
+        bucket = _ip_counts[ip]
+        # Borrar minutos viejos de esta IP
+        for m in [m for m in bucket if m != minute]:
+            del bucket[m]
+
+        current = bucket.get(minute, 0)
+        if current >= _IP_LIMIT_PER_MIN:
+            raise HTTPException(
+                status_code=429,
+                detail="Demasiadas solicitudes en poco tiempo. "
+                       "Espera un momento e intenta de nuevo.",
+            )
+        bucket[minute] = current + 1
+
+
+# Tope de longitud para textos libres del chat (el schema ya lo aplica al
+# campo `message`; aquí se reutiliza para el `user_text` de la búsqueda por imagen).
+_MAX_CHAT_TEXT_LEN = 2000
 
 
 def _get_daily_limit(company_slug: str) -> int:
@@ -78,8 +131,14 @@ def _check_rate_limit(company_slug: str) -> None:
         company[today] = current + 1
 
 
+def _check_public_catalog(company_slug: str) -> None:
+    """Lanza 404 si la empresa desactivó el catálogo público (incluye el chat IA)."""
+    company = get_active_company(company_slug)
+    require_public_catalog(company)
+
+
 @router.post("/message", response_model=ChatResponse)
-async def send_message(data: ChatMessage):
+async def send_message(data: ChatMessage, request: Request):
     """
     Procesa un mensaje de chat de texto.
     Usa llama-3.3-70b-versatile via Groq.
@@ -87,6 +146,8 @@ async def send_message(data: ChatMessage):
     if not data.message.strip():
         raise HTTPException(400, "El mensaje no puede estar vacío")
 
+    _check_ip_rate_limit(request)
+    _check_public_catalog(data.company_slug)
     _check_rate_limit(data.company_slug)
 
     response, used_tools = await chat(
@@ -104,6 +165,7 @@ async def send_message(data: ChatMessage):
 
 @router.post("/image", response_model=ChatResponse)
 async def send_image_message(
+    request: Request,
     session_id: str = Form(...),
     company_slug: str = Form(...),
     user_text: str = Form(default="¿Qué producto es este y cuánto cuesta?"),
@@ -123,11 +185,16 @@ async def send_image_message(
     if not image.content_type or not image.content_type.startswith("image/"):
         raise HTTPException(400, "El archivo debe ser una imagen")
 
+    if user_text and len(user_text) > _MAX_CHAT_TEXT_LEN:
+        raise HTTPException(400, f"El texto no puede superar {_MAX_CHAT_TEXT_LEN} caracteres")
+
     # Leer y convertir a base64
     image_bytes = await image.read()
     if len(image_bytes) > 10 * 1024 * 1024:  # 10MB máximo
         raise HTTPException(400, "La imagen no puede superar 10MB")
 
+    _check_ip_rate_limit(request)
+    _check_public_catalog(company_slug)
     _check_rate_limit(company_slug)
 
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -150,6 +217,7 @@ async def send_image_message(
 
 @router.post("/audio", response_model=ChatResponse)
 async def send_audio_message(
+    request: Request,
     session_id: str = Form(...),
     company_slug: str = Form(...),
     audio: UploadFile = File(...),
@@ -170,6 +238,8 @@ async def send_audio_message(
       3. Envía el texto transcrito al agente IA (mismo que /chat/message)
       4. Cuenta en el rate limit diario igual que un mensaje de texto
     """
+    _check_ip_rate_limit(request)
+
     # Validar tipo de archivo
     ct = (audio.content_type or "audio/webm").split(";")[0].strip()
     if ct not in ALLOWED_AUDIO_TYPES:
@@ -201,6 +271,7 @@ async def send_audio_message(
         raise HTTPException(status_code=422, detail="No se pudo detectar voz en el audio.")
 
     # Contar en el rate limit (igual que un mensaje de texto)
+    _check_public_catalog(company_slug)
     _check_rate_limit(company_slug)
 
     # Procesar como mensaje de chat normal
@@ -220,6 +291,7 @@ async def send_audio_message(
 
 @router.post("/transcribe")
 async def transcribe_only(
+    request: Request,
     company_slug: str = Form(...),
     audio: UploadFile = File(...),
 ):
@@ -242,6 +314,9 @@ async def transcribe_only(
             detail=f"Formato de audio no soportado: {ct}. "
                    f"Formatos válidos: webm, ogg, mp4, mp3, wav, flac.",
         )
+
+    _check_ip_rate_limit(request)
+    _check_public_catalog(company_slug)
 
     audio_bytes = await audio.read()
     if not audio_bytes:

@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # por este header compartido. Vacío = endpoints de integración deshabilitados.
     integration_service_key: str = ""
 
+    # Margen sobre el costo real de IA que se le muestra a la empresa.
+    # `ai_usage_log.cost_usd` siempre guarda el costo REAL de DeepInfra (para
+    # las métricas internas del super admin); este multiplicador solo se aplica
+    # al número que ve la empresa en su propio dashboard. Configurable por si
+    # se ajusta el margen por plan.
+    ai_cost_multiplier: float = 20.0
+
     class Config:
         env_file = ".env"
         case_sensitive = False

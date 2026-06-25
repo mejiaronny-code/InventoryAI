@@ -202,13 +202,13 @@
 
   /* ── Chat bubble ── */
   .chat-bubble-user {
-    @apply px-4 py-3 rounded-2xl rounded-br-sm text-white text-sm leading-relaxed;
+    @apply px-4 py-3 rounded-2xl rounded-br-sm text-white text-sm leading-relaxed break-words;
     background-color: var(--brand-primary);
   }
 
   .chat-bubble-ai {
-    @apply px-4 py-3 rounded-2xl rounded-bl-sm bg-white border border-ink-100 
-           text-ink-800 text-sm leading-relaxed shadow-sm;
+    @apply px-4 py-3 rounded-2xl rounded-bl-sm bg-white border border-ink-100
+           text-ink-800 text-sm leading-relaxed shadow-sm break-words;
   }
 
   /* ── Stat card ── */

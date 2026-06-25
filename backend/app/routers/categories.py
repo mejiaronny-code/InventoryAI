@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 from app.core.auth import require_admin, require_staff
 from app.core.supabase_client import supabase
+from app.core.company_features import get_active_company, require_public_catalog
 from app.models.schemas import CategoryCreate, CategoryUpdate, CategoryOut
 
 router = APIRouter(prefix="/categories", tags=["categories"])
@@ -12,10 +13,9 @@ router = APIRouter(prefix="/categories", tags=["categories"])
 
 @router.get("/public/{company_slug}", response_model=List[CategoryOut])
 async def list_public_categories(company_slug: str):
-    company = supabase.table("companies").select("id").eq("slug", company_slug).single().execute()
-    if not company.data:
-        raise HTTPException(404, "Empresa no encontrada")
-    result = supabase.table("categories").select("*").eq("company_id", company.data["id"]).execute()
+    company = get_active_company(company_slug)
+    require_public_catalog(company)
+    result = supabase.table("categories").select("*").eq("company_id", company["id"]).execute()
     return result.data or []
 
 

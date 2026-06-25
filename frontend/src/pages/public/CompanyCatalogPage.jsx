@@ -647,6 +647,7 @@ export default function CompanyCatalogPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+  const [catalogDisabled, setCatalogDisabled] = useState(false)
   const [detailProduct, setDetailProduct] = useState(null)
 
   const formatPrice = buildFormatPrice(company?.settings?.currency || 'USD')
@@ -667,6 +668,7 @@ export default function CompanyCatalogPage() {
         const found = r.data.find(c => c.slug === companySlug)
         setCompany(found || null)
         if (!found) setNotFound(true)
+        else if (found.features?.public_catalog === false) setCatalogDisabled(true)
       })
   }, [companySlug])
 
@@ -692,6 +694,15 @@ export default function CompanyCatalogPage() {
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-ink-50">
       <Package size={56} className="text-ink-300" />
       <h2 className="text-xl font-bold text-ink-700">Empresa no encontrada</h2>
+      <button onClick={() => navigate('/')} className="btn-primary">Volver al inicio</button>
+    </div>
+  )
+
+  if (catalogDisabled) return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-ink-50 text-center px-4">
+      <ShoppingBag size={56} className="text-ink-300" />
+      <h2 className="text-xl font-bold text-ink-700">{company?.name}</h2>
+      <p className="text-ink-500 max-w-sm">Esta empresa no tiene un catálogo público disponible.</p>
       <button onClick={() => navigate('/')} className="btn-primary">Volver al inicio</button>
     </div>
   )

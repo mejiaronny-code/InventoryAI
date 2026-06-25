@@ -66,7 +66,7 @@ def _find_auth_user_by_email(email: str) -> dict | None:
 @router.get("/", response_model=List[CompanyOut])
 async def list_companies_public():
     result = supabase.table("companies")\
-        .select("id, name, slug, logo_url, settings, is_active, created_at, subscriptions(status)")\
+        .select("id, name, slug, logo_url, settings, business_type, features, is_active, created_at, subscriptions(status)")\
         .eq("is_active", True)\
         .execute()
     companies = result.data or []

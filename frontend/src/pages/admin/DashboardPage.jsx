@@ -6,7 +6,7 @@ import { dashboardAPI, stockAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
 import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import {
-  Package, CalendarCheck, AlertTriangle, DollarSign,
+  Package, CalendarCheck, AlertTriangle,
   Bell, ArrowRight, RefreshCw, CalendarX2
 } from 'lucide-react'
 import { format, parseISO, differenceInDays } from 'date-fns'
@@ -91,16 +91,10 @@ export default function DashboardPage() {
             <StatCard icon={Package}       label="Productos activos"   value={data.total_products}      sub={`${data.total_stock} en stock`} />
             <StatCard icon={CalendarCheck} label="Reservas activas"    value={data.active_reservations} sub={`${data.monthly_reservations} este mes`} accent />
             <StatCard icon={AlertTriangle} label="Stock bajo mínimo"   value={data.low_stock_products}  sub="requieren atención" />
-            {hasFeature('expiration_dates')
-              ? <StatCard icon={CalendarX2} label="Por vencer (30d)" value={data.expiring_soon ?? 0} sub="próximos 30 días" />
-              : <StatCard icon={DollarSign} label="Costo IA (mes)"   value={`$${data.monthly_ai_cost.toFixed(4)}`} sub="USD · LangSmith" />
-            }
+            {hasFeature('expiration_dates') && (
+              <StatCard icon={CalendarX2} label="Por vencer (30d)" value={data.expiring_soon ?? 0} sub="próximos 30 días" />
+            )}
           </div>
-          {hasFeature('expiration_dates') && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <StatCard icon={DollarSign} label="Costo IA (mes)" value={`$${data.monthly_ai_cost.toFixed(4)}`} sub="USD · LangSmith" />
-            </div>
-          )}
 
           {/* Widget: Productos por vencer */}
           {hasFeature('expiration_dates') && expiring.length > 0 && (

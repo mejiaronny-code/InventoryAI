@@ -12,6 +12,7 @@ import json
 
 from app.core.auth import require_admin, require_staff
 from app.core.supabase_client import supabase
+from app.core.company_features import get_active_company, require_public_catalog
 from app.services.notifications import send_reservation_email
 from app.models.schemas import ReservationCreate, ReservationUpdate
 
@@ -28,18 +29,11 @@ def _generate_code(length: int = 8) -> str:
 async def create_public_reservation(company_slug: str, data: ReservationCreate):
     """Reserva pública creada por el cliente desde el catálogo."""
     # 1. Verificar empresa
-    company = supabase.table("companies")\
-        .select("id, name")\
-        .eq("slug", company_slug)\
-        .eq("is_active", True)\
-        .single()\
-        .execute()
+    company = get_active_company(company_slug, "id, name, features")
+    require_public_catalog(company)
 
-    if not company.data:
-        raise HTTPException(404, "Empresa no encontrada")
-
-    company_id = company.data["id"]
-    company_name = company.data["name"]
+    company_id = company["id"]
+    company_name = company["name"]
 
     # 2. Verificar producto
     product = supabase.table("products")\

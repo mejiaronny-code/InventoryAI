@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 from app.core.auth import require_admin, require_staff, get_current_user
 from app.core.supabase_client import supabase
 from app.core.config import settings
+from app.core.company_features import get_active_company, require_public_catalog
 from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, StockByWarehouse, VariantStockUpsert, VariantStockOut
 from app.embeddings.embedding_service import (
     generate_product_embedding,
@@ -32,17 +33,10 @@ async def list_public_products(
     offset: int = 0,
 ):
     """Lista pública del catálogo de productos por slug de empresa."""
-    company = supabase.table("companies")\
-        .select("id")\
-        .eq("slug", company_slug)\
-        .eq("is_active", True)\
-        .single()\
-        .execute()
+    company = get_active_company(company_slug)
+    require_public_catalog(company)
 
-    if not company.data:
-        raise HTTPException(404, "Empresa no encontrada")
-
-    company_id = company.data["id"]
+    company_id = company["id"]
 
     query = supabase.table("products")\
         .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\
@@ -346,14 +340,8 @@ async def get_variant_stock(product_id: str, user: dict = Depends(require_staff)
 @router.get("/public/{company_slug}/{product_id}/variant-stock")
 async def get_variant_stock_public(company_slug: str, product_id: str):
     """Stock de variantes para el catálogo público."""
-    company = supabase.table("companies")\
-        .select("id")\
-        .eq("slug", company_slug)\
-        .eq("is_active", True)\
-        .single()\
-        .execute()
-    if not company.data:
-        raise HTTPException(404, "Empresa no encontrada")
+    company = get_active_company(company_slug)
+    require_public_catalog(company)
 
     result = supabase.table("product_variants_stock")\
         .select("combination, quantity, warehouse_id")\

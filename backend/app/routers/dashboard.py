@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 from app.core.auth import require_staff, require_super_admin
 from app.core.supabase_client import supabase
+from app.core.config import settings
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -91,7 +92,10 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
         1 for s in stock_data
         if s.get("nearest_expiry") and s["nearest_expiry"] <= cutoff_30d
     )
-    monthly_ai_cost = sum(float(u.get("cost_usd", 0)) for u in (ai_res.data or []))
+    # Costo real de DeepInfra × margen → lo que se le muestra a la empresa.
+    # El costo crudo (cost_usd) se conserva intacto para las métricas del super admin.
+    monthly_ai_cost_raw = sum(float(u.get("cost_usd", 0)) for u in (ai_res.data or []))
+    monthly_ai_cost = monthly_ai_cost_raw * settings.ai_cost_multiplier
 
     return {
         "total_products": total_products,

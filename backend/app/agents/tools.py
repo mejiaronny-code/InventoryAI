@@ -63,23 +63,54 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
           list_warehouses() para obtener el ID correcto.
         """
         try:
-            # 1. Generar embedding de la query
-            query_embedding = await generate_embedding(query)
+            products_map: dict[str, dict] = {}
 
-            # 2. Búsqueda semántica
-            rpc_params = {
-                "query_embedding": query_embedding,
-                "company_id_filter": company_id,
-                "match_threshold": 0.4,
-                "match_count": 10,
-            }
+            # Modo "explorar catálogo": query vacía = no hay un producto específico
+            # en mente (ej. "¿qué me ofreces?"). En vez de forzar una búsqueda
+            # semántica con una frase inventada (que casi nunca matchea nada y
+            # confunde al cliente con un "no tenemos X" sobre algo que nunca
+            # existió), se devuelve una muestra real de productos activos.
+            if not query.strip():
+                # Destacados primero (marcados manualmente por el admin), y se
+                # completa con los más recientes hasta llegar a 10.
+                featured_q = supabase_client.table("products") \
+                    .select("id, name, price, unit, description, tags") \
+                    .eq("company_id", company_id) \
+                    .eq("is_active", True) \
+                    .eq("is_featured", True) \
+                    .order("created_at", desc=True) \
+                    .limit(10) \
+                    .execute()
+                products_map = {p["id"]: p for p in (featured_q.data or [])}
 
-            result = supabase_client.rpc(
-                "search_products_semantic", rpc_params
-            ).execute()
+                if len(products_map) < 10:
+                    recent_q = supabase_client.table("products") \
+                        .select("id, name, price, unit, description, tags") \
+                        .eq("company_id", company_id) \
+                        .eq("is_active", True) \
+                        .order("created_at", desc=True) \
+                        .limit(10) \
+                        .execute()
+                    for p in (recent_q.data or []):
+                        if p["id"] not in products_map and len(products_map) < 10:
+                            products_map[p["id"]] = p
+            else:
+                # 1. Generar embedding de la query
+                query_embedding = await generate_embedding(query)
 
-            semantic_ids = [p["id"] for p in (result.data or [])]
-            products_map = {p["id"]: p for p in (result.data or [])}
+                # 2. Búsqueda semántica
+                rpc_params = {
+                    "query_embedding": query_embedding,
+                    "company_id_filter": company_id,
+                    "match_threshold": 0.4,
+                    "match_count": 10,
+                }
+
+                result = supabase_client.rpc(
+                    "search_products_semantic", rpc_params
+                ).execute()
+
+                products_map = {p["id"]: p for p in (result.data or [])}
 
             # 2b. Fallback keyword — busca por nombre, descripción, usos y TAGS.
             # Quita 's' final para manejar plurales en español (mochilas→mochila)
