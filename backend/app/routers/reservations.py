@@ -254,7 +254,6 @@ async def update_reservation(
             supabase.table("stock_movements").insert({
                 "product_id":   product_id,
                 "warehouse_id": warehouse_id,
-                "company_id":   company_id,
                 "type":         "salida",
                 "quantity":     qty,
                 "notes":        f"Reserva completada{' · ' + notes if notes else ''}",

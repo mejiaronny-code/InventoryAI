@@ -53,6 +53,19 @@ def _client() -> AsyncOpenAI:
 # ── Historial de conversación por sesión ─────────────────────────────
 _history_store: dict[str, list] = {}
 
+# Cuántos mensajes se envían al modelo / se conservan por sesión.
+# Las tools inflan el historial (assistant tool_calls + tool result), así que
+# se necesita una ventana amplia para no perder el contexto del pedido.
+_SEND_WINDOW = 30
+_STORE_LIMIT = 50
+
+def _safe_window(history: list, n: int = _SEND_WINDOW) -> list:
+    """Últimos n mensajes, sin empezar con un 'tool' huérfano (rompería la API)."""
+    win = history[-n:]
+    while win and win[0].get("role") == "tool":
+        win = win[1:]
+    return win
+
 # ── Prompt del sistema ────────────────────────────────────────────────
 SYSTEM_PROMPT = """Eres el asistente de inventario de "{company_name}". Ayudas a clientes a buscar productos, consultar stock y hacer reservas.
 
@@ -83,7 +96,7 @@ PARA RESERVAR: pide primero nombre completo y email. Verifica stock. Solo entonc
 
 Moneda: {currency_info} — usa siempre este símbolo para precios.
 {stock_rule}
-Hoy: {current_datetime} (hora UTC — NO es la hora local del cliente, no la conoces). NUNCA asumas si es de día, tarde o noche para el cliente ni te despidas con "buenas noches/tardes/días" basándote en esta hora — usa despedidas neutrales como "¡Que tengas un buen día!" o simplemente "¡Hasta luego!".
+{menu_section}Hoy: {current_datetime} (hora UTC — NO es la hora local del cliente, no la conoces). NUNCA asumas si es de día, tarde o noche para el cliente ni te despidas con "buenas noches/tardes/días" basándote en esta hora — usa despedidas neutrales como "¡Que tengas un buen día!" o simplemente "¡Hasta luego!".
 """
 
 # ── Definición de tools ──────────────────────────────────────────────
@@ -278,8 +291,11 @@ async def _run_agent(
     ai_rules: list[str] | None = None,
     currency_code: str = "USD",
     show_stock: bool = True,
+    features: dict | None = None,
 ) -> tuple[str, list[str]]:
     """Loop agéntico usando DeepInfra (OpenAI-compatible)."""
+    features = features or {}
+    menu_mode = features.get("menu_mode", False)
     client = _client()
 
     if session_id not in _history_store:
@@ -306,6 +322,49 @@ async def _run_agent(
         "- Puedes mostrar el número exacto de unidades en stock cuando el cliente lo pregunte."
     )
 
+    # Sección de menú (solo restaurantes con menu_mode activo)
+    if menu_mode:
+        menu_section = (
+            "\nMENÚ Y RESTRICCIONES ALIMENTARIAS (este negocio es un restaurante):\n"
+            "- Los productos son platillos del menú. Llama a search_products para mostrarlos.\n"
+            "- Si el cliente pregunta por opciones según una dieta (vegano, vegetariano, sin gluten, keto, etc.) "
+            "o por alérgenos ('¿tienen algo sin lácteos?', '¿qué lleva gluten?'), busca con search_products y "
+            "filtra usando los campos 'Apto:' (dieta) y 'Alérgenos:' de cada platillo. Recomienda SOLO los que "
+            "cumplan, y advierte si un platillo contiene el alérgeno que el cliente quiere evitar.\n"
+            "- NUNCA recomiendes ni ofrezcas un platillo marcado como '⚠️ AGOTADO HOY' — dilo si el cliente lo pide.\n"
+            "- Si el cliente pregunta '¿qué me recomiendas?' o '¿cuál es el platillo del día?', usa search_products "
+            "con query vacía (muestra los destacados primero).\n"
+            "- LENGUAJE NATURAL DE RESTAURANTE: al preguntar cantidades de comida di '¿cuántos quieres?', "
+            "'¿cuántas órdenes?' o '¿cuántas porciones?' — NUNCA digas 'unidades' (suena a inventario, no a comida). "
+            "Habla como un mesero amable, no como un sistema.\n"
+        )
+        # Reservas/pedidos vía chat (solo si el restaurante lo tiene habilitado)
+        if features.get("table_reservations") or features.get("pickup_orders"):
+            modos = []
+            if features.get("table_reservations"):
+                modos.append("reservar mesa para comer ahí")
+            if features.get("pickup_orders"):
+                modos.append("pedir para recoger o pedir desde su mesa")
+            menu_section += (
+                "\nRESERVAS Y PEDIDOS POR CHAT — puedes ayudar al cliente a " + " y ".join(modos) + ":\n"
+                "- ⚠️ Los platillos NO se gestionan por stock. NUNCA digas que un platillo está 'sin stock' ni uses "
+                "get_stock_availability para decidir si se puede pedir: un platillo se puede pedir salvo que diga "
+                "'AGOTADO HOY'. Para tomar el pedido usa SIEMPRE create_booking (NO create_reservation).\n"
+                "- ⚠️ ANTES de create_booking SIEMPRE pide y confirma: (1) NOMBRE real del cliente y "
+                "(2) un teléfono O un email de contacto. NUNCA inventes el nombre ni uses 'Cliente'. "
+                "Si el cliente no te ha dado su nombre y contacto, PÍDESELOS primero.\n"
+                "- Usa la tool create_booking SOLO cuando ya tengas: nombre + contacto, tipo (mesa o recoger), "
+                "fecha y hora, y (si es mesa) número de personas. Si falta algún dato, PÍDELO antes de llamar la tool.\n"
+                "- Para 'pedido desde la mesa' o 'ya estoy aquí', usa service_type='dine_in' con la fecha y hora ACTUAL.\n"
+                "- Si el cliente quiere pre-ordenar platillos, primero búscalos con search_products para obtener su "
+                "[ref:uuid], y pásalos en el parámetro items como 'ref:cantidad' separados por coma.\n"
+                "- Interpreta fechas relativas ('mañana', 'hoy a las 8') usando la fecha/hora de 'Hoy' indicada abajo. "
+                "Confirma con el cliente la fecha y hora exactas antes de crear la reserva.\n"
+                "- Tras crear la reserva, dale SIEMPRE su código al cliente.\n"
+            )
+    else:
+        menu_section = ""
+
     system_msg = {
         "role": "system",
         "content": SYSTEM_PROMPT.format(
@@ -314,10 +373,11 @@ async def _run_agent(
             custom_rules_section=custom_rules_section,
             currency_info=currency_info,
             stock_rule=stock_rule,
+            menu_section=menu_section,
         ),
     }
 
-    tools_list = create_inventory_tools(company_id, supabase, currency_symbol=symbol, show_stock=show_stock)
+    tools_list = create_inventory_tools(company_id, supabase, currency_symbol=symbol, show_stock=show_stock, features=features)
     tool_map = {t.name: t for t in tools_list}
     used_tools: list[str] = []
     total_tokens_in = 0
@@ -328,7 +388,7 @@ async def _run_agent(
         try:
             response = await client.chat.completions.create(
                 model=CHAT_MODEL,
-                messages=[system_msg] + history[-12:],
+                messages=[system_msg] + _safe_window(history),
                 tools=TOOL_DEFINITIONS,
                 tool_choice="auto",
                 max_tokens=768,
@@ -355,8 +415,11 @@ async def _run_agent(
             answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
             # También limpiar líneas que empiezan con patrones de razonamiento interno
             answer = re.sub(r"(?m)^(Okay,|So,|Wait,|Hmm,|Let me|First,|Now,|Looking at).*\n?", "", answer).strip()
+            # Red de seguridad: quitar referencias internas [ref:uuid] que el modelo
+            # a veces filtra al cliente pese a la regla del prompt.
+            answer = re.sub(r"\s*\[ref:[^\]]*\]", "", answer).strip()
             history.append({"role": "assistant", "content": answer})
-            _history_store[session_id] = history[-12:]
+            _history_store[session_id] = history[-_STORE_LIMIT:]
             _log_ai_usage(company_id, session_id, CHAT_MODEL, total_tokens_in, total_tokens_out)
             logger.info(
                 f"Chat completado [{CHAT_MODEL}] — "
@@ -414,7 +477,7 @@ async def _run_agent(
     try:
         final_resp = await client.chat.completions.create(
             model=CHAT_MODEL,
-            messages=[system_msg] + history[-12:] + [{
+            messages=[system_msg] + _safe_window(history) + [{
                 "role": "user",
                 "content": "Resume brevemente qué encontraste o no encontraste. Si no hay productos relevantes, díselo al cliente en una frase corta y amigable.",
             }],
@@ -429,7 +492,7 @@ async def _run_agent(
         answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
         if answer:
             history.append({"role": "assistant", "content": answer})
-            _history_store[session_id] = history[-12:]
+            _history_store[session_id] = history[-_STORE_LIMIT:]
             return answer, used_tools
     except Exception:
         pass
@@ -444,7 +507,7 @@ async def chat(
 ) -> tuple[str, list[str]]:
     """Procesa un mensaje de chat y retorna (respuesta, tools_usados)."""
     company_resp = supabase.table("companies") \
-        .select("id, name, settings") \
+        .select("id, name, settings, features") \
         .eq("slug", company_slug) \
         .eq("is_active", True) \
         .single() \
@@ -457,6 +520,7 @@ async def chat(
     company_id    = company["id"]
     company_name  = company["name"]
     settings_data = company.get("settings") or {}
+    features      = company.get("features") or {}
     ai_rules      = settings_data.get("ai_rules") or []
     currency_code = settings_data.get("currency") or "USD"
     show_stock    = settings_data.get("show_stock", True)
@@ -476,7 +540,7 @@ async def chat(
     try:
         return await _run_agent(
             session_id, message, company_id, company_name,
-            ai_rules, currency_code, show_stock,
+            ai_rules, currency_code, show_stock, features,
         )
     except Exception as e:
         logger.error(f"Error inesperado en chat: {e}")
@@ -696,7 +760,7 @@ async def chat_with_image(
                 "role": "assistant",
                 "content": content,
             })
-            _history_store[session_id] = _history_store[session_id][-12:]
+            _history_store[session_id] = _history_store[session_id][-_STORE_LIMIT:]
 
         # ── CASO 1: Match exacto ───────────────────────────────────────
         if exact_match:

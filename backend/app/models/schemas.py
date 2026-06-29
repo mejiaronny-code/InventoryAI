@@ -63,6 +63,11 @@ DEFAULT_FEATURES = {
     "barcodes_qr":       True,
     "auto_reorder":      False,
     "public_catalog":    True,
+    # Sector restaurantes
+    "menu_mode":          False,  # productos como platillos (alérgenos/dieta/agotado)
+    "recipes":            False,  # insumos + recetas + descuento automático
+    "table_reservations": False,  # reservas de mesa (comer ahí)
+    "pickup_orders":      False,  # pedidos para recoger / pre-orden de platillos
 }
 
 BUSINESS_PRESETS: dict[str, dict] = {
@@ -72,6 +77,10 @@ BUSINESS_PRESETS: dict[str, dict] = {
     "ferreteria":  {**DEFAULT_FEATURES, "multi_unit": True},
     "ropa":        {**DEFAULT_FEATURES, "variants": True},
     "electronica": {**DEFAULT_FEATURES, "serial_numbers": True, "variants": True},
+    "restaurante": {**DEFAULT_FEATURES, "menu_mode": True, "recipes": True,
+                    "table_reservations": True, "pickup_orders": True,
+                    "expiration_dates": True, "batch_tracking": True,
+                    "auto_reorder": True},
     "custom":      {**DEFAULT_FEATURES},
 }
 
@@ -189,6 +198,12 @@ class ProductCreate(BaseModel):
     parent_product_id: Optional[UUID] = None
     variant_attributes: dict = {}
     product_options: List[dict] = []
+    # Sector restaurantes
+    product_type: str = "simple"          # 'simple' | 'dish' | 'ingredient'
+    allergens: List[str] = []
+    dietary: List[str] = []
+    is_available: bool = True             # "agotado hoy" (distinto de is_active)
+    prep_time_minutes: Optional[int] = None
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
@@ -209,6 +224,12 @@ class ProductUpdate(BaseModel):
     units: Optional[List[dict]] = None
     variant_attributes: Optional[dict] = None
     product_options: Optional[List[dict]] = None
+    # Sector restaurantes
+    product_type: Optional[str] = None
+    allergens: Optional[List[str]] = None
+    dietary: Optional[List[str]] = None
+    is_available: Optional[bool] = None
+    prep_time_minutes: Optional[int] = None
 
 class ProductOut(BaseModel):
     id: UUID
@@ -231,6 +252,12 @@ class ProductOut(BaseModel):
     parent_product_id: Optional[UUID] = None
     variant_attributes: dict = {}
     product_options: List[dict] = []
+    # Sector restaurantes
+    product_type: str = "simple"
+    allergens: List[str] = []
+    dietary: List[str] = []
+    is_available: bool = True
+    prep_time_minutes: Optional[int] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -315,6 +342,7 @@ class LocationUpdate(BaseModel):
     shelf: Optional[str] = None
     bin:   Optional[str] = None
     store_location: Optional[str] = None
+    min_stock_alert: Optional[int] = None
 
 class StockMovementCreate(BaseModel):
     product_id: UUID
@@ -334,6 +362,66 @@ class StockMovementOut(BaseModel):
     notes: Optional[str]
     created_by: Optional[UUID]
     created_at: datetime
+
+
+# ============================================================
+# RECIPES (Sector restaurantes)
+# ============================================================
+
+class RecipeItem(BaseModel):
+    ingredient_id: UUID
+    quantity: float = Field(gt=0)   # cuánto del insumo consume 1 platillo
+    unit: Optional[str] = None      # etiqueta informativa (g, ml, pza)
+
+class RecipeUpsert(BaseModel):
+    items: List[RecipeItem] = []
+
+class SaleItem(BaseModel):
+    dish_id: UUID
+    quantity: int = Field(gt=0)
+
+class RegisterSale(BaseModel):
+    items: List[SaleItem]
+    warehouse_id: Optional[UUID] = None  # opcional: de qué almacén descontar insumos
+
+
+# ============================================================
+# TABLES + BOOKINGS (Sector restaurantes)
+# ============================================================
+
+class TableCreate(BaseModel):
+    name: str
+    capacity: int = 2
+    zone: Optional[str] = None
+
+class TableUpdate(BaseModel):
+    name: Optional[str] = None
+    capacity: Optional[int] = None
+    zone: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class BookingItemCreate(BaseModel):
+    dish_id: UUID
+    quantity: int = Field(gt=0, default=1)
+    modifiers: dict = {}
+
+class BookingCreate(BaseModel):
+    service_type: str = "dine_in"           # 'dine_in' | 'pickup'
+    party_size: Optional[int] = None
+    reserved_at: datetime
+    zone: Optional[str] = None
+    table_id: Optional[UUID] = None
+    client_name: str
+    client_email: Optional[EmailStr] = None
+    client_phone: Optional[str] = None
+    notes: Optional[str] = None
+    items: List[BookingItemCreate] = []     # pre-orden opcional
+    website: Optional[str] = None           # honeypot anti-bot (debe venir vacío)
+
+class BookingUpdate(BaseModel):
+    status: Optional[str] = None
+    table_id: Optional[UUID] = None
+    notes: Optional[str] = None
 
 
 # ============================================================

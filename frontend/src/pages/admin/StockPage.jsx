@@ -129,6 +129,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
   const [shelf, setShelf] = useState('')
   const [bin, setBin] = useState('')
   const [storeLocation, setStoreLocation] = useState('')
+  const [minStockAlert, setMinStockAlert] = useState('5')
   const [saving, setSaving] = useState(false)
   const [putawaySuggestion, setPutawaySuggestion] = useState(null)
 
@@ -139,6 +140,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
       setShelf(item.shelf || '')
       setBin(item.bin || '')
       setStoreLocation(item.store_location || '')
+      setMinStockAlert(String(item.min_stock_alert ?? 5))
       setPutawaySuggestion(null)
       // Buscar sugerencia de putaway si no hay ubicación asignada
       if (!item.aisle && !item.shelf && !item.bin) {
@@ -174,6 +176,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
         shelf: shelf || null,
         bin: bin || null,
         store_location: storeLocation || null,
+        min_stock_alert: minStockAlert === '' ? null : parseInt(minStockAlert),
       }))
       await Promise.all(tasks)
       toast.success('Stock actualizado')
@@ -238,6 +241,21 @@ function EditStockModal({ open, onClose, item, onSaved }) {
           <p className="text-xs text-ink-400 text-center">
             Se registrará como <span className="font-semibold text-ink-600">ajuste manual</span> en el historial.
           </p>
+
+          {/* Alerta de stock mínimo */}
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+              Alerta de stock mínimo
+            </label>
+            <input
+              type="number" min="0" value={minStockAlert}
+              onChange={e => setMinStockAlert(e.target.value)}
+              className="input"
+            />
+            <p className="text-[11px] text-ink-400 mt-1">
+              Cuando el stock baje a este número o menos, se genera una alerta y una solicitud de reabastecimiento.
+            </p>
+          </div>
 
           {/* Ubicación de bodega (empleados / picking) */}
           <div className="divider" />
@@ -580,6 +598,8 @@ export default function StockPage() {
         aisle: s.aisle || null,
         shelf: s.shelf || null,
         bin:   s.bin   || null,
+        store_location: s.store_location || null,
+        min_stock_alert: s.min_stock_alert ?? 5,
         nearest_expiry: s.nearest_expiry || null,
       }
     })

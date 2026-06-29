@@ -33,6 +33,8 @@ import ReorderPage from './pages/admin/ReorderPage'
 import ReconciliationPage from './pages/admin/ReconciliationPage'
 import ReportsPage from './pages/admin/ReportsPage'
 import KnowledgeBasePage from './pages/admin/KnowledgeBasePage'
+import TablesPage from './pages/admin/TablesPage'
+import BookingsPage from './pages/admin/BookingsPage'
 
 // Super Admin pages
 import SuperAdminLayout from './components/admin/SuperAdminLayout'
@@ -77,6 +79,8 @@ function AppRoutes() {
         <Route path="warehouses" element={<WarehousesPage />} />
         <Route path="stock" element={<StockPage />} />
         <Route path="reservations" element={<ReservationsPage />} />
+        <Route path="bookings" element={<BookingsPage />} />
+        <Route path="tables" element={<TablesPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="activity" element={<ActivityPage />} />
         <Route path="serials" element={<SerialsPage />} />

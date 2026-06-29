@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react'
 import { dashboardAPI, stockAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
 import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
+import { useRealtimeNotifications, useRealtimeTable } from '../../hooks/useRealtimeNotifications'
 import {
   Package, CalendarCheck, AlertTriangle,
   Bell, ArrowRight, RefreshCw, CalendarX2
@@ -56,7 +57,15 @@ export default function DashboardPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    const interval = setInterval(load, 30000)  // respaldo por polling
+    return () => clearInterval(interval)
+  }, [])
+
+  // Refrescar el dashboard en vivo cuando entra una notificación o reserva nueva
+  useRealtimeNotifications(user?.company_id, () => load())
+  useRealtimeTable('bookings', user?.company_id, () => load())
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -139,7 +148,10 @@ export default function DashboardPage() {
                   <CalendarCheck size={17} className="text-brand-500" />
                   Reservas recientes
                 </h2>
-                <a href="/admin/reservations" className="text-xs text-brand-500 font-semibold hover:text-brand-600 flex items-center gap-1">
+                <a
+                  href={(hasFeature('table_reservations') || hasFeature('pickup_orders')) ? '/admin/bookings' : '/admin/reservations'}
+                  className="text-xs text-brand-500 font-semibold hover:text-brand-600 flex items-center gap-1"
+                >
                   Ver todas <ArrowRight size={12} />
                 </a>
               </div>
@@ -147,7 +159,7 @@ export default function DashboardPage() {
                 {data.recent_reservations.length === 0 ? (
                   <p className="text-center text-ink-400 text-sm py-8">Sin reservas</p>
                 ) : data.recent_reservations.map(r => (
-                  <div key={r.id} className="px-5 py-3.5 flex items-center gap-3">
+                  <div key={r.reservation_code || r.id} className="px-5 py-3.5 flex items-center gap-3">
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-ink-900 text-sm truncate">
                         {r.client_name}

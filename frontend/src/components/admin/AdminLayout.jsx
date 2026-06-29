@@ -4,7 +4,7 @@
  */
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { notificationsAPI, companiesAPI } from '../../services/api'
 import { useRealtimeNotifications } from '../../hooks/useRealtimeNotifications'
 import ChatWidget from '../chat/ChatWidget'
@@ -14,9 +14,63 @@ import {
   LayoutDashboard, Package, Tag, Warehouse, BarChart3,
   CalendarCheck, Bell, Settings, Users, LogOut, Menu, X,
   Zap, AlertTriangle, Activity, Hash, ClipboardList,
-  ShoppingCart, ClipboardCheck, FileBarChart, BookOpen
+  ShoppingCart, ClipboardCheck, FileBarChart, BookOpen,
+  Armchair, CalendarClock
 } from 'lucide-react'
 import clsx from 'clsx'
+import toast from 'react-hot-toast'
+
+// Sonido corto de alerta (Web Audio — sin archivo).
+// Los navegadores bloquean el audio hasta que el usuario interactúa con la
+// página, así que usamos UN solo AudioContext compartido y lo "desbloqueamos"
+// (resume) en el primer clic/tecla. Después suena confiable.
+let _audioCtx = null
+function _getAudioCtx() {
+  if (!_audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (Ctx) _audioCtx = new Ctx()
+  }
+  return _audioCtx
+}
+if (typeof window !== 'undefined') {
+  const _unlock = () => {
+    const ctx = _getAudioCtx()
+    if (ctx && ctx.state === 'suspended') ctx.resume()
+    window.removeEventListener('click', _unlock)
+    window.removeEventListener('keydown', _unlock)
+  }
+  window.addEventListener('click', _unlock)
+  window.addEventListener('keydown', _unlock)
+}
+function playNotificationSound() {
+  try {
+    const ctx = _getAudioCtx()
+    if (!ctx) return
+    if (ctx.state === 'suspended') ctx.resume()
+    const o = ctx.createOscillator()
+    const g = ctx.createGain()
+    o.connect(g); g.connect(ctx.destination)
+    o.type = 'sine'
+    o.frequency.value = 880
+    g.gain.setValueAtTime(0.0001, ctx.currentTime)
+    g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.01)
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35)
+    o.start()
+    o.stop(ctx.currentTime + 0.37)
+  } catch { /* navegador sin soporte de audio — se ignora */ }
+}
+
+// Notificación del sistema operativo (Nivel A): aparece aunque la pestaña del
+// panel esté en segundo plano/minimizada (mientras siga abierta). Solo se
+// muestra cuando la pestaña NO está al frente — si está visible, basta el toast.
+function showSystemNotification(title, body) {
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    if (!document.hidden) return
+    const n = new Notification(title, { body: body || '', tag: 'inventoryai-alert' })
+    n.onclick = () => { try { window.focus() } catch { /* */ } n.close() }
+  } catch { /* navegador sin soporte — se ignora */ }
+}
 
 const navItems = [
   { to: '/admin/dashboard',     icon: LayoutDashboard, label: 'Dashboard',        roles: ['admin','employee'] },
@@ -25,7 +79,9 @@ const navItems = [
   { to: '/admin/warehouses',    icon: Warehouse,       label: 'Almacenes',         roles: ['admin'] },
   { to: '/admin/stock',         icon: BarChart3,       label: 'Stock',             roles: ['admin','employee'] },
   { to: '/admin/serials',       icon: Hash,            label: 'Nros. de serie',    roles: ['admin','employee'], feature: 'serial_numbers' },
-  { to: '/admin/reservations',  icon: CalendarCheck,   label: 'Reservas',          roles: ['admin','employee'] },
+  { to: '/admin/reservations',  icon: CalendarCheck,   label: 'Reservas',          roles: ['admin','employee'], hideAnyFeature: ['table_reservations','pickup_orders'] },
+  { to: '/admin/bookings',      icon: CalendarClock,   label: 'Reservas',          roles: ['admin','employee'], anyFeature: ['table_reservations','pickup_orders'] },
+  { to: '/admin/tables',        icon: Armchair,        label: 'Mesas',             roles: ['admin'], feature: 'table_reservations' },
   { to: '/admin/picking',       icon: ClipboardList,   label: 'Picking',           roles: ['admin','employee'] },
   { to: '/admin/reorder',       icon: ShoppingCart,    label: 'Reabastecimiento',  roles: ['admin'] },
   { to: '/admin/conteo',        icon: ClipboardCheck,  label: 'Conteo cíclico',    roles: ['admin','employee'] },
@@ -51,10 +107,52 @@ export default function AdminLayout() {
   const [companyBusinessType, setCompanyBusinessType] = useState('general')
   const [companyCurrency, setCompanyCurrency] = useState('USD')
 
+  const lastNotifIdRef = useRef(null)
+  const notifInitRef = useRef(false)
+
+  // Revisa notificaciones: actualiza el badge y, si hay una nueva, dispara
+  // toast + sonido. Se llama por polling (cada 20s, red de seguridad si el
+  // Realtime falla) y también desde el Realtime (instantáneo cuando funciona).
+  // El dedup por id de la más reciente evita alertas dobles.
+  const checkNotifications = async () => {
+    try {
+      const res = await notificationsAPI.list()
+      const list = res.data || []
+      setUnreadCount(list.filter(n => !n.read).length)
+      if (list.length === 0) return
+      const sorted = [...list].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+      const newest = sorted[0]
+      if (!notifInitRef.current) {
+        // primera carga: no alertar de lo que ya existía
+        lastNotifIdRef.current = newest.id
+        notifInitRef.current = true
+        return
+      }
+      if (newest.id !== lastNotifIdRef.current) {
+        lastNotifIdRef.current = newest.id
+        const icon = newest.type === 'low_stock' ? '⚠️'
+          : newest.type === 'new_reservation' ? '🍽️'
+          : newest.type === 'reservation_expired' ? '⌛'
+          : '🔔'
+        const title = newest.type === 'low_stock' ? '⚠️ Stock bajo'
+          : newest.type === 'new_reservation' ? '🍽️ Nueva reserva'
+          : newest.type === 'reservation_expired' ? '⌛ Reserva expirada'
+          : '🔔 Notificación'
+        toast(newest.message || 'Nueva notificación', { icon, duration: 6000 })
+        playNotificationSound()
+        showSystemNotification(title, newest.message || '')
+      }
+    } catch { /* ignore */ }
+  }
+
   useEffect(() => {
-    notificationsAPI.list()
-      .then(res => setUnreadCount(res.data.filter(n => !n.read).length))
-      .catch(() => {})
+    // Pedir permiso para notificaciones del sistema (Nivel A)
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        Notification.requestPermission()
+      }
+    } catch { /* navegador sin soporte — se ignora */ }
+    checkNotifications()
     companiesAPI.getMe()
       .then(res => {
         if (res.data?.subscriptions?.status === 'suspended') setSuspended(true)
@@ -67,18 +165,22 @@ export default function AdminLayout() {
         if (res.data?.settings?.currency) setCompanyCurrency(res.data.settings.currency)
       })
       .catch(() => {})
+    // Polling de respaldo cada 20s (funciona aunque el Realtime no entregue)
+    const interval = setInterval(checkNotifications, 20000)
+    return () => clearInterval(interval)
   }, [])
 
-  // Notificaciones en tiempo real via Supabase Realtime
-  useRealtimeNotifications(user?.company_id, () => {
-    setUnreadCount(c => c + 1)
-  })
+  // Realtime: dispara una revisión inmediata (instantáneo cuando funciona)
+  useRealtimeNotifications(user?.company_id, () => checkNotifications())
 
   const handleLogout = () => { logout(); navigate('/admin/login') }
 
   const filteredNav = navItems.filter(item => {
     if (!item.roles.includes(user?.role)) return false
     if (item.feature && companyFeatures && !companyFeatures[item.feature]) return false
+    if (item.hideFeature && companyFeatures && companyFeatures[item.hideFeature]) return false
+    if (item.anyFeature && companyFeatures && !item.anyFeature.some(f => companyFeatures[f])) return false
+    if (item.hideAnyFeature && companyFeatures && item.hideAnyFeature.some(f => companyFeatures[f])) return false
     return true
   })
 

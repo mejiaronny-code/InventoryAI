@@ -30,6 +30,9 @@ from app.routers import (
     dashboard,
     knowledge,
     integrations,
+    recipes,
+    tables,
+    bookings,
 )
 
 logging.basicConfig(
@@ -109,6 +112,9 @@ app.include_router(notifications.router, prefix=API_PREFIX)
 app.include_router(dashboard.router,     prefix=API_PREFIX)
 app.include_router(knowledge.router,     prefix=API_PREFIX)
 app.include_router(integrations.router,  prefix=API_PREFIX)
+app.include_router(recipes.router,       prefix=API_PREFIX)
+app.include_router(tables.router,        prefix=API_PREFIX)
+app.include_router(bookings.router,      prefix=API_PREFIX)
 
 
 # ── HEALTH CHECK ─────────────────────────────────────────────────────

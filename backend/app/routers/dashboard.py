@@ -49,6 +49,9 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
         ai_res,
         recent_res_data,
         notifs_res,
+        active_bk,
+        monthly_bk,
+        recent_bk,
     ) = await asyncio.gather(
         asyncio.to_thread(lambda: supabase.table("product_warehouse_stock")
             .select("quantity, min_stock_alert, nearest_expiry")
@@ -82,6 +85,23 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
             .order("created_at", desc=True)
             .limit(10)
             .execute()),
+        # Reservas de restaurante (bookings) — activas, del mes y recientes
+        asyncio.to_thread(lambda: supabase.table("bookings")
+            .select("id", count="exact")
+            .eq("company_id", company_id)
+            .in_("status", ["pending", "confirmed", "seated", "ready"])
+            .execute()),
+        asyncio.to_thread(lambda: supabase.table("bookings")
+            .select("id", count="exact")
+            .eq("company_id", company_id)
+            .gte("created_at", month_start)
+            .execute()),
+        asyncio.to_thread(lambda: supabase.table("bookings")
+            .select("id, code, client_name, status, created_at, booking_items(products(name))")
+            .eq("company_id", company_id)
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()),
     )
 
     # ── Calcular métricas ──
@@ -97,15 +117,39 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
     monthly_ai_cost_raw = sum(float(u.get("cost_usd", 0)) for u in (ai_res.data or []))
     monthly_ai_cost = monthly_ai_cost_raw * settings.ai_cost_multiplier
 
+    # Normalizar bookings de restaurante al mismo formato que las reservas
+    # para mostrarlos juntos en "Reservas recientes".
+    booking_recent = []
+    for b in (recent_bk.data or []):
+        items = b.get("booking_items") or []
+        names = [ (i.get("products") or {}).get("name") for i in items if i.get("products") ]
+        if names:
+            label = names[0] + (f" +{len(names) - 1}" if len(names) > 1 else "")
+        else:
+            label = "Reserva de mesa"
+        booking_recent.append({
+            "reservation_code": b.get("code"),
+            "client_name": b.get("client_name"),
+            "status": b.get("status"),
+            "created_at": b.get("created_at"),
+            "products": {"name": label},
+        })
+
+    recent_combined = sorted(
+        (recent_res_data.data or []) + booking_recent,
+        key=lambda r: r.get("created_at") or "",
+        reverse=True,
+    )[:10]
+
     return {
         "total_products": total_products,
         "total_stock": total_stock,
-        "active_reservations": active_res.count or 0,
+        "active_reservations": (active_res.count or 0) + (active_bk.count or 0),
         "low_stock_products": low_stock,
         "expiring_soon": expiring_soon,
         "monthly_ai_cost": round(monthly_ai_cost, 4),
-        "monthly_reservations": monthly_res.count or 0,
-        "recent_reservations": recent_res_data.data or [],
+        "monthly_reservations": (monthly_res.count or 0) + (monthly_bk.count or 0),
+        "recent_reservations": recent_combined,
         "recent_notifications": notifs_res.data or [],
     }
 

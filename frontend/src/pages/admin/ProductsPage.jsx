@@ -2,8 +2,8 @@
  * pages/admin/ProductsPage.jsx
  * CRUD completo de productos con generación automática de embeddings.
  */
-import { useState, useEffect, useCallback } from 'react'
-import { productsAPI, categoriesAPI, warehousesAPI, stockAPI, companiesAPI } from '../../services/api'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { productsAPI, categoriesAPI, warehousesAPI, stockAPI, companiesAPI, recipesAPI } from '../../services/api'
 import { useAuth } from '../../context/AuthContext'
 import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import { useDropzone } from 'react-dropzone'
@@ -11,7 +11,7 @@ import toast from 'react-hot-toast'
 import {
   Plus, Search, Pencil, Trash2, Package, X,
   RefreshCw, Loader2, Upload, ImageIcon, Warehouse, Tag,
-  QrCode, Printer, ScanLine, Star
+  QrCode, Printer, ScanLine, Star, ShoppingCart
 } from 'lucide-react'
 import { QRCodeCanvas } from 'qrcode.react'
 import ProductImage from '../../components/shared/ProductImage'
@@ -72,6 +72,142 @@ function TagInput({ tags, onChange }) {
         placeholder={tags.length === 0 ? 'Agregar etiqueta...' : ''}
         className="flex-1 min-w-[100px] bg-transparent outline-none text-xs text-ink-700 placeholder-ink-400"
       />
+    </div>
+  )
+}
+
+// ── Sector restaurantes: catálogos de alérgenos y dieta ───────────────
+const ALLERGEN_OPTIONS = [
+  'Gluten', 'Lácteos', 'Huevo', 'Pescado', 'Mariscos',
+  'Frutos secos', 'Cacahuate', 'Soya', 'Ajonjolí',
+]
+const DIETARY_OPTIONS = [
+  'Vegano', 'Vegetariano', 'Sin gluten', 'Sin lácteos',
+  'Picante', 'Halal', 'Keto',
+]
+
+// Selector de chips de una lista fija (toggle on/off)
+function ChipMultiSelect({ options, selected, onChange, activeClass = 'bg-brand-500 text-white border-brand-500' }) {
+  const toggle = (opt) => {
+    if (selected.includes(opt)) onChange(selected.filter(s => s !== opt))
+    else onChange([...selected, opt])
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map(opt => {
+        const on = selected.includes(opt)
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => toggle(opt)}
+            className={clsx(
+              'px-2.5 py-1 rounded-lg text-xs font-medium border transition-all',
+              on ? activeClass : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300'
+            )}
+          >
+            {opt}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── SearchableSelect: desplegable con buscador ────────────────────────
+function SearchableSelect({ value, options, onChange, placeholder = 'Buscar...' }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const ref = useRef(null)
+  const selected = options.find(o => o.id === value)
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const filtered = query
+    ? options.filter(o => o.name.toLowerCase().includes(query.toLowerCase()))
+    : options
+
+  return (
+    <div className="relative flex-1" ref={ref}>
+      <input
+        className="input text-sm w-full"
+        value={open ? query : (selected?.name || '')}
+        placeholder={selected ? selected.name : placeholder}
+        onFocus={() => { setOpen(true); setQuery('') }}
+        onChange={e => { setQuery(e.target.value); setOpen(true) }}
+      />
+      {open && (
+        <div className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-ink-200 rounded-xl shadow-lg">
+          {filtered.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-ink-400">Sin resultados</p>
+          ) : filtered.map(o => (
+            <button
+              key={o.id}
+              type="button"
+              onClick={() => { onChange(o.id); setOpen(false); setQuery('') }}
+              className={clsx('w-full text-left px-3 py-2 text-sm hover:bg-brand-50 transition-colors',
+                o.id === value ? 'bg-brand-50 text-brand-600 font-medium' : 'text-ink-700')}
+            >
+              {o.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── RecipeEditor (sector restaurantes) ────────────────────────────────
+// items: [{ ingredient_id, quantity, unit }]
+function RecipeEditor({ items, ingredients, onChange }) {
+  const addRow = () => onChange([...items, { ingredient_id: '', quantity: 1, unit: '' }])
+  const updateRow = (i, key, val) => onChange(items.map((r, j) => j === i ? { ...r, [key]: val } : r))
+  const removeRow = (i) => onChange(items.filter((_, j) => j !== i))
+
+  return (
+    <div className="space-y-2">
+      {items.length === 0 && (
+        <p className="text-xs text-ink-400">Sin insumos. Agrega los que consume este platillo para descontarlos al venderlo.</p>
+      )}
+      {items.map((row, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <SearchableSelect
+            value={row.ingredient_id}
+            options={ingredients}
+            onChange={(id) => updateRow(i, 'ingredient_id', id)}
+            placeholder="Buscar insumo..."
+          />
+          <input
+            type="number"
+            min="0"
+            step="any"
+            value={row.quantity}
+            onChange={e => updateRow(i, 'quantity', e.target.value)}
+            className="input text-sm w-20 text-center"
+            placeholder="cant."
+          />
+          <input
+            value={row.unit || ''}
+            onChange={e => updateRow(i, 'unit', e.target.value)}
+            className="input text-sm w-20"
+            placeholder="g/ml/pza"
+          />
+          <button type="button" onClick={() => removeRow(i)} className="p-2 text-red-400 hover:text-red-600 shrink-0">
+            <X size={14} />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={addRow}
+        className="text-xs font-medium text-brand-600 hover:text-brand-700 flex items-center gap-1"
+      >
+        <Plus size={12} /> Agregar insumo
+      </button>
     </div>
   )
 }
@@ -410,8 +546,9 @@ function QRLabelModal({ open, onClose, product, companySlug }) {
   )
 }
 
-function ProductForm({ product, categories, warehouses, onSave, onClose }) {
+function ProductForm({ product, categories, warehouses, ingredients = [], onSave, onClose }) {
   const { hasFeature } = useCompanyFeatures()
+  const [recipe, setRecipe] = useState([])  // [{ ingredient_id, quantity, unit }]
   const [form, setForm] = useState({
     name: product?.name || '',
     description: product?.description || '',
@@ -431,11 +568,30 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
     variant_attributes: product?.variant_attributes || {},
     parent_product_id: product?.parent_product_id || null,
     product_options: product?.product_options || [],
+    // Sector restaurantes
+    product_type: product?.product_type || (hasFeature('menu_mode') ? 'dish' : 'simple'),
+    allergens: product?.allergens || [],
+    dietary: product?.dietary || [],
+    is_available: product?.is_available ?? true,
+    prep_time_minutes: product?.prep_time_minutes ?? null,
   })
   const [barcodeScanOpen, setBarcodeScanOpen] = useState(false)
   const [stockData, setStockData] = useState({ warehouse_id: '', quantity: '', min_stock_alert: 5 })
   const [loading, setLoading] = useState(false)
   const [uploadingImg, setUploadingImg] = useState(false)
+
+  // Cargar receta existente al editar un platillo
+  useEffect(() => {
+    if (product?.id && hasFeature('recipes') && product.product_type === 'dish') {
+      recipesAPI.get(product.id)
+        .then(r => setRecipe((r.data || []).map(it => ({
+          ingredient_id: it.ingredient_id,
+          quantity: it.quantity,
+          unit: it.unit || '',
+        }))))
+        .catch(() => {})
+    }
+  }, [product?.id])
 
   const onDropImage = useCallback(async (acceptedFiles) => {
     const file = acceptedFiles[0]
@@ -500,6 +656,14 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
         })
       }
 
+      // Guardar receta del platillo (sector restaurantes)
+      if (hasFeature('recipes') && form.product_type === 'dish') {
+        const validItems = recipe
+          .filter(r => r.ingredient_id && Number(r.quantity) > 0)
+          .map(r => ({ ingredient_id: r.ingredient_id, quantity: Number(r.quantity), unit: r.unit || null }))
+        await recipesAPI.set(saved.data.id, validItems)
+      }
+
       toast.success(product?.id ? 'Producto actualizado' : 'Producto creado con embedding ✅')
       onSave()
     } catch (err) {
@@ -516,21 +680,26 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Nombre *</label>
           <input value={form.name} onChange={e => handleChange('name', e.target.value)} className="input" required />
         </div>
-        <div>
-          <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Precio de venta</label>
-          <input
-            type="number"
-            step="0.01"
-            min="0"
-            value={form.price}
-            onChange={e => handleChange('price', e.target.value)}
-            onFocus={e => { if (parseFloat(e.target.value) === 0) e.target.select() }}
-            className="input"
-          />
-        </div>
+        {/* Los insumos no se venden al cliente: solo se pide su costo */}
+        {!(hasFeature('menu_mode') && form.product_type === 'ingredient') && (
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Precio de venta</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.price}
+              onChange={e => handleChange('price', e.target.value)}
+              onFocus={e => { if (parseFloat(e.target.value) === 0) e.target.select() }}
+              className="input"
+            />
+          </div>
+        )}
         <div>
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
-            Precio de costo <span className="text-ink-300 font-normal normal-case">(opcional — usado en reportes de valuación)</span>
+            {hasFeature('menu_mode') && form.product_type === 'ingredient'
+              ? <>Costo del insumo <span className="text-ink-300 font-normal normal-case">(lo que te cuesta comprarlo)</span></>
+              : <>Precio de costo <span className="text-ink-300 font-normal normal-case">(opcional — usado en reportes de valuación)</span></>}
           </label>
           <input
             type="number"
@@ -585,9 +754,19 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
         </div>
         <div className="col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
-            Casos de uso <span className="text-brand-500">(afecta búsqueda semántica)</span>
+            {hasFeature('menu_mode') && form.product_type === 'dish' ? 'Ideal para' : 'Casos de uso'} <span className="text-brand-500">(afecta búsqueda semántica)</span>
           </label>
-          <textarea value={form.use_cases} onChange={e => handleChange('use_cases', e.target.value)} rows={2} className="input resize-none" placeholder="¿Para qué se usa este producto?" />
+          <textarea
+            value={form.use_cases}
+            onChange={e => handleChange('use_cases', e.target.value)}
+            rows={2}
+            className="input resize-none"
+            placeholder={
+              hasFeature('menu_mode') && form.product_type === 'dish'
+                ? 'Ocasiones, antojos o maridaje (ej. para compartir, cena ligera, marida con vino blanco)'
+                : '¿Para qué se usa este producto?'
+            }
+          />
         </div>
         <div className="col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
@@ -604,6 +783,106 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
             Etiquetas <span className="text-ink-400 font-normal normal-case">· Enter o coma para agregar</span>
           </label>
           <TagInput tags={form.tags} onChange={v => handleChange('tags', v)} />
+        </div>
+      )}
+
+      {/* Sector restaurantes: campos de menú */}
+      {hasFeature('menu_mode') && (
+        <div className="space-y-4 p-4 rounded-xl border border-brand-100 bg-brand-50/40">
+          <p className="text-xs font-bold text-brand-600 uppercase tracking-wide">Menú</p>
+
+          {/* Tipo: platillo vs insumo */}
+          <div>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Tipo</label>
+            <div className="flex gap-2">
+              {[
+                { v: 'dish', label: '🍽️ Platillo' },
+                { v: 'ingredient', label: '🥫 Insumo' },
+              ].map(({ v, label }) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => handleChange('product_type', v)}
+                  className={clsx(
+                    'px-3 py-1.5 rounded-lg text-sm font-medium border transition-all',
+                    form.product_type === v ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300'
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-ink-400 mt-1">
+              Los insumos llevan stock y se consumen vía recetas. Los platillos se muestran en el menú.
+            </p>
+          </div>
+
+          {/* Campos solo para platillos */}
+          {form.product_type !== 'ingredient' && (
+            <>
+              <div>
+                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Alérgenos</label>
+                <ChipMultiSelect
+                  options={ALLERGEN_OPTIONS}
+                  selected={form.allergens}
+                  onChange={v => handleChange('allergens', v)}
+                  activeClass="bg-red-500 text-white border-red-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Dieta</label>
+                <ChipMultiSelect
+                  options={DIETARY_OPTIONS}
+                  selected={form.dietary}
+                  onChange={v => handleChange('dietary', v)}
+                  activeClass="bg-green-600 text-white border-green-600"
+                />
+              </div>
+
+              <div className="flex items-center gap-4 flex-wrap">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <div
+                    onClick={() => handleChange('is_available', !form.is_available)}
+                    className={clsx(
+                      'w-9 h-5 rounded-full transition-colors shrink-0 relative cursor-pointer',
+                      form.is_available ? 'bg-green-500' : 'bg-ink-300'
+                    )}
+                  >
+                    <span className={clsx(
+                      'absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform',
+                      form.is_available ? 'translate-x-4' : 'translate-x-0.5'
+                    )} />
+                  </div>
+                  <span className="text-sm font-medium text-ink-700">
+                    {form.is_available ? 'Disponible hoy' : 'Agotado hoy'}
+                  </span>
+                </label>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-ink-500 uppercase tracking-wide">Prep (min)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.prep_time_minutes ?? ''}
+                    onChange={e => handleChange('prep_time_minutes', e.target.value === '' ? null : Number(e.target.value))}
+                    className="input w-20 text-center"
+                    placeholder="—"
+                  />
+                </div>
+              </div>
+
+              {/* Receta: insumos que consume el platillo */}
+              {hasFeature('recipes') && (
+                <div>
+                  <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                    Receta <span className="text-ink-400 font-normal normal-case">· insumos que se descuentan al vender</span>
+                  </label>
+                  <RecipeEditor items={recipe} ingredients={ingredients} onChange={setRecipe} />
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -691,8 +970,8 @@ function ProductForm({ product, categories, warehouses, onSave, onClose }) {
         <p className="text-xs text-ink-400">PNG, JPG, WEBP · máx 5MB por imagen</p>
       </div>
 
-      {/* Stock inicial (solo creación) */}
-      {!product?.id && warehouses.length > 0 && (
+      {/* Stock inicial (solo creación) — los platillos no llevan stock, solo los insumos/productos */}
+      {!product?.id && warehouses.length > 0 && form.product_type !== 'dish' && (
         <div className="border border-brand-100 bg-brand-50 rounded-xl p-4 space-y-3">
           <p className="text-xs font-bold text-brand-700 uppercase tracking-wide">Stock inicial (opcional)</p>
           <div className="grid grid-cols-2 gap-3">
@@ -779,6 +1058,79 @@ function StockDetailModal({ open, onClose, product, warehouses }) {
   )
 }
 
+// ── Modal: registrar venta/consumo del día (descuenta insumos) ────────
+function RegisterSaleModal({ dishes, onClose, onDone }) {
+  const [rows, setRows] = useState([{ dish_id: '', quantity: 1 }])
+  const [saving, setSaving] = useState(false)
+
+  const addRow = () => setRows([...rows, { dish_id: '', quantity: 1 }])
+  const updateRow = (i, key, val) => setRows(rows.map((r, j) => j === i ? { ...r, [key]: val } : r))
+  const removeRow = (i) => setRows(rows.filter((_, j) => j !== i))
+
+  const submit = async () => {
+    const items = rows
+      .filter(r => r.dish_id && Number(r.quantity) > 0)
+      .map(r => ({ dish_id: r.dish_id, quantity: parseInt(r.quantity) }))
+    if (items.length === 0) { toast.error('Agrega al menos un platillo'); return }
+    setSaving(true)
+    try {
+      const res = await recipesAPI.registerSale(items)
+      const d = res.data
+      let msg = 'Venta registrada ✅'
+      if (d.platillos_sin_receta?.length) msg += ` · Sin receta: ${d.platillos_sin_receta.join(', ')}`
+      if (d.faltantes?.length) {
+        toast(`⚠️ Insumos insuficientes: ${d.faltantes.map(f => f.ingredient).join(', ')}`, { icon: '⚠️' })
+      }
+      toast.success(msg)
+      onDone?.()
+      onClose()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Error al registrar la venta')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-ink-500">
+        Registra los platillos vendidos. Se descontarán automáticamente los insumos de cada receta.
+      </p>
+      <div className="space-y-2">
+        {rows.map((row, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <SearchableSelect
+              value={row.dish_id}
+              options={dishes}
+              onChange={(id) => updateRow(i, 'dish_id', id)}
+              placeholder="Buscar platillo..."
+            />
+            <input
+              type="number"
+              min="1"
+              value={row.quantity}
+              onChange={e => updateRow(i, 'quantity', e.target.value)}
+              className="input text-sm w-20 text-center"
+            />
+            <button type="button" onClick={() => removeRow(i)} className="p-2 text-red-400 hover:text-red-600 shrink-0">
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+        <button type="button" onClick={addRow} className="text-xs font-medium text-brand-600 hover:text-brand-700 flex items-center gap-1">
+          <Plus size={12} /> Agregar platillo
+        </button>
+      </div>
+      <div className="flex gap-2 justify-end pt-2 border-t border-ink-100">
+        <button onClick={onClose} className="btn-ghost">Cancelar</button>
+        <button onClick={submit} disabled={saving} className="btn-primary">
+          {saving ? <Loader2 size={16} className="animate-spin" /> : 'Registrar venta'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function ProductsPage() {
   const { user } = useAuth()
   const { hasFeature, formatPrice } = useCompanyFeatures()
@@ -786,11 +1138,13 @@ export default function ProductsPage() {
   const [categories, setCategories] = useState([])
   const [warehouses, setWarehouses] = useState([])
   const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState('all') // all | dish | ingredient (solo restaurante)
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null) // null | 'create' | product obj
   const [stockModal, setStockModal] = useState(null) // product obj para ver desglose
   const [confirmDelete, setConfirmDelete] = useState(null) // null | { id, name }
   const [qrModal, setQrModal] = useState(null) // null | product obj
+  const [saleModalOpen, setSaleModalOpen] = useState(false)
   const [companySlug, setCompanySlug] = useState('')
 
   const load = () => {
@@ -831,17 +1185,52 @@ export default function ProductsPage() {
   }
 
   const isAdmin = user?.role === 'admin'
+  const menuMode = hasFeature('menu_mode')
+
+  // En modo restaurante, filtrar por tipo (platillos / insumos)
+  const visibleProducts = menuMode && typeFilter !== 'all'
+    ? products.filter(p => (p.product_type || 'simple') === typeFilter)
+    : products
 
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between">
-        <h1 className="page-title">Productos</h1>
+        <h1 className="page-title">{menuMode ? 'Menú' : 'Productos'}</h1>
         {isAdmin && (
-          <button onClick={() => setModal('create')} className="btn-primary">
-            <Plus size={16} /> Nuevo producto
-          </button>
+          <div className="flex gap-2">
+            {menuMode && hasFeature('recipes') && (
+              <button onClick={() => setSaleModalOpen(true)} className="btn-ghost border border-ink-200">
+                <ShoppingCart size={16} /> Registrar venta
+              </button>
+            )}
+            <button onClick={() => setModal('create')} className="btn-primary">
+              <Plus size={16} /> {menuMode ? 'Nuevo platillo/insumo' : 'Nuevo producto'}
+            </button>
+          </div>
         )}
       </div>
+
+      {/* Filtro Platillos / Insumos (solo restaurante) */}
+      {menuMode && (
+        <div className="flex gap-2">
+          {[
+            { v: 'all', label: 'Todos' },
+            { v: 'dish', label: '🍽️ Platillos' },
+            { v: 'ingredient', label: '🥫 Insumos' },
+          ].map(({ v, label }) => (
+            <button
+              key={v}
+              onClick={() => setTypeFilter(v)}
+              className={clsx(
+                'px-3 py-1.5 rounded-lg text-sm font-medium border transition-all',
+                typeFilter === v ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Search */}
       <div className="flex flex-wrap gap-3 items-center">
@@ -861,7 +1250,7 @@ export default function ProductsPage() {
         </div>
         {!loading && (
           <span className="text-sm text-ink-400 shrink-0">
-            {products.length} resultado{products.length !== 1 ? 's' : ''}
+            {visibleProducts.length} resultado{visibleProducts.length !== 1 ? 's' : ''}
           </span>
         )}
       </div>
@@ -885,9 +1274,9 @@ export default function ProductsPage() {
               [...Array(5)].map((_, i) => (
                 <tr key={i}><td colSpan={7}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>
               ))
-            ) : products.length === 0 ? (
-              <tr><td colSpan={7} className="text-center py-12 text-ink-400">Sin productos</td></tr>
-            ) : products.map(p => {
+            ) : visibleProducts.length === 0 ? (
+              <tr><td colSpan={7} className="text-center py-12 text-ink-400">{menuMode ? 'Sin platillos ni insumos' : 'Sin productos'}</td></tr>
+            ) : visibleProducts.map(p => {
               const cat = categories.find(c => c.id === p.category_id)
               return (
                 <tr key={p.id}>
@@ -897,7 +1286,11 @@ export default function ProductsPage() {
                       <div>
                         <p className="font-semibold text-ink-900 text-sm flex items-center gap-1">
                           {p.is_featured && <Star size={12} className="text-brand-500 fill-brand-500" />}
+                          {menuMode && p.product_type === 'ingredient' && <span title="Insumo">🥫</span>}
                           {p.name}
+                          {menuMode && p.product_type !== 'ingredient' && p.is_available === false && (
+                            <span className="px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-[10px] font-semibold">Agotado hoy</span>
+                          )}
                         </p>
                         <p className="text-xs text-ink-400">{p.unit}</p>
                         {hasFeature('tags') && p.tags?.length > 0 && (
@@ -917,13 +1310,18 @@ export default function ProductsPage() {
                   <td><span className="text-xs text-ink-600">{cat?.name || '—'}</span></td>
                   <td><span className="font-semibold text-brand-600">{formatPrice(p.price)}</span></td>
                   <td>
-                    <button
-                      onClick={() => setStockModal(p)}
-                      title="Ver stock por almacén"
-                      className={clsx('badge cursor-pointer hover:opacity-80 transition-opacity', (p.total_stock || 0) > 0 ? 'badge-green' : 'badge-red')}
-                    >
-                      {p.total_stock || 0}
-                    </button>
+                    {menuMode && p.product_type === 'dish' ? (
+                      // Los platillos no llevan stock; su disponibilidad es "agotado hoy"
+                      <span className="text-xs text-ink-400">—</span>
+                    ) : (
+                      <button
+                        onClick={() => setStockModal(p)}
+                        title="Ver stock por almacén"
+                        className={clsx('badge cursor-pointer hover:opacity-80 transition-opacity', (p.total_stock || 0) > 0 ? 'badge-green' : 'badge-red')}
+                      >
+                        {p.total_stock || 0}
+                      </button>
+                    )}
                   </td>
                   <td>
                     <span className={clsx('badge', p.is_active ? 'badge-green' : 'badge-gray')}>
@@ -959,17 +1357,27 @@ export default function ProductsPage() {
       <Modal
         open={!!modal}
         onClose={() => setModal(null)}
-        title={modal === 'create' ? 'Nuevo producto' : `Editar: ${modal?.name}`}
+        title={modal === 'create' ? (menuMode ? 'Nuevo platillo/insumo' : 'Nuevo producto') : `Editar: ${modal?.name}`}
       >
         <ProductForm
           product={modal === 'create' ? null : modal}
           categories={categories}
           warehouses={warehouses}
+          ingredients={products.filter(p => p.product_type === 'ingredient')}
           onSave={() => {
             setModal(null)
             load()
           }}
           onClose={() => setModal(null)}
+        />
+      </Modal>
+
+      {/* Modal registrar venta (descuenta insumos) */}
+      <Modal open={saleModalOpen} onClose={() => setSaleModalOpen(false)} title="Registrar venta del día">
+        <RegisterSaleModal
+          dishes={products.filter(p => p.product_type === 'dish')}
+          onClose={() => setSaleModalOpen(false)}
+          onDone={load}
         />
       </Modal>
 

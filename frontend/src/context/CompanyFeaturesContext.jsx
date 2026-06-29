@@ -17,6 +17,11 @@ const DEFAULT_FEATURES = {
   barcodes_qr:       true,
   auto_reorder:      false,
   public_catalog:    true,
+  // Sector restaurantes
+  menu_mode:          false,
+  recipes:            false,
+  table_reservations: false,
+  pickup_orders:      false,
 }
 
 // ── Catálogo de monedas ───────────────────────────────────────────────

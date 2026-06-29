@@ -33,6 +33,7 @@ const BUSINESS_TYPES = [
   { value: 'ferreteria',  label: 'Ferretería',   emoji: '🔧' },
   { value: 'ropa',        label: 'Ropa',          emoji: '👕' },
   { value: 'electronica', label: 'Electrónica',  emoji: '💻' },
+  { value: 'restaurante', label: 'Restaurante',   emoji: '🍽️' },
   { value: 'custom',      label: 'Personalizado', emoji: '⚙️' },
 ]
 
@@ -47,6 +48,10 @@ const FEATURE_LABELS = {
   barcodes_qr:       'Códigos QR / Barras',
   auto_reorder:      'Reorden automático',
   public_catalog:    'Catálogo público (chat IA, reservas)',
+  menu_mode:          'Menú/Platillos (alérgenos, dieta, agotado)',
+  recipes:            'Insumos + recetas (descuento automático)',
+  table_reservations: 'Reservas de mesa (comer ahí)',
+  pickup_orders:      'Pedidos para recoger / pre-orden',
 }
 
 function BusinessTypeModal({ company, onClose, onSaved }) {
@@ -123,6 +128,7 @@ function BusinessTypeModal({ company, onClose, onSaved }) {
                   ferreteria:  { physical_location:true, tags:true, barcodes_qr:true, multi_unit:true },
                   ropa:        { physical_location:true, tags:true, barcodes_qr:true, variants:true },
                   electronica: { physical_location:true, tags:true, barcodes_qr:true, serial_numbers:true, variants:true },
+                  restaurante: { physical_location:true, tags:true, barcodes_qr:true, expiration_dates:true, batch_tracking:true, auto_reorder:true, menu_mode:true, recipes:true, table_reservations:true, pickup_orders:true },
                 }
                 const on = { ...DEFAULT_FEATURES, ...presets[btype] }[key] || false
                 return (

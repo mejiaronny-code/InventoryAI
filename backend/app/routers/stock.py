@@ -359,6 +359,8 @@ async def update_location(data: LocationUpdate, user: dict = Depends(require_sta
         "bin":            data.bin            or None,
         "store_location": data.store_location or None,
     }
+    if data.min_stock_alert is not None:
+        update_fields["min_stock_alert"] = data.min_stock_alert
     existing = supabase.table("product_warehouse_stock")\
         .select("id")\
         .eq("product_id", data.product_id)\

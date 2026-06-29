@@ -241,6 +241,35 @@ export const stockAPI = {
 }
 
 // ============================================================
+// RECIPES (sector restaurantes)
+// ============================================================
+export const recipesAPI = {
+  get: (dishId) => api.get(`/recipes/${dishId}`),
+  set: (dishId, items) => api.put(`/recipes/${dishId}`, { items }),
+  registerSale: (items, warehouseId = null) =>
+    api.post('/recipes/register-sale', { items, warehouse_id: warehouseId }),
+}
+
+// ============================================================
+// TABLES + BOOKINGS (sector restaurantes)
+// ============================================================
+export const tablesAPI = {
+  list: () => api.get('/tables/'),
+  listPublic: (slug) => api.get(`/tables/public/${slug}`),
+  create: (data) => api.post('/tables/', data),
+  update: (id, data) => api.patch(`/tables/${id}`, data),
+  delete: (id) => api.delete(`/tables/${id}`),
+}
+
+export const bookingsAPI = {
+  list: (params) => api.get('/bookings/', { params }),
+  createPublic: (slug, data) => api.post(`/bookings/public/${slug}`, data),
+  getPublic: (code, slug) => api.get(`/bookings/public/${code}`, { params: { company_slug: slug } }),
+  update: (id, data) => api.patch(`/bookings/${id}`, data),
+  cleanup: () => api.delete('/bookings/cleanup'),
+}
+
+// ============================================================
 // BATCHES
 // ============================================================
 export const batchesAPI = {

@@ -12,12 +12,13 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
-def create_inventory_tools(company_id: str, supabase_client, currency_symbol: str = "$", show_stock: bool = True):
+def create_inventory_tools(company_id: str, supabase_client, currency_symbol: str = "$", show_stock: bool = True, features: dict | None = None):
     """
     Factory que crea los tools del agente inyectando el company_id.
     Esto garantiza que el agente SOLO accede al inventario de esa empresa.
     """
     from app.embeddings.embedding_service import generate_embedding
+    features = features or {}
 
     @tool
     async def list_warehouses() -> str:
@@ -78,6 +79,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                     .eq("company_id", company_id) \
                     .eq("is_active", True) \
                     .eq("is_featured", True) \
+                    .neq("product_type", "ingredient") \
                     .order("created_at", desc=True) \
                     .limit(10) \
                     .execute()
@@ -88,6 +90,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                         .select("id, name, price, unit, description, tags") \
                         .eq("company_id", company_id) \
                         .eq("is_active", True) \
+                        .neq("product_type", "ingredient") \
                         .order("created_at", desc=True) \
                         .limit(10) \
                         .execute()
@@ -175,12 +178,34 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
 
             products = list(products_map.values())
 
+            # Cargar tipo y disponibilidad de los candidatos en una sola consulta.
+            # Insumos (product_type='ingredient') son inventario interno → se excluyen.
+            # Platillos (product_type='dish') NO se rigen por stock: su disponibilidad
+            # es el flag is_available ("agotado hoy"), no la cantidad en almacén.
+            meta_map: dict[str, dict] = {}
+            if products:
+                try:
+                    meta_res = supabase_client.table("products")\
+                        .select("id, product_type, is_available")\
+                        .in_("id", [p["id"] for p in products])\
+                        .execute()
+                    meta_map = {r["id"]: r for r in (meta_res.data or [])}
+                    products = [
+                        p for p in products
+                        if meta_map.get(p["id"], {}).get("product_type") != "ingredient"
+                    ]
+                except Exception:
+                    pass  # si falla, no rompe la búsqueda
+
             if not products:
                 return "No encontré productos que coincidan con tu búsqueda."
 
-            # 3. Obtener stock con ubicación por almacén
+            # 3. Determinar disponibilidad: platillos por is_available, el resto por stock
             available = []
             for p in products:
+                meta = meta_map.get(p["id"], {})
+                is_dish = meta.get("product_type") == "dish"
+
                 stock_q = supabase_client.table("product_warehouse_stock")\
                     .select("quantity, warehouse_id, store_location, warehouses(name)")\
                     .eq("product_id", p["id"])\
@@ -193,6 +218,15 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                     stock_rows = [s for s in stock_rows if s["warehouse_id"] == warehouse_id]
 
                 total_stock = sum(s["quantity"] for s in stock_rows if s["quantity"] > 0)
+
+                if is_dish:
+                    # Un platillo no se gestiona por stock; se ofrece salvo "agotado hoy"
+                    if meta.get("is_available") is False:
+                        continue
+                    p["total_stock"] = None        # no aplica
+                    p["stock_rows"] = stock_rows    # solo para mostrar ubicación si la hay
+                    available.append(p)
+                    continue
 
                 # Si stock general = 0, revisar si hay variant stock
                 # (puede pasar si el sync falló pero las variantes tienen cantidad)
@@ -231,7 +265,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
             top_ids = [p["id"] for p in top]
             try:
                 prod_res = supabase_client.table("products")\
-                    .select("id, images, product_options")\
+                    .select("id, images, product_options, allergens, dietary, is_available, prep_time_minutes, product_type")\
                     .in_("id", top_ids)\
                     .execute()
                 prod_extra = {r["id"]: r for r in (prod_res.data or [])}
@@ -280,9 +314,14 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                         loc_line += f" — 📍 {store_loc}"
                     loc_lines.append(loc_line)
 
-                stock_block = "\n".join(loc_lines) if loc_lines else (
-                    f"  Stock: {p['total_stock']} unidades" if show_stock else "  Stock: disponible"
-                )
+                # Los platillos (total_stock=None) no muestran stock; su disponibilidad
+                # ya se filtró por "agotado hoy". Solo se muestran sus ubicaciones si las hay.
+                if p.get("total_stock") is None:
+                    stock_block = "\n".join(loc_lines) if loc_lines else "  Disponible"
+                else:
+                    stock_block = "\n".join(loc_lines) if loc_lines else (
+                        f"  Stock: {p['total_stock']} unidades" if show_stock else "  Stock: disponible"
+                    )
 
                 # Opciones del producto (Color, Talla, etc.) con stock por valor
                 product_options = extra.get("product_options") or []
@@ -317,12 +356,30 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 else:
                     options_block = "  [Sin opciones de color/talla/variante registradas]\n"
 
+                # Info de menú (restaurante): alérgenos, dieta, disponibilidad, prep
+                menu_lines = ""
+                allergens = extra.get("allergens") or []
+                dietary = extra.get("dietary") or []
+                if allergens:
+                    menu_lines += f"  Alérgenos: {', '.join(allergens)}\n"
+                if dietary:
+                    menu_lines += f"  Apto: {', '.join(dietary)}\n"
+                if extra.get("is_available") is False:
+                    menu_lines += "  ⚠️ AGOTADO HOY — no disponible\n"
+                if extra.get("prep_time_minutes"):
+                    menu_lines += f"  Tiempo de preparación: {extra['prep_time_minutes']} min\n"
+
+                # Los platillos muestran solo el precio (sin "/ unidad")
+                is_dish = extra.get("product_type") == "dish"
+                price_line = (f"  Precio: {currency_symbol}{price_fmt}\n" if is_dish
+                              else f"  Precio: {currency_symbol}{price_fmt} / {p['unit']}\n")
                 lines.append(
                     f"• **{p['name']}** [ref:{p['id']}]\n"
                     f"{img_line}"
-                    f"  Precio: {currency_symbol}{price_fmt} / {p['unit']}\n"
+                    f"{price_line}"
                     f"{stock_block}\n"
                     + (options_block)
+                    + menu_lines
                     + (f"  Etiquetas: {tags_str}\n" if tags_str else "")
                 )
             return "\n".join(lines)
@@ -423,13 +480,31 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
             price_fmt = f"{float(p['price']):,.2f}"
             imgs = p.get("images") or []
             img_line = f"![{p['name']}]({imgs[0]})\n" if imgs else ""
+
+            # Info de menú (restaurante): alérgenos, dieta, disponibilidad, prep
+            menu_block = ""
+            allergens = p.get("allergens") or []
+            dietary = p.get("dietary") or []
+            if allergens:
+                menu_block += f"Alérgenos: {', '.join(allergens)}\n"
+            if dietary:
+                menu_block += f"Apto para: {', '.join(dietary)}\n"
+            if p.get("is_available") is False:
+                menu_block += "⚠️ AGOTADO HOY — este platillo no está disponible hoy.\n"
+            if p.get("prep_time_minutes"):
+                menu_block += f"Tiempo de preparación: {p['prep_time_minutes']} min\n"
+
+            is_dish = p.get("product_type") == "dish"
+            price_line = (f"Precio: {currency_symbol}{price_fmt}\n" if is_dish
+                          else f"Precio: {currency_symbol}{price_fmt} / {p['unit']}\n")
             return (
                 f"**{p['name']}**\n"
                 f"{img_line}"
                 f"SKU: {p.get('sku', 'N/A')} | Código: {p.get('barcode', 'N/A')}\n"
-                f"Precio: {currency_symbol}{price_fmt} / {p['unit']}\n"
+                f"{price_line}"
                 f"Categoría: {cat.get('name', 'Sin categoría')}\n"
                 + (f"Etiquetas: {tags_str}\n" if tags_str else "")
+                + (menu_block if menu_block else "")
                 + f"\nDescripción: {p.get('description', 'Sin descripción')}\n\n"
                 f"Usos: {p.get('use_cases', 'No especificado')}\n\n"
                 + (options_lines + "\n" if options_lines else "")
@@ -450,6 +525,19 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
         Úsalo antes de crear una reserva para confirmar disponibilidad.
         """
         try:
+            # Los platillos NO se gestionan por stock: su disponibilidad es el
+            # flag is_available ("agotado hoy"). No revisar product_warehouse_stock.
+            prod_meta = supabase_client.table("products")\
+                .select("product_type, is_available, name")\
+                .eq("id", product_id)\
+                .eq("company_id", company_id)\
+                .maybe_single().execute()
+            meta = prod_meta.data if prod_meta and prod_meta.data else {}
+            if meta.get("product_type") == "dish":
+                if meta.get("is_available") is False:
+                    return f"{meta.get('name', 'El platillo')} está AGOTADO HOY."
+                return f"{meta.get('name', 'El platillo')} está disponible. Procede a tomar el pedido con create_booking."
+
             # Stock total
             stock_result = supabase_client.table("product_warehouse_stock")\
                 .select("quantity, warehouse_id, store_location, warehouses(name)")\
@@ -698,24 +786,64 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
     @tool
     async def get_reservation_status(reservation_code: str) -> str:
         """
-        Consulta el estado actual de una reserva por su código.
-        Úsalo cuando el cliente pregunta por su reserva.
+        Consulta el estado actual de una reserva/pedido por su código.
+        Úsalo cuando el cliente pregunta cómo va su reserva o pedido.
+        Funciona tanto para reservas de mesa/pedidos de restaurante como para
+        reservas de producto.
         """
         try:
-            result = supabase_client.table("reservations")\
-                .select("*, products(name, unit), warehouses(name)")\
-                .eq("reservation_code", reservation_code.upper())\
+            code = reservation_code.upper().strip()
+
+            # 1. Buscar primero en bookings (reservas/pedidos de restaurante)
+            bk = supabase_client.table("bookings")\
+                .select("*, restaurant_tables(name, zone), booking_items(quantity, products(name))")\
+                .eq("code", code)\
                 .eq("company_id", company_id)\
-                .single()\
-                .execute()
+                .maybe_single().execute()
+            if bk and bk.data:
+                b = bk.data
+                bk_status = {
+                    "pending":   "📥 Recibido — esperando confirmación del restaurante",
+                    "confirmed": "✅ Aceptado",
+                    "preparing": "👨‍🍳 En preparación",
+                    "ready":     "🛍️ Listo",
+                    "completed": "🎉 Entregado",
+                    "cancelled": "❌ Cancelado",
+                    "no_show":   "🚫 No se presentó",
+                    "seated":    "🍽️ En mesa",
+                }
+                tipo = "Mesa (comer aquí)" if b["service_type"] == "dine_in" else "Para recoger"
+                items = b.get("booking_items") or []
+                items_str = ", ".join(
+                    f"{i['quantity']}× {(i.get('products') or {}).get('name', 'platillo')}" for i in items
+                ) if items else "—"
+                table = (b.get("restaurant_tables") or {}).get("name") or b.get("zone") or ""
+                lines = [
+                    f"**Reserva {code}**",
+                    f"Estado: {bk_status.get(b['status'], b['status'])}",
+                    f"Tipo: {tipo}",
+                    f"Cliente: {b['client_name']}",
+                ]
+                if b["service_type"] == "dine_in" and b.get("party_size"):
+                    lines.append(f"Personas: {b['party_size']}")
+                if table:
+                    lines.append(f"Ubicación: {table}")
+                lines.append(f"Fecha/hora: {b['reserved_at'][:16].replace('T', ' ')}")
+                lines.append(f"Platillos: {items_str}")
+                return "\n".join(lines)
 
-            if not result.data:
-                return f"No encontré la reserva con código {reservation_code}."
+            # 2. Si no es booking, buscar en reservations (producto)
+            res_q = supabase_client.table("reservations")\
+                .select("*, products(name, unit), warehouses(name)")\
+                .eq("reservation_code", code)\
+                .eq("company_id", company_id)\
+                .maybe_single().execute()
+            if not (res_q and res_q.data):
+                return f"No encontré ninguna reserva con código {reservation_code}."
 
-            res = result.data
+            res = res_q.data
             product = res.get("products") or {}
             warehouse = res.get("warehouses") or {}
-
             status_map = {
                 "pending": "⏳ Pendiente de confirmación",
                 "confirmed": "✅ Confirmada",
@@ -723,15 +851,13 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 "cancelled": "❌ Cancelada",
                 "expired": "⌛ Expirada",
             }
-
             return (
-                f"**Reserva {reservation_code}**\n\n"
+                f"**Reserva {code}**\n\n"
                 f"Estado: {status_map.get(res['status'], res['status'])}\n"
                 f"Producto: {product.get('name', 'N/A')} x{res['quantity']} {product.get('unit', '')}\n"
                 f"Almacén: {warehouse.get('name', 'N/A')}\n"
                 f"Cliente: {res['client_name']}\n"
                 f"Creada: {res['created_at'][:16].replace('T', ' ')}\n"
-                f"Expira: {res['expires_at'][:16].replace('T', ' ')} UTC\n"
             )
 
         except Exception as e:
@@ -919,12 +1045,172 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
             logger.error(f"Error en search_company_info: {e}")
             return "No pude consultar la información de la empresa en este momento."
 
-    return [
+    @tool
+    async def create_booking(
+        client_name: str,
+        service_type: str,
+        reserved_at: str,
+        party_size: Optional[int] = None,
+        client_phone: Optional[str] = None,
+        client_email: Optional[str] = None,
+        zone: Optional[str] = None,
+        items: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> str:
+        """
+        Crea una reserva de mesa o un pedido para recoger/desde la mesa (restaurantes).
+        Úsalo SOLO cuando el cliente quiera reservar/pedir y ya tengas TODOS los datos.
+        OBLIGATORIO antes de llamar: nombre real del cliente + un teléfono o email.
+        NUNCA inventes el nombre ni uses "Cliente" — pídeselo.
+
+        Parámetros:
+        - client_name: nombre REAL del cliente (OBLIGATORIO — pídelo, no lo inventes).
+        - service_type: "dine_in" (comer ahí / desde la mesa) o "pickup" (para recoger).
+        - reserved_at: fecha y hora en formato ISO 8601 (ej. "2026-06-27T20:00:00").
+          Para un pedido inmediato desde la mesa, usa la fecha y hora actual.
+        - party_size: número de personas (solo para dine_in).
+        - client_phone: teléfono del cliente.
+        - client_email: email del cliente. Se requiere AL MENOS teléfono O email.
+        - zone: zona preferida si el cliente la menciona (opcional).
+        - items: platillos a pre-ordenar como "UUID:cantidad" separados por coma.
+          Usa SOLO el UUID que va dentro de [ref:UUID] (sin la palabra "ref").
+          Ej. si search_products devolvió [ref:a1b2c3...], escribe "a1b2c3...:2".
+        - notes: notas como alergias u ocasión especial (opcional).
+        """
+        try:
+            if service_type not in ("dine_in", "pickup"):
+                return "Tipo de servicio inválido. Usa 'dine_in' o 'pickup'."
+            if service_type == "dine_in" and not features.get("table_reservations"):
+                return "Este restaurante no acepta reservas de mesa."
+            if service_type == "pickup" and not features.get("pickup_orders"):
+                return "Este restaurante no acepta pedidos para recoger."
+
+            # Exigir nombre real (no inventado) y un contacto
+            _generic = {"", "cliente", "anonimo", "anónimo", "sin nombre", "n/a", "na", "invitado"}
+            if not client_name or client_name.strip().lower() in _generic:
+                return ("Falta el NOMBRE real del cliente. Pídeselo amablemente antes de "
+                        "crear la reserva — no inventes un nombre ni uses 'Cliente'.")
+            if not (client_phone and client_phone.strip()) and not (client_email and client_email.strip()):
+                return ("Falta un dato de contacto. Pídele al cliente su teléfono o su email "
+                        "antes de crear la reserva.")
+
+            # Validar fecha
+            try:
+                dt = datetime.fromisoformat(reserved_at.replace("Z", "+00:00"))
+            except Exception:
+                return "La fecha/hora no es válida. Pídela de nuevo al cliente."
+
+            from datetime import timezone, timedelta
+            now_utc = datetime.now(timezone.utc)
+            dt_cmp = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            if dt_cmp < now_utc - timedelta(minutes=10):
+                return "Esa fecha ya pasó. Pídele al cliente una fecha futura."
+            if dt_cmp > now_utc + timedelta(days=90):
+                return "Solo se puede reservar hasta 90 días a futuro."
+
+            # Topar cantidad si la dieron absurda
+            if party_size is not None and party_size > 100:
+                return "El número de personas parece demasiado alto. Confírmalo con el cliente."
+
+            # Código único
+            import secrets, string
+            def _gen():
+                return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+            code = _gen()
+            for _ in range(5):
+                ex = supabase_client.table("bookings").select("id").eq("code", code).execute()
+                if not ex.data:
+                    break
+                code = _gen()
+
+            booking = supabase_client.table("bookings").insert({
+                "company_id":   company_id,
+                "code":         code,
+                "service_type": service_type,
+                "party_size":   party_size if service_type == "dine_in" else None,
+                "reserved_at":  dt.isoformat(),
+                "zone":         zone,
+                "client_name":  client_name,
+                "client_phone": client_phone,
+                "client_email": client_email,
+                "status":       "pending",
+                "notes":        notes,
+            }).execute()
+            if not booking.data:
+                return "No pude crear la reserva. Intenta de nuevo."
+            booking_id = booking.data[0]["id"]
+
+            # Pre-orden de platillos. El modelo puede mandar el id en varios
+            # formatos ("ref:UUID:1", "UUID:1", "UUID x1"...), así que extraemos
+            # el UUID y la cantidad con regex en vez de partir por ":".
+            ordered = []
+            if items:
+                import re as _re
+                uuid_re = _re.compile(
+                    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+                )
+                rows = []
+                for part in items.split(",")[:30]:  # tope de líneas distintas
+                    m = uuid_re.search(part)
+                    if not m:
+                        continue
+                    ref = m.group(0)
+                    qn = _re.search(r"(\d+)", part[m.end():])  # cantidad tras el UUID
+                    qty = int(qn.group(1)) if qn else 1
+                    qty = max(1, min(qty, 50))  # cantidad razonable por platillo
+                    try:
+                        dish = supabase_client.table("products")\
+                            .select("name, price")\
+                            .eq("id", ref)\
+                            .eq("company_id", company_id)\
+                            .maybe_single().execute()
+                    except Exception:
+                        dish = None
+                    if dish and dish.data:
+                        rows.append({
+                            "booking_id": booking_id,
+                            "dish_id":    ref,
+                            "quantity":   qty,
+                            "unit_price": dish.data.get("price"),
+                        })
+                        ordered.append(f"{qty}× {dish.data['name']}")
+                if rows:
+                    supabase_client.table("booking_items").insert(rows).execute()
+
+            # Notificar al staff — con detalle útil (mesa/zona + platillos)
+            tipo = "Mesa" if service_type == "dine_in" else "Para recoger"
+            partes = [f"🍽️ {tipo} — {client_name}"]
+            if service_type == "dine_in" and party_size:
+                partes.append(f"{party_size} pers.")
+            if zone:
+                partes.append(f"📍 {zone}")
+            if ordered:
+                partes.append("· " + ", ".join(ordered))
+            partes.append(f"(Código: {code})")
+            supabase_client.table("notifications").insert({
+                "company_id": company_id,
+                "type": "new_reservation",
+                "message": " ".join(partes),
+                "target_role": "all",
+                "metadata": {"booking_id": booking_id, "code": code},
+            }).execute()
+
+            resumen = f"✅ ¡Reserva creada! Código: **{code}**."
+            if service_type == "dine_in" and party_size:
+                resumen += f" Mesa para {party_size}."
+            if ordered:
+                resumen += f" Pre-orden: {', '.join(ordered)}."
+            resumen += " Guarda tu código para consultarla."
+            return resumen
+        except Exception as e:
+            logger.error(f"Error en create_booking: {e}")
+            return "No pude crear la reserva en este momento."
+
+    tools = [
         list_warehouses,
         search_products,
         get_product_detail,
         get_stock_availability,
-        create_reservation,
         cancel_reservation,
         get_reservation_status,
         get_expiring_products,
@@ -932,3 +1218,14 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
         find_serial_number,
         search_company_info,
     ]
+
+    # En restaurantes (menu_mode) los productos son platillos sin stock, así que
+    # NO se usa create_reservation (flujo de reserva de stock). Se usa create_booking.
+    if not features.get("menu_mode"):
+        tools.insert(4, create_reservation)
+
+    # Tool de reservas/pedidos solo si el restaurante lo tiene habilitado
+    if features.get("table_reservations") or features.get("pickup_orders"):
+        tools.append(create_booking)
+
+    return tools

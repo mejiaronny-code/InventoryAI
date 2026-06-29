@@ -41,7 +41,8 @@ async def list_public_products(
     query = supabase.table("products")\
         .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\
         .eq("company_id", company_id)\
-        .eq("is_active", True)
+        .eq("is_active", True)\
+        .neq("product_type", "ingredient")  # los insumos son internos, nunca públicos
 
     if category_id:
         query = query.eq("category_id", category_id)
@@ -77,7 +78,7 @@ async def list_products(
     company_id = user["company_id"]
 
     query = supabase.table("products")\
-        .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\
+        .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, store_location, min_stock_alert, nearest_expiry)")\
         .eq("company_id", company_id)
 
     if category_id:

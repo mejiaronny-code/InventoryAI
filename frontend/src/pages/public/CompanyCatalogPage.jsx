@@ -4,14 +4,15 @@
  */
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { productsAPI, categoriesAPI, companiesAPI, reservationsAPI } from '../../services/api'
+import { productsAPI, categoriesAPI, companiesAPI, reservationsAPI, tablesAPI, bookingsAPI } from '../../services/api'
 import ChatWidget from '../../components/chat/ChatWidget'
 import ProductImage from '../../components/shared/ProductImage'
 import ThemeProvider from '../../components/shared/ThemeProvider'
 import {
   Search, Package, Tag, ChevronLeft, ChevronRight,
   ShoppingBag, Zap, X, ShoppingCart, CheckCircle2,
-  Loader2, Phone, Mail, User, Hash, FileText, Minus, Plus, MapPin
+  Loader2, Phone, Mail, User, Hash, FileText, Minus, Plus, MapPin,
+  CalendarClock, Utensils, Users
 } from 'lucide-react'
 import clsx from 'clsx'
 import { CURRENCIES } from '../../context/CompanyFeaturesContext'
@@ -254,14 +255,21 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
                     <p className="text-3xl font-extrabold text-brand-600">
                       {formatPrice ? formatPrice(displayPrice) : `$${displayPrice.toLocaleString()}`}
                     </p>
-                    <p className="text-xs text-ink-400 mt-0.5">por {displayUnit}</p>
+                    {activeProduct.product_type !== 'dish' && <p className="text-xs text-ink-400 mt-0.5">por {displayUnit}</p>}
                   </div>
-                  <div className={clsx('badge text-sm px-3 py-1',
-                    totalStock > 0 ? 'badge-green' : 'badge-red')}>
-                    {totalStock > 0
-                      ? showStock ? `${totalStock} en stock` : 'En stock'
-                      : 'Sin stock'}
-                  </div>
+                  {activeProduct.product_type === 'dish' ? (
+                    <div className={clsx('badge text-sm px-3 py-1',
+                      activeProduct.is_available === false ? 'badge-red' : 'badge-green')}>
+                      {activeProduct.is_available === false ? 'Agotado hoy' : 'Disponible'}
+                    </div>
+                  ) : (
+                    <div className={clsx('badge text-sm px-3 py-1',
+                      totalStock > 0 ? 'badge-green' : 'badge-red')}>
+                      {totalStock > 0
+                        ? showStock ? `${totalStock} en stock` : 'En stock'
+                        : 'Sin stock'}
+                    </div>
+                  )}
                 </div>
 
                 {/* Opciones: Color, Talla, etc. */}
@@ -350,10 +358,12 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
                   </div>
                 )}
 
-                {/* Usos */}
+                {/* Usos / Ideal para (platillos) */}
                 {product.use_cases && (
                   <div className="bg-brand-50 rounded-xl p-3 border border-brand-100">
-                    <p className="text-xs font-semibold text-brand-700 mb-1">Usos recomendados</p>
+                    <p className="text-xs font-semibold text-brand-700 mb-1">
+                      {product.product_type === 'dish' ? 'Ideal para' : 'Usos recomendados'}
+                    </p>
                     <p className="text-xs text-brand-600 leading-relaxed">{product.use_cases}</p>
                   </div>
                 )}
@@ -393,19 +403,30 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
                   ⚠️ Elige {options.filter(o => !selectedOptions[o.name]).map(o => o.name.toLowerCase()).join(' y ')} antes de reservar
                 </p>
               )}
-              <button
-                onClick={() => setStep('form')}
-                disabled={totalStock === 0 || (options.length > 0 && options.some(o => !selectedOptions[o.name]))}
-                className={clsx(
-                  'w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-base transition-all',
-                  totalStock > 0 && !(options.length > 0 && options.some(o => !selectedOptions[o.name]))
-                    ? 'bg-brand-500 hover:bg-brand-600 text-white shadow-md hover:shadow-lg active:scale-[0.98]'
-                    : 'bg-ink-100 text-ink-400 cursor-not-allowed'
-                )}
-              >
-                <ShoppingCart size={18} />
-                {totalStock === 0 ? 'Sin stock disponible' : 'Reservar producto'}
-              </button>
+              {activeProduct.product_type === 'dish' ? (
+                // Los platillos se ordenan/reservan por el chat (pre-orden y mesa llegan en R3)
+                <div className="w-full text-center py-3 px-4 rounded-2xl bg-brand-50 border border-brand-100">
+                  <p className="text-sm font-semibold text-brand-600">
+                    {activeProduct.is_available === false
+                      ? 'No disponible hoy'
+                      : '🍽️ Pregunta o reserva por el chat'}
+                  </p>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setStep('form')}
+                  disabled={totalStock === 0 || (options.length > 0 && options.some(o => !selectedOptions[o.name]))}
+                  className={clsx(
+                    'w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-base transition-all',
+                    totalStock > 0 && !(options.length > 0 && options.some(o => !selectedOptions[o.name]))
+                      ? 'bg-brand-500 hover:bg-brand-600 text-white shadow-md hover:shadow-lg active:scale-[0.98]'
+                      : 'bg-ink-100 text-ink-400 cursor-not-allowed'
+                  )}
+                >
+                  <ShoppingCart size={18} />
+                  {totalStock === 0 ? 'Sin stock disponible' : 'Reservar producto'}
+                </button>
+              )}
             </div>
           </>
         )}
@@ -580,6 +601,239 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
 }
 
 /* ── Card del producto (simplificada) ────────────────────────────── */
+// ── DishSearchAdd: buscador para agregar platillos a la pre-orden ──────
+function DishSearchAdd({ dishes, onPick }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const filtered = query
+    ? dishes.filter(d => d.name.toLowerCase().includes(query.toLowerCase()))
+    : dishes
+
+  return (
+    <div className="relative mb-2" ref={ref}>
+      <input
+        className="input"
+        value={query}
+        placeholder="+ Buscar y agregar platillo…"
+        onFocus={() => setOpen(true)}
+        onChange={e => { setQuery(e.target.value); setOpen(true) }}
+      />
+      {open && (
+        <div className="absolute z-30 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-ink-200 rounded-xl shadow-lg">
+          {filtered.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-ink-400">Sin resultados</p>
+          ) : filtered.map(d => (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => { onPick(d.id); setQuery(''); setOpen(false) }}
+              className="w-full text-left px-3 py-2 text-sm text-ink-700 hover:bg-brand-50 transition-colors"
+            >
+              {d.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── BookingModal: reserva de mesa / pedido para recoger ───────────────
+function BookingModal({ companySlug, dishes, formatPrice, allowDineIn = true, allowPickup = true, onClose }) {
+  const serviceOptions = [
+    allowDineIn && { v: 'dine_in', label: 'Comer aquí', icon: Utensils },
+    allowPickup && { v: 'pickup', label: 'Para recoger', icon: ShoppingBag },
+  ].filter(Boolean)
+  const [serviceType, setServiceType] = useState(serviceOptions[0]?.v || 'dine_in')
+  const [zones, setZones] = useState([])
+  const [form, setForm] = useState({
+    reserved_date: '', reserved_time: '',
+    party_size: 2, zone: '',
+    client_name: '', client_email: '', client_phone: '', notes: '',
+    website: '', // honeypot anti-bot (oculto)
+  })
+  const [preorder, setPreorder] = useState([]) // [{ dish_id, quantity }]
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [code, setCode] = useState(null)
+
+  useEffect(() => {
+    tablesAPI.listPublic(companySlug).then(r => {
+      const z = [...new Set((r.data || []).map(t => t.zone).filter(Boolean))]
+      setZones(z)
+    }).catch(() => {})
+  }, [companySlug])
+
+  const addDish = (dishId) => {
+    if (!dishId) return
+    setPreorder(prev => {
+      const ex = prev.find(p => p.dish_id === dishId)
+      if (ex) return prev.map(p => p.dish_id === dishId ? { ...p, quantity: p.quantity + 1 } : p)
+      return [...prev, { dish_id: dishId, quantity: 1 }]
+    })
+  }
+  const setQty = (dishId, q) => setPreorder(prev =>
+    q <= 0 ? prev.filter(p => p.dish_id !== dishId) : prev.map(p => p.dish_id === dishId ? { ...p, quantity: q } : p))
+
+  const submit = async () => {
+    setError('')
+    if (!form.client_name.trim()) { setError('Ingresa tu nombre'); return }
+    if (!form.client_phone.trim() && !form.client_email.trim()) {
+      setError('Pon un teléfono o email de contacto'); return
+    }
+    if (!form.reserved_date || !form.reserved_time) { setError('Elige fecha y hora'); return }
+    const reserved_at = new Date(`${form.reserved_date}T${form.reserved_time}`)
+    if (isNaN(reserved_at.getTime())) { setError('Fecha/hora inválida'); return }
+
+    setSaving(true)
+    try {
+      const res = await bookingsAPI.createPublic(companySlug, {
+        service_type: serviceType,
+        party_size: serviceType === 'dine_in' ? Number(form.party_size) : null,
+        reserved_at: reserved_at.toISOString(),
+        zone: form.zone || null,
+        client_name: form.client_name,
+        client_email: form.client_email || null,
+        client_phone: form.client_phone || null,
+        notes: form.notes || null,
+        website: form.website || null,
+        items: preorder.map(p => ({ dish_id: p.dish_id, quantity: p.quantity })),
+      })
+      setCode(res.data.code)
+    } catch (e) {
+      setError(e.response?.data?.detail || 'No se pudo crear la reserva')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[92vh] overflow-y-auto">
+        <div className="sticky top-0 bg-white flex items-center justify-between p-5 border-b border-ink-100">
+          <h3 className="text-lg font-bold text-ink-900">Reservar</h3>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
+        </div>
+
+        {code ? (
+          <div className="p-8 text-center space-y-3">
+            <CheckCircle2 size={48} className="text-green-500 mx-auto" />
+            <h4 className="text-lg font-bold text-ink-900">¡Reserva confirmada!</h4>
+            <p className="text-sm text-ink-500">Tu código de reserva es:</p>
+            <p className="text-2xl font-extrabold text-brand-600 font-mono tracking-wider">{code}</p>
+            <button onClick={onClose} className="btn-primary mt-2">Listo</button>
+          </div>
+        ) : (
+          <div className="p-5 space-y-4">
+            {/* Tipo de servicio (solo si hay más de una opción) */}
+            {serviceOptions.length > 1 && (
+              <div className="grid grid-cols-2 gap-2">
+                {serviceOptions.map(({ v, label, icon: Icon }) => (
+                  <button
+                    key={v}
+                    onClick={() => setServiceType(v)}
+                    className={clsx('flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-all',
+                      serviceType === v ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200')}
+                  >
+                    <Icon size={15} /> {label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Fecha y hora */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Fecha</label>
+                <input type="date" value={form.reserved_date} onChange={e => setForm(f => ({ ...f, reserved_date: e.target.value }))} className="input" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Hora</label>
+                <input type="time" value={form.reserved_time} onChange={e => setForm(f => ({ ...f, reserved_time: e.target.value }))} className="input" />
+              </div>
+            </div>
+
+            {/* Personas + zona (solo comer aquí) */}
+            {serviceType === 'dine_in' && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Personas</label>
+                  <input type="number" min="1" value={form.party_size} onChange={e => setForm(f => ({ ...f, party_size: e.target.value }))} className="input" />
+                </div>
+                {zones.length > 0 && (
+                  <div>
+                    <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Zona</label>
+                    <select value={form.zone} onChange={e => setForm(f => ({ ...f, zone: e.target.value }))} className="input">
+                      <option value="">Cualquiera</option>
+                      {zones.map(z => <option key={z} value={z}>{z}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Honeypot anti-bot: invisible para humanos; si un bot lo llena, se rechaza */}
+            <input
+              type="text" name="website" tabIndex={-1} autoComplete="off" aria-hidden="true"
+              value={form.website}
+              onChange={e => setForm(f => ({ ...f, website: e.target.value }))}
+              style={{ position: 'absolute', left: '-9999px', width: 1, height: 1, opacity: 0 }}
+            />
+
+            {/* Datos del cliente */}
+            <div>
+              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Nombre *</label>
+              <input value={form.client_name} onChange={e => setForm(f => ({ ...f, client_name: e.target.value }))} className="input" placeholder="Tu nombre" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <input value={form.client_phone} onChange={e => setForm(f => ({ ...f, client_phone: e.target.value }))} className="input" placeholder="Teléfono *" />
+              <input value={form.client_email} onChange={e => setForm(f => ({ ...f, client_email: e.target.value }))} className="input" placeholder="Email" />
+            </div>
+            <p className="text-[11px] text-ink-400 -mt-2">Pon al menos un teléfono o email de contacto.</p>
+
+            {/* Pre-orden de platillos */}
+            {dishes.length > 0 && (
+              <div className="border-t border-ink-100 pt-3">
+                <p className="text-xs font-semibold text-ink-500 uppercase tracking-wide mb-2">Pre-ordenar platillos (opcional)</p>
+                <DishSearchAdd dishes={dishes} onPick={addDish} />
+                {preorder.map(p => {
+                  const dish = dishes.find(d => d.id === p.dish_id)
+                  return (
+                    <div key={p.dish_id} className="flex items-center justify-between gap-2 py-1.5">
+                      <span className="text-sm text-ink-700 flex-1">{dish?.name}</span>
+                      <span className="text-xs text-ink-400">{formatPrice ? formatPrice(dish?.price) : dish?.price}</span>
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => setQty(p.dish_id, p.quantity - 1)} className="w-6 h-6 rounded-lg bg-ink-100 flex items-center justify-center"><Minus size={12} /></button>
+                        <span className="text-sm font-semibold w-5 text-center">{p.quantity}</span>
+                        <button onClick={() => setQty(p.dish_id, p.quantity + 1)} className="w-6 h-6 rounded-lg bg-ink-100 flex items-center justify-center"><Plus size={12} /></button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} className="input resize-none" placeholder="Notas (alergias, ocasión especial…)" />
+
+            {error && <p className="text-sm text-red-500">{error}</p>}
+
+            <button onClick={submit} disabled={saving} className="btn-primary w-full justify-center py-3">
+              {saving ? <Loader2 size={18} className="animate-spin" /> : 'Confirmar reserva'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ProductCard({ product, variants = [], formatPrice, showStock, onOpen }) {
   const imgs = product.images || []
   const totalStock = product.total_stock || 0
@@ -614,11 +868,18 @@ function ProductCard({ product, variants = [], formatPrice, showStock, onOpen })
             <p className="text-lg font-extrabold text-brand-600">
               {formatPrice ? formatPrice(Number(product.price)) : `$${Number(product.price).toLocaleString()}`}
             </p>
-            <p className="text-[10px] text-ink-400">por {product.unit}</p>
+            {product.product_type !== 'dish' && <p className="text-[10px] text-ink-400">por {product.unit}</p>}
           </div>
-          <div className={clsx('badge text-[10px]', totalStock > 0 ? 'badge-green' : 'badge-red')}>
-            {totalStock > 0 ? (showStock ? `${totalStock}` : '✓') : '✗'}
-          </div>
+          {product.product_type === 'dish' ? (
+            // Los platillos no llevan stock; su disponibilidad es "agotado hoy"
+            product.is_available === false
+              ? <div className="badge text-[10px] badge-red">Agotado hoy</div>
+              : <div className="badge text-[10px] badge-green">✓</div>
+          ) : (
+            <div className={clsx('badge text-[10px]', totalStock > 0 ? 'badge-green' : 'badge-red')}>
+              {totalStock > 0 ? (showStock ? `${totalStock}` : '✓') : '✗'}
+            </div>
+          )}
         </div>
 
         {/* Tags */}
@@ -649,6 +910,7 @@ export default function CompanyCatalogPage() {
   const [notFound, setNotFound] = useState(false)
   const [catalogDisabled, setCatalogDisabled] = useState(false)
   const [detailProduct, setDetailProduct] = useState(null)
+  const [bookingOpen, setBookingOpen] = useState(false)
 
   const formatPrice = buildFormatPrice(company?.settings?.currency || 'USD')
   const showStock = company?.settings?.show_stock ?? true
@@ -730,6 +992,15 @@ export default function CompanyCatalogPage() {
               <Zap size={10} className="text-brand-500" /> Chat IA disponible
             </p>
           </div>
+          {(company?.features?.table_reservations || company?.features?.pickup_orders) && (
+            <button
+              onClick={() => setBookingOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold text-white bg-brand-500 px-3 py-1.5 rounded-full hover:bg-brand-600 transition-colors"
+            >
+              <CalendarClock size={13} />
+              {company?.features?.table_reservations ? 'Reservar' : 'Ordenar'}
+            </button>
+          )}
           <button
             onClick={() => navigate(`/${companySlug}/mis-reservas`)}
             className="flex items-center gap-1.5 text-xs text-brand-600 bg-brand-50 px-3 py-1.5 rounded-full border border-brand-100 hover:bg-brand-100 transition-colors"
@@ -834,6 +1105,18 @@ export default function CompanyCatalogPage() {
           companySlug={companySlug}
           categoryMaxQty={categories.find(c => c.id === detailProduct.category_id)?.max_reservation_qty ?? null}
           onClose={() => setDetailProduct(null)}
+        />
+      )}
+
+      {/* Reserva de mesa / pedido (sector restaurantes) */}
+      {bookingOpen && (
+        <BookingModal
+          companySlug={companySlug}
+          dishes={products.filter(p => p.product_type === 'dish' && p.is_available !== false)}
+          formatPrice={formatPrice}
+          allowDineIn={!!company?.features?.table_reservations}
+          allowPickup={!!company?.features?.pickup_orders}
+          onClose={() => setBookingOpen(false)}
         />
       )}
 
