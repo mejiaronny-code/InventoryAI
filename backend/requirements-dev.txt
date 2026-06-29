@@ -1,0 +1,5 @@
+# Dependencias SOLO para desarrollo/tests — NO se instalan en el contenedor de
+# producción (el Dockerfile usa requirements.txt). El CI instala ambas.
+-r requirements.txt
+
+pytest==8.3.3

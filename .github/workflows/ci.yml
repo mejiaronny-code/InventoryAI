@@ -1,0 +1,82 @@
+name: CI
+
+# Revisa cada push y cada Pull Request ANTES de que Railway/Vercel desplieguen.
+# Objetivo: atrapar el "ni siquiera arranca" (errores de sintaxis, imports rotos,
+# dependencias faltantes) sin la complejidad de una suite de tests completa.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  # ── Backend: ¿compila e importa la app en un entorno limpio? ──────────────
+  backend:
+    name: Backend (FastAPI)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"        # Igual que backend/Dockerfile
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # Instala deps de producción + las de test (requirements-dev incluye
+      # requirements.txt vía -r). Esto atrapa dependencias faltantes — p.ej.
+      # email-validator, transitivo local pero NO en un contenedor limpio.
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+
+      # Atrapa errores de sintaxis en todo el código de la app.
+      - name: Compilar todo el código (py_compile)
+        run: python -m compileall -q app
+
+      # Importa la app completa: atrapa imports rotos, decoradores mal puestos,
+      # routers que no registran, EmailStr sin email-validator, etc.
+      # Se usan valores dummy solo para que pydantic-settings no falle al cargar;
+      # no se hace ninguna conexión real (Supabase create_client no llama a la red).
+      - name: Smoke test de importación
+        env:
+          SUPABASE_URL: https://dummy.supabase.co
+          # El cliente de Supabase exige que la key tenga forma de JWT (x.y.z);
+          # este valor dummy solo satisface esa validación, no conecta a nada.
+          SUPABASE_SERVICE_ROLE_KEY: dummy.dummy.dummy
+          LANGCHAIN_TRACING_V2: "false"
+          ENVIRONMENT: ci
+        run: python -c "import app.main; print('OK: app.main importa correctamente')"
+
+      # Suite real: prueba la LÓGICA crítica (descuento de stock por receta,
+      # anti-abuso de reservas, multi-tenancy, generación de códigos).
+      - name: Tests unitarios (pytest)
+        run: python -m pytest
+
+  # ── Frontend: ¿compila el build de producción? ────────────────────────────
+  frontend:
+    name: Frontend (Vite/React)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias (npm ci)
+        run: npm ci
+
+      # El build de Vite falla si hay imports rotos, JSX inválido, etc.
+      - name: Build de producción
+        run: npm run build
