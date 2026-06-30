@@ -11,6 +11,7 @@ import CompanyCatalogPage from './pages/public/CompanyCatalogPage'
 import ReservationStatusPage from './pages/public/ReservationStatusPage'
 import MyReservationsPage from './pages/public/MyReservationsPage'
 import NotFoundPage from './pages/public/NotFoundPage'
+import EmbedChatPage from './pages/public/EmbedChatPage'
 import ResetPasswordPage from './pages/public/ResetPasswordPage'
 import ForgotPasswordPage from './pages/public/ForgotPasswordPage'
 
@@ -54,6 +55,8 @@ function AppRoutes() {
     <Routes>
       {/* ── Public ── */}
       <Route path="/" element={<HomePage />} />
+      {/* Chat embebible para sitios de terceros (iframe) — sin layout */}
+      <Route path="/embed/:companySlug" element={<EmbedChatPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/:companySlug" element={<CompanyCatalogPage />} />

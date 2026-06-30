@@ -76,12 +76,14 @@ SYSTEM_PROMPT = """Eres el asistente de inventario de "{company_name}". Ayudas a
 - Si ya encontraste un producto en una búsqueda anterior y el cliente pide ver una variante (color, talla) de ese mismo producto, NO hagas una nueva búsqueda. Usa los datos que ya tienes — el bloque de opciones ya tiene las imágenes por color.
 - Responde en el idioma del cliente. Sé breve y amigable.
 - Los tools devuelven referencias internas como [ref:uuid] — NUNCA las muestres al cliente. Son solo para uso interno del agente.
-- Al mostrar productos incluye SIEMPRE: nombre en negrita, precio con la moneda correcta, disponibilidad, y si el tool devuelve una imagen en formato ![nombre](url) DEBES incluirla tal cual en tu respuesta, nunca la omitas.
+- Al mostrar productos incluye SIEMPRE: nombre en negrita, precio con la moneda correcta, disponibilidad, y si el tool devuelve una imagen en formato ![nombre](url) DEBES incluirla tal cual en tu respuesta, nunca la omitas. Copia la URL de la imagen COMPLETA, nunca la cortes ni la abrevies.
+- Muestra como MÁXIMO 4 productos por respuesta (cada uno con su imagen). Si hay más resultados relevantes, dilo brevemente y ofrece afinar la búsqueda ("¿buscas algo en particular?"). Así la respuesta es clara y nunca se corta.
 - Para ubicaciones: reporta exactamente lo que diga el tool. Si no está registrada, díselo.
 - INFORMACIÓN DE LA EMPRESA: si el cliente pregunta algo institucional — horarios de atención, ubicación de sucursales, políticas de devolución/garantía, métodos de pago, envíos, preguntas frecuentes — usa search_company_info (NO inventes esto, NO lo confundas con búsqueda de productos). Responde basándote ÚNICAMENTE en lo que el tool devuelva. Si no encuentra nada, dile al cliente que no tienes esa información disponible y sugiérele contactar directamente a la empresa.
 - ⚠️ CRÍTICO — "¿QUÉ ME OFRECES / QUÉ TIENEN / QUÉ VENDEN?": Cuando el cliente pregunta de forma general qué ofrece la tienda, qué productos tienen, qué vende la empresa, o pide ver el catálogo/opciones disponibles — ESO ES UNA BÚSQUEDA DE PRODUCTOS, no una pregunta institucional. Llama a search_products con query="" (vacío) — esto activa el modo "explorar catálogo" y devuelve una muestra real de productos activos, sin inventar una frase de búsqueda. NUNCA inventes términos de búsqueda como "productos destacados" o "novedades" — esas palabras casi nunca coinciden con nada en la búsqueda semántica, y el cliente puede interpretar el resultado vacío como que literalmente no tienes "destacados" o "novedades" (categorías que nunca existieron). NUNCA respondas que "no tienes información sobre los productos" sin antes haber llamado a search_products — el catálogo puede tener productos aunque la Base de Conocimiento institucional esté vacía. Solo usa search_company_info para preguntas claramente institucionales (horarios, ubicación, políticas, métodos de pago, envíos).
 
 COLORES, TALLAS Y VARIANTES:
+- La imagen junto al nombre del producto es solo representativa (puede ser de un color en particular). Si el cliente pregunta por colores/tallas o pide uno específico, IGNORA esa imagen representativa y usa las imágenes del bloque "Opciones disponibles" (una por cada color/talla) — así evitas mostrar la misma imagen dos veces.
 - Cuando el cliente pide un color, talla, material u otra variante específica, busca los productos y luego analiza el bloque "Opciones disponibles" de cada resultado.
 - Muestra SOLO los productos que tengan esa opción marcada con ✓ (con stock). Si hay imagen para ese color, muéstrala.
 - Si un producto tiene el color/talla pedido marcado como ~~tachado~~ significa que no hay stock de esa variante — no lo ofrezcas.
@@ -391,7 +393,11 @@ async def _run_agent(
                 messages=[system_msg] + _safe_window(history),
                 tools=TOOL_DEFINITIONS,
                 tool_choice="auto",
-                max_tokens=768,
+                # Margen amplio: las URLs de imagen de producto pesan ~50-70
+                # tokens c/u; con 768 la respuesta se truncaba a media URL al
+                # listar varios productos (la imagen quedaba rota). 1536 da aire
+                # de sobra sin disparar el costo (sigue siendo un tope, no una meta).
+                max_tokens=1536,
                 temperature=0.2,
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )

@@ -12,12 +12,21 @@ import clsx from 'clsx'
 
 function parseMarkdown(text) {
   return text
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    // 1. Imágenes markdown BIEN formadas -> <img> (debe ir antes de las redes
+    //    de seguridad para no borrarlas).
     .replace(
-      /!\\?\[([^\]]*)\\?\]\\?\((https?:\/\/[^\)]+)\)\\?/g,
+      /!\\?\[([^\]]*)\\?\]\\?\((https?:\/\/[^\)\s]+)\)\\?/g,
       '<img src="$2" alt="$1" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" onerror="this.style.display=\'none\'" />'
     )
+    // 2. Red de seguridad: markdown de imagen sobrante o CORTADO a medias
+    //    (la respuesta del modelo se truncó sin cerrar el paréntesis) -> fuera,
+    //    para que no se filtre la URL ni rompa el layout del chat.
+    .replace(/!\\?\[[^\]]*\]?\(?[^)\n]*\)?/g, '')
+    // 3. Red de seguridad: URL de storage suelta dejada como texto plano
+    //    (precedida por inicio o espacio; así no toca el src="" de un <img>).
+    .replace(/(^|\s)https?:\/\/\S*\/storage\/\S*/g, '$1')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
     .replace(/\n/g, '<br/>')
 }
 
@@ -49,7 +58,7 @@ function TypingIndicator() {
   )
 }
 
-export default function ChatWidget({ companySlug, welcomeMessage, companyLogo }) {
+export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, onOpenChange, embedded = false, embedMobile = false }) {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -73,6 +82,10 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
   const audioChunksRef = useRef([])
   const recordingTimerRef = useRef(null)
   const streamRef = useRef(null)
+
+  // Avisa al contenedor (p.ej. el loader del widget embebible) cada vez que el
+  // chat se abre o cierra, para que pueda redimensionar el iframe.
+  useEffect(() => { onOpenChange?.(open) }, [open, onOpenChange])
 
   useEffect(() => {
     if (open && messages.length === 0 && welcomeMessage) {
@@ -260,6 +273,18 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
 
   const formatRecTime = (s) => `0:${s.toString().padStart(2, '0')}`
 
+  // Layout del panel. En modo normal usa el breakpoint `sm:` (responsive). En
+  // modo embebido el ancho del iframe NO sirve para detectar móvil (siempre es
+  // angosto), así que el loader nos dice si es móvil; aplicamos clases fijas.
+  // Móvil = tarjeta flotante compacta (deja ver la burbuja abajo, no tapa toda
+  // la pantalla). Escritorio = panel flotante abajo-derecha. En modo embebido el
+  // ancho del iframe no sirve para detectar móvil, así que el loader nos lo dice.
+  const cardMobile = 'inset-x-3 bottom-24 top-auto h-[60dvh] max-h-[60dvh] rounded-2xl'
+  const cardDesktop = 'inset-auto bottom-24 right-6 w-[360px] max-w-[calc(100vw-24px)] h-auto max-h-[min(600px,calc(100dvh-7rem))] rounded-2xl'
+  const panelBox = !embedded
+    ? 'inset-x-3 bottom-24 top-auto h-[60dvh] max-h-[60dvh] rounded-2xl sm:inset-x-auto sm:left-auto sm:right-6 sm:top-auto sm:h-auto sm:max-h-[min(600px,calc(100dvh-7rem))] sm:w-[360px] sm:max-w-[calc(100vw-24px)]'
+    : embedMobile ? cardMobile : cardDesktop
+
   return (
     <>
       {/* FAB button */}
@@ -284,17 +309,21 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo })
       {/* Chat panel */}
       <div className={clsx(
         'fixed z-50',
-        'inset-0 sm:inset-auto sm:bottom-24 sm:right-6',
-        'w-full sm:w-[360px] sm:max-w-[calc(100vw-24px)]',
-        'h-[100dvh] sm:h-auto sm:max-h-[min(600px,calc(100dvh-7rem))]',
-        'bg-white rounded-none sm:rounded-2xl shadow-2xl border border-ink-100',
-        'flex flex-col overflow-hidden transition-all duration-300 origin-bottom-right',
+        panelBox,
+        'bg-white shadow-2xl',
+        // El borde delinea la tarjeta sobre fondo claro (app normal). En el
+        // widget embebido se ve como una línea blanca sobre la web del cliente,
+        // así que ahí lo quitamos: basta la sombra.
+        embedded ? '' : 'border border-ink-100',
+        'flex flex-col overflow-hidden transition-all duration-300',
+        embedded && embedMobile ? 'origin-bottom' : 'origin-bottom-right',
         open
           ? 'opacity-100 scale-100 pointer-events-auto'
           : 'opacity-0 scale-90 pointer-events-none'
       )}>
-        {/* Header */}
-        <div className="bg-gradient-to-r from-brand-500 to-brand-600 px-4 py-3.5 flex items-center gap-3 shrink-0">
+        {/* Header — redondea sus esquinas superiores igual que la tarjeta, para
+            que el rojo llene la curva y no se asome el blanco del fondo. */}
+        <div className="bg-gradient-to-r from-brand-500 to-brand-600 px-4 py-3.5 flex items-center gap-3 shrink-0 rounded-t-2xl">
           <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
             {companyLogo
               ? <img src={companyLogo} alt="logo" className="w-full h-full object-cover" />

@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react'
 import { companiesAPI } from '../../services/api'
 import { DEFAULT_FEATURES } from '../../context/CompanyFeaturesContext'
 import toast from 'react-hot-toast'
-import { Plus, X, Loader2, Users, UserPlus, Search, Building2, ChevronDown } from 'lucide-react'
+import { Plus, X, Loader2, Users, UserPlus, Search, Building2, ChevronDown, Code, Copy, Check } from 'lucide-react'
 import clsx from 'clsx'
 
 function Modal({ open, onClose, title, children }) {
@@ -503,6 +503,63 @@ function UsersModal({ company, onClose }) {
   )
 }
 
+// Modal con el snippet listo para incrustar el chat en la web del cliente.
+function EmbedCodeModal({ company, onClose }) {
+  const [copied, setCopied] = useState(false)
+  // window.location.origin sirve para local (localhost:5173) y producción (Vercel).
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const snippet = `<script src="${origin}/embed.js" data-company="${company.slug}"></script>`
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(snippet)
+      setCopied(true)
+      toast.success('Código copiado')
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast.error('No se pudo copiar — selecciona y copia manualmente')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-lg font-bold text-ink-900 flex items-center gap-2">
+            <Code size={18} className="text-brand-500" /> Chat para su sitio web
+          </h3>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
+        </div>
+        <p className="text-sm text-ink-500 mb-4">
+          <span className="font-semibold text-ink-700">{company.name}</span> puede pegar este código
+          antes de <code className="bg-ink-100 px-1 rounded">&lt;/body&gt;</code> en su página web para
+          mostrar el asistente IA flotante.
+        </p>
+
+        <div className="relative">
+          <textarea
+            readOnly
+            value={snippet}
+            onClick={e => e.target.select()}
+            rows={2}
+            className="w-full input font-mono text-xs leading-relaxed resize-none pr-3 bg-ink-50"
+          />
+        </div>
+
+        <button onClick={copy} className="btn-primary w-full justify-center mt-3">
+          {copied ? <><Check size={15} /> Copiado</> : <><Copy size={15} /> Copiar código</>}
+        </button>
+
+        <p className="text-[11px] text-ink-400 mt-3">
+          Opcional: agrega <code className="bg-ink-100 px-1 rounded">data-position="left"</code> dentro
+          del <code className="bg-ink-100 px-1 rounded">&lt;script&gt;</code> para anclar la burbuja
+          abajo-izquierda. El chat respeta la marca, el catálogo y los límites anti-abuso de la empresa.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function SuperAdminCompaniesPage() {
   const [companies, setCompanies] = useState([])
   const [modal, setModal] = useState(false)
@@ -513,6 +570,7 @@ export default function SuperAdminCompaniesPage() {
   const [deleting, setDeleting] = useState(false)
   const [usersTarget, setUsersTarget] = useState(null)
   const [businessTarget, setBusinessTarget] = useState(null)
+  const [embedTarget, setEmbedTarget] = useState(null)
 
   const load = () => companiesAPI.listAll().then(r => setCompanies(r.data)).finally(() => setLoading(false))
   useEffect(() => { load() }, [])
@@ -626,6 +684,15 @@ export default function SuperAdminCompaniesPage() {
                       >
                         <Users size={13} /> Usuarios
                       </button>
+                      {c.features?.public_catalog !== false && (
+                        <button
+                          onClick={() => setEmbedTarget(c)}
+                          className="btn-secondary text-xs px-3 py-1.5"
+                          title="Código para incrustar el chat en su web"
+                        >
+                          <Code size={13} /> Código chat
+                        </button>
+                      )}
                       <button
                         onClick={() => setDeleteTarget(c)}
                         className="btn-danger text-xs px-3 py-1.5"
@@ -652,6 +719,7 @@ export default function SuperAdminCompaniesPage() {
 
       {/* Modal gestionar usuarios */}
       {usersTarget && <UsersModal company={usersTarget} onClose={() => setUsersTarget(null)} />}
+      {embedTarget && <EmbedCodeModal company={embedTarget} onClose={() => setEmbedTarget(null)} />}
 
       {/* Modal confirmación eliminar */}
       <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Eliminar empresa">

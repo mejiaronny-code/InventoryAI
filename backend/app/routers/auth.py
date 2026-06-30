@@ -7,7 +7,7 @@ from pydantic import BaseModel, EmailStr
 import asyncio
 import httpx
 from app.core.auth import require_admin, require_super_admin, get_current_user
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, supabase_auth
 from app.core.config import settings
 from app.services.notifications import send_welcome_email, send_password_reset_email
 
@@ -30,7 +30,9 @@ class RegisterEmployeeRequest(BaseModel):
 async def login(data: LoginRequest):
     """Login via Supabase Auth."""
     try:
-        result = supabase.auth.sign_in_with_password({
+        # Cliente de auth aislado: NO contamina el cliente de datos con la sesión
+        # del usuario (evita 'JWT expired' en las consultas a tablas ~1h después).
+        result = supabase_auth.auth.sign_in_with_password({
             "email": data.email,
             "password": data.password,
         })
@@ -63,7 +65,7 @@ async def login(data: LoginRequest):
 @router.post("/refresh")
 async def refresh_token(refresh_token: str):
     try:
-        result = supabase.auth.refresh_session(refresh_token)
+        result = supabase_auth.auth.refresh_session(refresh_token)
         return {
             "access_token": result.session.access_token,
             "refresh_token": result.session.refresh_token,

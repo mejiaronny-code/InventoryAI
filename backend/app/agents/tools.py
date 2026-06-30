@@ -292,14 +292,18 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 extra = prod_extra.get(p["id"], {})
                 imgs = extra.get("images") or []
                 product_options_check = extra.get("product_options") or []
-                # Si el producto tiene opciones con imágenes por color, NO mostrar
-                # la imagen principal — el AI debe mostrar solo la del color pedido
-                has_color_images = any(
-                    val.get("image")
-                    for opt in product_options_check
-                    for val in opt.get("values", [])
+                # Si el producto tiene opciones con imágenes por color, el AI debe
+                # preferir mostrar la del color pedido (ver bloque de opciones más
+                # abajo). Pero si esta respuesta no menciona un color en particular,
+                # el producto no debe quedar sin ninguna imagen: usamos la del
+                # primer color (o la principal) como respaldo.
+                first_color_image = next(
+                    (val.get("image") for opt in product_options_check
+                     for val in opt.get("values", []) if val.get("image")),
+                    None,
                 )
-                img_line = f"  ![{p['name']}]({imgs[0]})\n" if (imgs and not has_color_images) else ""
+                fallback_img = first_color_image or (imgs[0] if imgs else None)
+                img_line = f"  ![{p['name']}]({fallback_img})\n" if fallback_img else ""
 
                 # Líneas de ubicación por almacén
                 loc_lines = []

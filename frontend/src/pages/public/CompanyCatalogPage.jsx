@@ -975,27 +975,27 @@ export default function CompanyCatalogPage() {
 
       {/* Header */}
       <header className="bg-white border-b border-ink-100 sticky top-0 z-40">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-4">
-          <button onClick={() => navigate('/')} className="btn-ghost p-2">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-2.5 sm:py-4 flex items-center gap-2 sm:gap-4">
+          <button onClick={() => navigate('/')} className="btn-ghost p-2 shrink-0">
             <ChevronLeft size={18} />
           </button>
           {company?.logo_url ? (
-            <img src={company.logo_url} alt={company?.name} className="w-8 h-8 rounded-lg object-cover" />
+            <img src={company.logo_url} alt={company?.name} className="w-8 h-8 rounded-lg object-cover shrink-0" />
           ) : (
-            <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center shrink-0">
               <span className="text-white font-bold text-sm">{company?.name?.[0] || '?'}</span>
             </div>
           )}
-          <div className="flex-1">
-            <h1 className="font-bold text-ink-900 text-base">{company?.name || companySlug}</h1>
+          <div className="flex-1 min-w-0">
+            <h1 className="font-bold text-ink-900 text-sm sm:text-base truncate">{company?.name || companySlug}</h1>
             <p className="text-xs text-ink-400 flex items-center gap-1">
-              <Zap size={10} className="text-brand-500" /> Chat IA disponible
+              <Zap size={10} className="text-brand-500 shrink-0" /> Chat IA disponible
             </p>
           </div>
           {(company?.features?.table_reservations || company?.features?.pickup_orders) && (
             <button
               onClick={() => setBookingOpen(true)}
-              className="flex items-center gap-1.5 text-xs font-semibold text-white bg-brand-500 px-3 py-1.5 rounded-full hover:bg-brand-600 transition-colors"
+              className="flex items-center gap-1.5 text-xs font-semibold text-white bg-brand-500 px-3 py-1.5 rounded-full hover:bg-brand-600 transition-colors shrink-0"
             >
               <CalendarClock size={13} />
               {company?.features?.table_reservations ? 'Reservar' : 'Ordenar'}
@@ -1003,15 +1003,16 @@ export default function CompanyCatalogPage() {
           )}
           <button
             onClick={() => navigate(`/${companySlug}/mis-reservas`)}
-            className="flex items-center gap-1.5 text-xs text-brand-600 bg-brand-50 px-3 py-1.5 rounded-full border border-brand-100 hover:bg-brand-100 transition-colors"
+            title="Mis reservas"
+            className="flex items-center gap-1.5 text-xs text-brand-600 bg-brand-50 px-3 py-1.5 rounded-full border border-brand-100 hover:bg-brand-100 transition-colors shrink-0"
           >
             <ShoppingBag size={13} />
-            Mis reservas
+            <span className="hidden sm:inline">Mis reservas</span>
           </button>
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-6 py-6">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
         {/* Filtros */}
         <div className="flex flex-col gap-3 mb-6">
           <div className="flex flex-col sm:flex-row gap-3">
