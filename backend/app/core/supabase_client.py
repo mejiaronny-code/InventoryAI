@@ -5,6 +5,8 @@ Cliente de Supabase usando service role key (bypass RLS para backend)
 from supabase import create_client, Client
 from app.core.config import settings
 from functools import lru_cache
+import asyncio
+import httpx
 
 
 @lru_cache()
@@ -41,3 +43,21 @@ def get_supabase_auth() -> Client:
 
 supabase: Client = get_supabase()
 supabase_auth: Client = get_supabase_auth()
+
+
+async def run_with_retry(fn, retries: int = 2):
+    """
+    Ejecuta una llamada a Supabase (ej. `lambda: query.execute()`) y reintenta
+    si la conexión HTTP/2 se corta a medio camino (`RemoteProtocolError` y
+    primos). Supabase a veces cierra conexiones inactivas; sin retry, eso se
+    traduce en un 500 al cliente por un simple hipo de red transitorio.
+    Centralizado aquí para que cualquier router lo reutilice (antes vivía
+    duplicado solo en `routers/reorder.py`).
+    """
+    for attempt in range(retries + 1):
+        try:
+            return await asyncio.to_thread(fn)
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as e:
+            if attempt == retries:
+                raise
+            await asyncio.sleep(0.3 * (attempt + 1))

@@ -29,7 +29,7 @@ def _generate_code(length: int = 8) -> str:
 async def create_public_reservation(company_slug: str, data: ReservationCreate):
     """Reserva pública creada por el cliente desde el catálogo."""
     # 1. Verificar empresa
-    company = get_active_company(company_slug, "id, name, features")
+    company = await get_active_company(company_slug, "id, name, features")
     require_public_catalog(company)
 
     company_id = company["id"]

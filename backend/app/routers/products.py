@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from app.core.auth import require_admin, require_staff, get_current_user
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry
 from app.core.config import settings
 from app.core.company_features import get_active_company, require_public_catalog
 from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, StockByWarehouse, VariantStockUpsert, VariantStockOut
@@ -33,7 +33,7 @@ async def list_public_products(
     offset: int = 0,
 ):
     """Lista pública del catálogo de productos por slug de empresa."""
-    company = get_active_company(company_slug)
+    company = await get_active_company(company_slug)
     require_public_catalog(company)
 
     company_id = company["id"]
@@ -50,7 +50,8 @@ async def list_public_products(
     if search:
         query = query.ilike("name", f"%{search}%")
 
-    result = query.range(offset, offset + limit - 1).execute()
+    ranged_query = query.range(offset, offset + limit - 1)
+    result = await run_with_retry(lambda: ranged_query.execute())
 
     products = []
     for p in (result.data or []):
@@ -341,7 +342,7 @@ async def get_variant_stock(product_id: str, user: dict = Depends(require_staff)
 @router.get("/public/{company_slug}/{product_id}/variant-stock")
 async def get_variant_stock_public(company_slug: str, product_id: str):
     """Stock de variantes para el catálogo público."""
-    company = get_active_company(company_slug)
+    company = await get_active_company(company_slug)
     require_public_catalog(company)
 
     result = supabase.table("product_variants_stock")\

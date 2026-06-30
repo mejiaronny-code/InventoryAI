@@ -4,7 +4,7 @@ app/routers/warehouses.py
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 from app.core.auth import require_admin, require_staff
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry
 from app.models.schemas import WarehouseCreate, WarehouseUpdate, WarehouseOut
 
 router = APIRouter(prefix="/warehouses", tags=["warehouses"])
@@ -12,10 +12,12 @@ router = APIRouter(prefix="/warehouses", tags=["warehouses"])
 
 @router.get("/public/{company_slug}")
 async def list_public_warehouses(company_slug: str):
-    company = supabase.table("companies").select("id").eq("slug", company_slug).single().execute()
+    company_query = supabase.table("companies").select("id").eq("slug", company_slug).single()
+    company = await run_with_retry(lambda: company_query.execute())
     if not company.data:
         raise HTTPException(404, "Empresa no encontrada")
-    result = supabase.table("warehouses").select("id, name, location").eq("company_id", company.data["id"]).eq("is_active", True).execute()
+    query = supabase.table("warehouses").select("id, name, location").eq("company_id", company.data["id"]).eq("is_active", True)
+    result = await run_with_retry(lambda: query.execute())
     return result.data or []
 
 

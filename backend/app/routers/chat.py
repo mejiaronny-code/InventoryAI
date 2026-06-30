@@ -131,9 +131,9 @@ def _check_rate_limit(company_slug: str) -> None:
         company[today] = current + 1
 
 
-def _check_public_catalog(company_slug: str) -> None:
+async def _check_public_catalog(company_slug: str) -> None:
     """Lanza 404 si la empresa desactivó el catálogo público (incluye el chat IA)."""
-    company = get_active_company(company_slug)
+    company = await get_active_company(company_slug)
     require_public_catalog(company)
 
 
@@ -147,7 +147,7 @@ async def send_message(data: ChatMessage, request: Request):
         raise HTTPException(400, "El mensaje no puede estar vacío")
 
     _check_ip_rate_limit(request)
-    _check_public_catalog(data.company_slug)
+    await _check_public_catalog(data.company_slug)
     _check_rate_limit(data.company_slug)
 
     response, used_tools = await chat(
@@ -194,7 +194,7 @@ async def send_image_message(
         raise HTTPException(400, "La imagen no puede superar 10MB")
 
     _check_ip_rate_limit(request)
-    _check_public_catalog(company_slug)
+    await _check_public_catalog(company_slug)
     _check_rate_limit(company_slug)
 
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -271,7 +271,7 @@ async def send_audio_message(
         raise HTTPException(status_code=422, detail="No se pudo detectar voz en el audio.")
 
     # Contar en el rate limit (igual que un mensaje de texto)
-    _check_public_catalog(company_slug)
+    await _check_public_catalog(company_slug)
     _check_rate_limit(company_slug)
 
     # Procesar como mensaje de chat normal
@@ -316,7 +316,7 @@ async def transcribe_only(
         )
 
     _check_ip_rate_limit(request)
-    _check_public_catalog(company_slug)
+    await _check_public_catalog(company_slug)
 
     audio_bytes = await audio.read()
     if not audio_bytes:

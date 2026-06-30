@@ -4,7 +4,7 @@ app/routers/categories.py
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 from app.core.auth import require_admin, require_staff
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry
 from app.core.company_features import get_active_company, require_public_catalog
 from app.models.schemas import CategoryCreate, CategoryUpdate, CategoryOut
 
@@ -13,9 +13,10 @@ router = APIRouter(prefix="/categories", tags=["categories"])
 
 @router.get("/public/{company_slug}", response_model=List[CategoryOut])
 async def list_public_categories(company_slug: str):
-    company = get_active_company(company_slug)
+    company = await get_active_company(company_slug)
     require_public_catalog(company)
-    result = supabase.table("categories").select("*").eq("company_id", company["id"]).execute()
+    query = supabase.table("categories").select("*").eq("company_id", company["id"])
+    result = await run_with_retry(lambda: query.execute())
     return result.data or []
 
 

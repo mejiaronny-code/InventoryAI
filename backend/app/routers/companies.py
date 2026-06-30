@@ -4,7 +4,7 @@ Gestión de empresas — super admin y admin de empresa.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from app.core.auth import require_super_admin, require_admin, get_current_user
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry
 from app.core.config import settings
 from app.models.schemas import CompanyCreate, CompanyUpdate, CompanyOut, BUSINESS_PRESETS, DEFAULT_FEATURES
 from typing import List
@@ -65,10 +65,10 @@ def _find_auth_user_by_email(email: str) -> dict | None:
 
 @router.get("/", response_model=List[CompanyOut])
 async def list_companies_public():
-    result = supabase.table("companies")\
+    query = supabase.table("companies")\
         .select("id, name, slug, logo_url, settings, business_type, features, is_active, created_at, subscriptions(status)")\
-        .eq("is_active", True)\
-        .execute()
+        .eq("is_active", True)
+    result = await run_with_retry(lambda: query.execute())
     companies = result.data or []
     # Excluir empresas con suscripción cancelada
     return [

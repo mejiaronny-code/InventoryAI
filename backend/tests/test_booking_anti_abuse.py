@@ -39,7 +39,10 @@ def reset_rate_limit():
 def patched(monkeypatch, fake_supabase):
     """Inyecta supabase falso y neutraliza dependencias externas."""
     monkeypatch.setattr(bookings, "supabase", fake_supabase)
-    monkeypatch.setattr(bookings, "get_active_company", lambda slug, cols=None: dict(COMPANY))
+
+    async def _get_company(slug, cols=None):
+        return dict(COMPANY)
+    monkeypatch.setattr(bookings, "get_active_company", _get_company)
     monkeypatch.setattr(bookings, "require_public_catalog", lambda company: None)
 
     async def _noop_email(*a, **k):
@@ -117,7 +120,9 @@ def test_requiere_telefono_o_email(patched):
 def test_rechaza_dine_in_si_no_acepta_mesas(patched, monkeypatch):
     sin_mesas = dict(COMPANY)
     sin_mesas["features"] = {"table_reservations": False, "pickup_orders": True, "public_catalog": True}
-    monkeypatch.setattr(bookings, "get_active_company", lambda slug, cols=None: sin_mesas)
+    async def _get_company(slug, cols=None):
+        return sin_mesas
+    monkeypatch.setattr(bookings, "get_active_company", _get_company)
     with pytest.raises(HTTPException) as exc:
         _create(_valid_booking(service_type="dine_in"))
     assert exc.value.status_code == 400

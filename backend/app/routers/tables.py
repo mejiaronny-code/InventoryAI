@@ -6,7 +6,7 @@ restaurante de para-llevar puede no definir ninguna.
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import require_staff, require_admin
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry
 from app.core.company_features import get_active_company
 from app.models.schemas import TableCreate, TableUpdate
 
@@ -29,13 +29,13 @@ async def list_tables(user: dict = Depends(require_staff)):
 @router.get("/public/{company_slug}")
 async def list_tables_public(company_slug: str):
     """Mesas activas para el flujo de reserva público (zonas disponibles)."""
-    company = get_active_company(company_slug, "id, features")
-    result = supabase.table("restaurant_tables")\
+    company = await get_active_company(company_slug, "id, features")
+    query = supabase.table("restaurant_tables")\
         .select("id, name, capacity, zone")\
         .eq("company_id", company["id"])\
         .eq("is_active", True)\
-        .order("created_at")\
-        .execute()
+        .order("created_at")
+    result = await run_with_retry(lambda: query.execute())
     return result.data or []
 
 

@@ -6,21 +6,9 @@ Se crean cuando stock < min_stock_alert; el admin las gestiona aquí.
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 import asyncio
-import httpx
 
 from app.core.auth import require_staff, require_admin
-from app.core.supabase_client import supabase
-
-
-async def _run_with_retry(fn, retries: int = 2):
-    """Ejecuta una llamada a Supabase y reintenta si hay error de conexión HTTP/2."""
-    for attempt in range(retries + 1):
-        try:
-            return await asyncio.to_thread(fn)
-        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as e:
-            if attempt == retries:
-                raise
-            await asyncio.sleep(0.3 * (attempt + 1))
+from app.core.supabase_client import supabase, run_with_retry as _run_with_retry
 
 router = APIRouter(prefix="/reorder", tags=["reorder"])
 

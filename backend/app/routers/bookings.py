@@ -72,7 +72,7 @@ async def create_public_booking(company_slug: str, data: BookingCreate, request:
     # Rate limit por IP (anti-spam de reservas)
     _check_booking_rate_limit(request)
 
-    company = get_active_company(company_slug, "id, name, features")
+    company = await get_active_company(company_slug, "id, name, features")
     require_public_catalog(company)
     company_id = company["id"]
     company_name = company["name"]
@@ -195,7 +195,7 @@ async def create_public_booking(company_slug: str, data: BookingCreate, request:
 
 @router.get("/public/{code}")
 async def get_public_booking(code: str, company_slug: str):
-    company = get_active_company(company_slug, "id")
+    company = await get_active_company(company_slug, "id")
     result = supabase.table("bookings")\
         .select("*, restaurant_tables(name, zone), booking_items(quantity, modifiers, products(name, price))")\
         .eq("code", code.upper())\
