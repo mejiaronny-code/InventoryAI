@@ -45,8 +45,26 @@ async def _resolve_company(company_slug: str) -> dict:
     return result.data
 
 
+# Mismo mapa que app/agents/chat_agent.py (el chat interno de InventoryAI) —
+# duplicado a propósito para no crear un import cruzado entre agents/ y
+# routers/ por un diccionario chico; si se agrega una moneda, replicar ahí.
+_CURRENCY_SYMBOLS: dict[str, str] = {
+    "USD": "$",   "EUR": "€",   "MXN": "$",   "COP": "$",
+    "ARS": "$",   "CLP": "$",   "PEN": "S/",  "BRL": "R$",
+    "GTQ": "Q",   "HNL": "L",   "CRC": "₡",   "DOP": "RD$",
+    "BOB": "Bs",  "PYG": "₲",   "UYU": "$U",  "VES": "Bs.",
+    "PAB": "B/.", "NIO": "C$",  "JPY": "¥",
+}
+
+
 def _currency_symbol(code: str) -> str:
-    return {"USD": "$", "HNL": "L", "EUR": "€", "MXN": "$", "GTQ": "Q"}.get((code or "").upper(), "$")
+    return _CURRENCY_SYMBOLS.get((code or "").upper(), "$")
+
+
+def _company_currency(company: dict) -> tuple[str, str]:
+    """(currency_code, currency_symbol) de una empresa, default USD/$."""
+    code = (company.get("settings") or {}).get("currency") or "USD"
+    return code, _currency_symbol(code)
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -110,8 +128,10 @@ async def search_products(body: ProductSearchRequest):
         except Exception:
             pass
 
+    currency_code, currency_symbol = _company_currency(company)
+
     if not products_map:
-        return {"products": []}
+        return {"products": [], "currency_code": currency_code, "currency_symbol": currency_symbol}
 
     products = list(products_map.values())[:body.limit]
     product_ids = [p["id"] for p in products]
@@ -155,7 +175,7 @@ async def search_products(body: ProductSearchRequest):
             "options": options_by_product.get(p["id"], []),
         })
 
-    return {"products": out}
+    return {"products": out, "currency_code": currency_code, "currency_symbol": currency_symbol}
 
 
 # ── 2. Detalle de un producto ─────────────────────────────────────────────
@@ -179,6 +199,7 @@ async def get_product(product_id: str, company_slug: str = Query(...)):
 
     p = result.data
     cat = p.get("categories") or {}
+    currency_code, currency_symbol = _company_currency(company)
 
     stock_res = await asyncio.to_thread(
         lambda: supabase.table("product_warehouse_stock")
@@ -212,6 +233,8 @@ async def get_product(product_id: str, company_slug: str = Query(...)):
         "sku": p.get("sku"),
         "barcode": p.get("barcode"),
         "price": p.get("price"),
+        "currency_code": currency_code,
+        "currency_symbol": currency_symbol,
         "unit": p.get("unit"),
         "category": cat.get("name"),
         "tags": p.get("tags") or [],
