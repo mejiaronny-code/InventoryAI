@@ -18,7 +18,7 @@ router = APIRouter(prefix="/recipes", tags=["recipes"])
 
 
 @router.get("/{dish_id}")
-async def get_recipe(dish_id: str, user: dict = Depends(require_staff)):
+def get_recipe(dish_id: str, user: dict = Depends(require_staff)):
     """Receta de un platillo: insumos con cantidad y unidad."""
     company_id = user.get("company_id")
     if not company_id:
@@ -43,7 +43,7 @@ async def get_recipe(dish_id: str, user: dict = Depends(require_staff)):
 
 
 @router.put("/{dish_id}")
-async def set_recipe(dish_id: str, data: RecipeUpsert, user: dict = Depends(require_admin)):
+def set_recipe(dish_id: str, data: RecipeUpsert, user: dict = Depends(require_admin)):
     """Reemplaza por completo la receta de un platillo."""
     company_id = user.get("company_id")
     if not company_id:
@@ -160,7 +160,7 @@ def _deplete_ingredient(company_id: str, ingredient_id: str, needed: int,
 
 
 @router.post("/register-sale")
-async def register_sale(data: RegisterSale, user: dict = Depends(require_staff)):
+def register_sale(data: RegisterSale, user: dict = Depends(require_staff)):
     """
     Registra la venta/consumo de platillos y descuenta sus insumos del inventario
     según la receta de cada platillo. Devuelve un resumen con advertencias.

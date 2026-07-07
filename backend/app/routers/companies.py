@@ -78,7 +78,7 @@ async def list_companies_public():
 
 
 @router.get("/all")
-async def list_all_companies(user: dict = Depends(require_super_admin)):
+def list_all_companies(user: dict = Depends(require_super_admin)):
     """Super admin: lista todas las empresas con suscripción."""
     result = supabase.table("companies")\
         .select("*, subscriptions(plan, status, ends_at)")\
@@ -87,7 +87,7 @@ async def list_all_companies(user: dict = Depends(require_super_admin)):
 
 
 @router.post("/")
-async def create_company(data: CompanyCreate, user: dict = Depends(require_super_admin)):
+def create_company(data: CompanyCreate, user: dict = Depends(require_super_admin)):
     # Crear suscripción trial
     sub = supabase.table("subscriptions").insert({
         "plan": "trial",
@@ -106,7 +106,7 @@ async def create_company(data: CompanyCreate, user: dict = Depends(require_super
 
 
 @router.put("/{company_id}")
-async def update_company(company_id: str, data: CompanyUpdate, user: dict = Depends(require_super_admin)):
+def update_company(company_id: str, data: CompanyUpdate, user: dict = Depends(require_super_admin)):
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
     result = supabase.table("companies").update(update_data).eq("id", company_id).execute()
     if not result.data:
@@ -115,7 +115,7 @@ async def update_company(company_id: str, data: CompanyUpdate, user: dict = Depe
 
 
 @router.patch("/{company_id}/subscription")
-async def update_subscription(
+def update_subscription(
     company_id: str,
     plan: str,
     status: str,
@@ -150,7 +150,7 @@ async def update_subscription(
 
 
 @router.patch("/{company_id}/ai-rules-limit")
-async def set_ai_rules_limit(
+def set_ai_rules_limit(
     company_id: str,
     limit: int,
     user: dict = Depends(require_super_admin),
@@ -166,7 +166,7 @@ async def set_ai_rules_limit(
 
 
 @router.patch("/{company_id}/chat-daily-limit")
-async def set_chat_daily_limit(
+def set_chat_daily_limit(
     company_id: str,
     limit: int,
     user: dict = Depends(require_super_admin),
@@ -182,7 +182,7 @@ async def set_chat_daily_limit(
 
 
 @router.patch("/{company_id}/knowledge-docs-limit")
-async def set_knowledge_docs_limit(
+def set_knowledge_docs_limit(
     company_id: str,
     limit: int,
     user: dict = Depends(require_super_admin),
@@ -198,7 +198,7 @@ async def set_knowledge_docs_limit(
 
 
 @router.patch("/{company_id}/business-type")
-async def set_business_type(
+def set_business_type(
     company_id: str,
     body: BusinessTypeBody,
     user: dict = Depends(require_super_admin)
@@ -224,19 +224,21 @@ async def set_business_type(
 
 
 @router.get("/me")
-async def get_my_company(user: dict = Depends(get_current_user)):
+def get_my_company(user: dict = Depends(get_current_user)):
     if not user.get("company_id"):
         raise HTTPException(404, "Sin empresa asignada")
     result = supabase.table("companies")\
         .select("*, subscriptions(plan, status, ends_at)")\
         .eq("id", user["company_id"])\
-        .single()\
+        .maybe_single()\
         .execute()
+    if not (result and result.data):
+        raise HTTPException(404, "Empresa no encontrada")
     return result.data
 
 
 @router.delete("/{company_id}")
-async def delete_company(company_id: str, user: dict = Depends(require_super_admin)):
+def delete_company(company_id: str, user: dict = Depends(require_super_admin)):
     result = supabase.table("companies").delete().eq("id", company_id).execute()
     if not result.data:
         raise HTTPException(404, "Empresa no encontrada")
@@ -244,7 +246,7 @@ async def delete_company(company_id: str, user: dict = Depends(require_super_adm
 
 
 @router.get("/{company_id}/users")
-async def list_company_users(company_id: str, user: dict = Depends(require_super_admin)):
+def list_company_users(company_id: str, user: dict = Depends(require_super_admin)):
     profiles = supabase.table("user_profiles")\
         .select("id, full_name, role, created_at")\
         .eq("company_id", company_id)\
@@ -261,7 +263,7 @@ async def list_company_users(company_id: str, user: dict = Depends(require_super
 
 
 @router.get("/{company_id}/search-user")
-async def search_user_by_email(company_id: str, email: str, user: dict = Depends(require_super_admin)):
+def search_user_by_email(company_id: str, email: str, user: dict = Depends(require_super_admin)):
     found = _find_auth_user_by_email(email)
     if not found:
         raise HTTPException(404, "Usuario no encontrado")
@@ -276,7 +278,7 @@ async def search_user_by_email(company_id: str, email: str, user: dict = Depends
 
 
 @router.post("/{company_id}/assign-admin")
-async def assign_user_to_company(
+def assign_user_to_company(
     company_id: str,
     body: AssignUserBody,
     user: dict = Depends(require_super_admin)
@@ -296,12 +298,7 @@ async def assign_user_to_company(
     return {"message": "Usuario asignado"}
 
 
-@router.post("/{company_id}/create-user")
-async def create_company_user(
-    company_id: str,
-    body: CreateUserBody,
-    user: dict = Depends(require_super_admin)
-):
+def _create_company_user_sync(company_id: str, body: CreateUserBody):
     try:
         r = httpx.post(
             f"{settings.supabase_url}/auth/v1/admin/users",
@@ -325,16 +322,25 @@ async def create_company_user(
         "role": body.role,
     }).execute()
 
-    # Email de bienvenida
     company_res = supabase.table("companies").select("name").eq("id", company_id).single().execute()
     company_name = company_res.data["name"] if company_res.data else "tu empresa"
-    asyncio.create_task(send_welcome_email(body.email, body.full_name, company_name))
 
-    return {"message": "Usuario creado", "user_id": user_id}
+    return {"message": "Usuario creado", "user_id": user_id}, company_name
+
+
+@router.post("/{company_id}/create-user")
+async def create_company_user(
+    company_id: str,
+    body: CreateUserBody,
+    user: dict = Depends(require_super_admin)
+):
+    result, company_name = await asyncio.to_thread(_create_company_user_sync, company_id, body)
+    asyncio.create_task(send_welcome_email(body.email, body.full_name, company_name))
+    return result
 
 
 @router.delete("/{company_id}/users/{user_id}")
-async def remove_user_from_company(
+def remove_user_from_company(
     company_id: str,
     user_id: str,
     user: dict = Depends(require_super_admin)
@@ -347,20 +353,7 @@ async def remove_user_from_company(
     return {"message": "Usuario removido"}
 
 
-@router.post("/me/upload-logo")
-async def upload_logo(
-    file: UploadFile = File(...),
-    user: dict = Depends(require_admin)
-):
-    company_id = user["company_id"]
-    ext = file.filename.split(".")[-1].lower()
-    if ext not in ("png", "jpg", "jpeg", "webp", "svg"):
-        raise HTTPException(400, "Formato no permitido. Usa PNG, JPG, WEBP o SVG.")
-
-    content = await file.read()
-    if len(content) > 2 * 1024 * 1024:
-        raise HTTPException(400, "El archivo supera 2MB.")
-
+def _upload_logo_sync(company_id: str, ext: str, content: bytes, content_type: str):
     bucket = "product-images"
     storage_path = f"logos/{company_id}.{ext}"
     upload_url = f"{settings.supabase_url}/storage/v1/object/{bucket}/{storage_path}"
@@ -372,7 +365,7 @@ async def upload_logo(
         headers={
             "Authorization": f"Bearer {settings.supabase_service_role_key}",
             "apikey": settings.supabase_service_role_key,
-            "Content-Type": file.content_type,
+            "Content-Type": content_type,
             "x-upsert": "true",
         },
         timeout=30,
@@ -391,11 +384,29 @@ async def upload_logo(
         .eq("id", company_id)\
         .execute()
 
+    return public_url
+
+
+@router.post("/me/upload-logo")
+async def upload_logo(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_admin)
+):
+    company_id = user["company_id"]
+    ext = file.filename.split(".")[-1].lower()
+    if ext not in ("png", "jpg", "jpeg", "webp", "svg"):
+        raise HTTPException(400, "Formato no permitido. Usa PNG, JPG, WEBP o SVG.")
+
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(400, "El archivo supera 2MB.")
+
+    public_url = await asyncio.to_thread(_upload_logo_sync, company_id, ext, content, file.content_type)
     return {"logo_url": public_url}
 
 
 @router.put("/me/settings")
-async def update_my_company(data: CompanyUpdate, user: dict = Depends(require_admin)):
+def update_my_company(data: CompanyUpdate, user: dict = Depends(require_admin)):
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
     result = supabase.table("companies")\
         .update(update_data)\
@@ -404,9 +415,7 @@ async def update_my_company(data: CompanyUpdate, user: dict = Depends(require_ad
     return result.data[0] if result.data else {}
 
 
-@router.post("/me/request-deletion")
-async def request_account_deletion(user: dict = Depends(require_admin)):
-    """Envía una solicitud de eliminación de cuenta al super admin."""
+def _request_account_deletion_sync(user: dict):
     company = supabase.table("companies")\
         .select("name")\
         .eq("id", user["company_id"])\
@@ -431,6 +440,14 @@ async def request_account_deletion(user: dict = Depends(require_admin)):
             "requested_by": requested_by,
         },
     }).execute()
+
+    return company_name, requested_by
+
+
+@router.post("/me/request-deletion")
+async def request_account_deletion(user: dict = Depends(require_admin)):
+    """Envía una solicitud de eliminación de cuenta al super admin."""
+    company_name, requested_by = await asyncio.to_thread(_request_account_deletion_sync, user)
 
     admin_email = user.get("email", "")
     if admin_email:

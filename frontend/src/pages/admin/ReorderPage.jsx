@@ -45,6 +45,8 @@ export default function ReorderPage() {
   const [statusFilter, setStatusFilter] = useState('pending')
   const [modal, setModal] = useState(false)
   const [editModal, setEditModal] = useState(null)
+  const [editQty, setEditQty] = useState('')
+  const [editNotes, setEditNotes] = useState('')
   const [form, setForm] = useState({ product_id: '', warehouse_id: '', requested_quantity: '', notes: '' })
   const [saving, setSaving] = useState(false)
 
@@ -93,6 +95,27 @@ export default function ReorderPage() {
       toast.success('Eliminada')
       load()
     } catch { toast.error('Error al eliminar') }
+  }
+
+  const openEdit = (r) => {
+    setEditModal(r)
+    setEditQty(String(r.requested_quantity ?? ''))
+    setEditNotes(r.notes || '')
+  }
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault(); setSaving(true)
+    try {
+      await reorderAPI.update(editModal.id, {
+        requested_quantity: parseInt(editQty) || 0,
+        notes: editNotes || null,
+      })
+      toast.success('Solicitud actualizada')
+      setEditModal(null)
+      load()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Error al actualizar')
+    } finally { setSaving(false) }
   }
 
   const counts = {
@@ -257,6 +280,13 @@ export default function ReorderPage() {
                         </button>
                       )}
                       <button
+                        onClick={() => openEdit(r)}
+                        className="btn-ghost p-1.5 text-ink-400 hover:text-brand-600"
+                        title="Editar cantidad a pedir"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
                         onClick={() => handleDelete(r.id)}
                         className="btn-ghost p-1.5 text-red-400 hover:text-red-600"
                         title="Eliminar"
@@ -304,6 +334,41 @@ export default function ReorderPage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Modal editar cantidad a pedir */}
+      <Modal open={!!editModal} onClose={() => setEditModal(null)} title="Editar solicitud">
+        {editModal && (
+          <form onSubmit={handleSaveEdit} className="space-y-4">
+            <p className="text-sm text-ink-600">
+              <span className="font-semibold text-ink-900">{editModal.products?.name}</span>
+              {' · '}{editModal.warehouses?.name}
+            </p>
+            <div>
+              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                Cantidad a pedir
+              </label>
+              <input
+                type="number" min="1" value={editQty}
+                onChange={e => setEditQty(e.target.value)}
+                className="input" required
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Notas</label>
+              <input
+                value={editNotes} onChange={e => setEditNotes(e.target.value)}
+                className="input" placeholder="Proveedor, urgencia, etc."
+              />
+            </div>
+            <div className="flex gap-3 pt-1">
+              <button type="button" onClick={() => setEditModal(null)} className="btn-secondary flex-1 justify-center">Cancelar</button>
+              <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
+                {saving ? <Loader2 size={14} className="animate-spin" /> : 'Guardar'}
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
     </div>
   )

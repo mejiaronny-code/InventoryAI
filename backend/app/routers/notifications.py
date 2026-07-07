@@ -10,7 +10,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
 @router.get("/")
-async def list_notifications(user: dict = Depends(require_staff)):
+def list_notifications(user: dict = Depends(require_staff)):
     result = supabase.table("notifications")\
         .select("*")\
         .eq("company_id", user["company_id"])\
@@ -21,7 +21,7 @@ async def list_notifications(user: dict = Depends(require_staff)):
 
 
 @router.patch("/{notification_id}/read")
-async def mark_read(notification_id: str, user: dict = Depends(require_staff)):
+def mark_read(notification_id: str, user: dict = Depends(require_staff)):
     supabase.table("notifications")\
         .update({"read": True})\
         .eq("id", notification_id)\
@@ -31,7 +31,7 @@ async def mark_read(notification_id: str, user: dict = Depends(require_staff)):
 
 
 @router.patch("/read-all")
-async def mark_all_read(user: dict = Depends(require_staff)):
+def mark_all_read(user: dict = Depends(require_staff)):
     supabase.table("notifications")\
         .update({"read": True})\
         .eq("company_id", user["company_id"])\
@@ -40,7 +40,7 @@ async def mark_all_read(user: dict = Depends(require_staff)):
 
 
 @router.delete("/{notification_id}")
-async def delete_notification(notification_id: str, user: dict = Depends(require_staff)):
+def delete_notification(notification_id: str, user: dict = Depends(require_staff)):
     supabase.table("notifications")\
         .delete()\
         .eq("id", notification_id)\
@@ -50,7 +50,7 @@ async def delete_notification(notification_id: str, user: dict = Depends(require
 
 
 @router.delete("/")
-async def delete_read_notifications(user: dict = Depends(require_staff)):
+def delete_read_notifications(user: dict = Depends(require_staff)):
     supabase.table("notifications")\
         .delete()\
         .eq("company_id", user["company_id"])\

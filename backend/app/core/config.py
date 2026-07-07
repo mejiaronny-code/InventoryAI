@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: str
     supabase_service_role_key: str
+    # Settings → API → JWT Secret en el dashboard de Supabase. Si está vacío,
+    # get_current_user cae al flujo anterior (supabase.auth.get_user, con roundtrip de red).
+    supabase_jwt_secret: str = ""
 
     # AI APIs
     groq_api_key: str = ""          # Legacy — ya no se usa

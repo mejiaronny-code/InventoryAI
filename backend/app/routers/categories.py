@@ -21,19 +21,19 @@ async def list_public_categories(company_slug: str):
 
 
 @router.get("/", response_model=List[CategoryOut])
-async def list_categories(user: dict = Depends(require_staff)):
+def list_categories(user: dict = Depends(require_staff)):
     result = supabase.table("categories").select("*").eq("company_id", user["company_id"]).execute()
     return result.data or []
 
 
 @router.post("/", response_model=CategoryOut)
-async def create_category(data: CategoryCreate, user: dict = Depends(require_admin)):
+def create_category(data: CategoryCreate, user: dict = Depends(require_admin)):
     result = supabase.table("categories").insert({**data.model_dump(), "company_id": user["company_id"]}).execute()
     return result.data[0]
 
 
 @router.put("/{category_id}", response_model=CategoryOut)
-async def update_category(category_id: str, data: CategoryUpdate, user: dict = Depends(require_admin)):
+def update_category(category_id: str, data: CategoryUpdate, user: dict = Depends(require_admin)):
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
     result = supabase.table("categories").update(update_data).eq("id", category_id).eq("company_id", user["company_id"]).execute()
     if not result.data:
@@ -42,6 +42,6 @@ async def update_category(category_id: str, data: CategoryUpdate, user: dict = D
 
 
 @router.delete("/{category_id}")
-async def delete_category(category_id: str, user: dict = Depends(require_admin)):
+def delete_category(category_id: str, user: dict = Depends(require_admin)):
     supabase.table("categories").delete().eq("id", category_id).eq("company_id", user["company_id"]).execute()
     return {"message": "Eliminada"}

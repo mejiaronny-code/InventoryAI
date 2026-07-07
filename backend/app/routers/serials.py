@@ -14,7 +14,7 @@ VALID_STATUSES = ("in_stock", "reserved", "sold", "retired")
 
 
 @router.get("/")
-async def list_serials(
+def list_serials(
     product_id: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
@@ -40,7 +40,7 @@ async def list_serials(
 
 
 @router.post("/")
-async def create_serial(data: dict, user: dict = Depends(require_admin)):
+def create_serial(data: dict, user: dict = Depends(require_admin)):
     """Registra uno o más números de serie."""
     company_id = user["company_id"]
 
@@ -80,7 +80,7 @@ async def create_serial(data: dict, user: dict = Depends(require_admin)):
 
 
 @router.get("/search/{serial_number}")
-async def find_serial(serial_number: str, user: dict = Depends(require_staff)):
+def find_serial(serial_number: str, user: dict = Depends(require_staff)):
     """Busca un número de serie específico."""
     company_id = user["company_id"]
 
@@ -98,7 +98,7 @@ async def find_serial(serial_number: str, user: dict = Depends(require_staff)):
 
 
 @router.patch("/{serial_id}")
-async def update_serial(serial_id: str, data: dict, user: dict = Depends(require_admin)):
+def update_serial(serial_id: str, data: dict, user: dict = Depends(require_admin)):
     """Actualiza el estado o notas de un número de serie."""
     company_id = user["company_id"]
 
@@ -124,7 +124,7 @@ async def update_serial(serial_id: str, data: dict, user: dict = Depends(require
 
 
 @router.delete("/{serial_id}")
-async def delete_serial(serial_id: str, user: dict = Depends(require_admin)):
+def delete_serial(serial_id: str, user: dict = Depends(require_admin)):
     """Elimina un número de serie (solo si está en in_stock)."""
     company_id = user["company_id"]
 

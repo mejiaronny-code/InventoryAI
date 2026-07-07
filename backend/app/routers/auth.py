@@ -27,7 +27,7 @@ class RegisterEmployeeRequest(BaseModel):
 
 
 @router.post("/login")
-async def login(data: LoginRequest):
+def login(data: LoginRequest):
     """Login via Supabase Auth."""
     try:
         # Cliente de auth aislado: NO contamina el cliente de datos con la sesión
@@ -63,7 +63,7 @@ async def login(data: LoginRequest):
 
 
 @router.post("/refresh")
-async def refresh_token(refresh_token: str):
+def refresh_token(refresh_token: str):
     try:
         result = supabase_auth.auth.refresh_session(refresh_token)
         return {
@@ -75,7 +75,7 @@ async def refresh_token(refresh_token: str):
 
 
 @router.get("/me")
-async def get_me(user: dict = Depends(get_current_user)):
+def get_me(user: dict = Depends(get_current_user)):
     return user
 
 
@@ -84,7 +84,7 @@ class UpdateProfileRequest(BaseModel):
 
 
 @router.put("/me")
-async def update_me(data: UpdateProfileRequest, user: dict = Depends(get_current_user)):
+def update_me(data: UpdateProfileRequest, user: dict = Depends(get_current_user)):
     supabase.table("user_profiles")\
         .update({"full_name": data.full_name})\
         .eq("id", user["id"])\
@@ -92,34 +92,37 @@ async def update_me(data: UpdateProfileRequest, user: dict = Depends(get_current
     return {**user, "full_name": data.full_name}
 
 
+def _create_employee_sync(data: RegisterEmployeeRequest, user: dict):
+    """Todo el trabajo con Supabase Auth/tablas — corre en threadpool."""
+    auth_result = supabase.auth.admin.create_user({
+        "email": data.email,
+        "password": data.password,
+        "email_confirm": True,
+    })
+
+    if not auth_result.user:
+        raise HTTPException(500, "Error al crear usuario")
+
+    supabase.table("user_profiles").insert({
+        "id": auth_result.user.id,
+        "company_id": user["company_id"],
+        "full_name": data.full_name,
+        "role": data.role if data.role in ("admin", "employee") else "employee",
+    }).execute()
+
+    company_res = supabase.table("companies").select("name").eq("id", user["company_id"]).single().execute()
+    company_name = company_res.data["name"] if company_res.data else "tu empresa"
+
+    return {"message": "Empleado creado", "id": auth_result.user.id}, company_name
+
+
 @router.post("/employees")
 async def create_employee(data: RegisterEmployeeRequest, user: dict = Depends(require_admin)):
     """El admin crea empleados para su empresa."""
     try:
-        # Crear usuario en Supabase Auth
-        auth_result = supabase.auth.admin.create_user({
-            "email": data.email,
-            "password": data.password,
-            "email_confirm": True,
-        })
-
-        if not auth_result.user:
-            raise HTTPException(500, "Error al crear usuario")
-
-        # Crear perfil
-        supabase.table("user_profiles").insert({
-            "id": auth_result.user.id,
-            "company_id": user["company_id"],
-            "full_name": data.full_name,
-            "role": data.role if data.role in ("admin", "employee") else "employee",
-        }).execute()
-
-        # Obtener nombre de la empresa para el email
-        company_res = supabase.table("companies").select("name").eq("id", user["company_id"]).single().execute()
-        company_name = company_res.data["name"] if company_res.data else "tu empresa"
+        result, company_name = await asyncio.to_thread(_create_employee_sync, data, user)
         asyncio.create_task(send_welcome_email(data.email, data.full_name, company_name))
-
-        return {"message": "Empleado creado", "id": auth_result.user.id}
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -129,16 +132,11 @@ async def create_employee(data: RegisterEmployeeRequest, user: dict = Depends(re
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
-@router.post("/forgot-password")
-async def forgot_password(data: ForgotPasswordRequest):
-    """
-    Genera un enlace de recuperación via Supabase admin API (sin que Supabase envíe email)
-    y manda nuestro propio email de marca con el link.
-    """
+def _forgot_password_sync(email: str):
+    """Llamadas de red (httpx) + Supabase, todas síncronas — corre en threadpool."""
     full_name = "Usuario"
 
     try:
-        # Buscar usuario en auth.users para obtener su nombre
         users_res = httpx.get(
             f"{settings.supabase_url}/auth/v1/admin/users",
             headers={
@@ -148,7 +146,7 @@ async def forgot_password(data: ForgotPasswordRequest):
             timeout=10,
         )
         all_users = users_res.json().get("users", [])
-        matched = next((u for u in all_users if u.get("email") == str(data.email)), None)
+        matched = next((u for u in all_users if u.get("email") == email), None)
         if matched:
             prof = supabase.table("user_profiles").select("full_name").eq("id", matched["id"]).single().execute()
             if prof.data:
@@ -156,7 +154,7 @@ async def forgot_password(data: ForgotPasswordRequest):
     except Exception:
         pass
 
-    # Generar enlace de recuperación via httpx directo al admin API
+    action_link = None
     try:
         redirect_url = f"{settings.frontend_url}/reset-password"
         link_res = httpx.post(
@@ -166,32 +164,42 @@ async def forgot_password(data: ForgotPasswordRequest):
                 "Authorization": f"Bearer {settings.supabase_service_role_key}",
                 "Content-Type": "application/json",
             },
-            json={"type": "recovery", "email": str(data.email)},
+            json={"type": "recovery", "email": email},
             timeout=10,
         )
         link_data = link_res.json()
-        # Supabase devuelve action_link o properties.action_link según versión
         action_link = (
             link_data.get("action_link")
             or (link_data.get("properties") or {}).get("action_link")
             or ""
         )
         if action_link:
-            # Reemplazar el redirect por el nuestro
             action_link = action_link.replace(
                 "type=recovery",
                 f"type=recovery&redirect_to={redirect_url}"
             )
-            asyncio.create_task(send_password_reset_email(str(data.email), full_name, action_link))
     except Exception:
-        pass
+        action_link = None
+
+    return full_name, action_link
+
+
+@router.post("/forgot-password")
+async def forgot_password(data: ForgotPasswordRequest):
+    """
+    Genera un enlace de recuperación via Supabase admin API (sin que Supabase envíe email)
+    y manda nuestro propio email de marca con el link.
+    """
+    full_name, action_link = await asyncio.to_thread(_forgot_password_sync, str(data.email))
+    if action_link:
+        asyncio.create_task(send_password_reset_email(str(data.email), full_name, action_link))
 
     # Siempre misma respuesta — no revelar si el email existe
     return {"message": "Si el correo existe, recibirás un enlace de recuperación."}
 
 
 @router.get("/employees")
-async def list_employees(user: dict = Depends(require_admin)):
+def list_employees(user: dict = Depends(require_admin)):
     result = supabase.table("user_profiles")\
         .select("id, full_name, role, is_active, created_at")\
         .eq("company_id", user["company_id"])\
@@ -212,7 +220,7 @@ async def list_employees(user: dict = Depends(require_admin)):
 
 
 @router.patch("/employees/{employee_id}/toggle-active")
-async def toggle_employee_active(employee_id: str, user: dict = Depends(require_admin)):
+def toggle_employee_active(employee_id: str, user: dict = Depends(require_admin)):
     """Activa o desactiva un empleado."""
     current = supabase.table("user_profiles")\
         .select("is_active")\
@@ -230,7 +238,7 @@ async def toggle_employee_active(employee_id: str, user: dict = Depends(require_
 
 
 @router.delete("/employees/{employee_id}")
-async def delete_employee(employee_id: str, user: dict = Depends(require_admin)):
+def delete_employee(employee_id: str, user: dict = Depends(require_admin)):
     """Elimina permanentemente un empleado del sistema."""
     # Verificar que pertenece a la empresa
     profile = supabase.table("user_profiles")\

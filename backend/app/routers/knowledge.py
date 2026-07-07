@@ -11,8 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from typing import Optional, List
 import logging
 
+import asyncio
 from app.core.auth import require_admin
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry
 from app.models.schemas import CompanyDocumentOut
 from app.services.knowledge_base import (
     detect_file_type, extract_text, chunk_text,
@@ -43,7 +44,7 @@ def _get_docs_limit(company_id: str) -> int:
 
 
 @router.get("/documents", response_model=List[CompanyDocumentOut])
-async def list_documents(user: dict = Depends(require_admin)):
+def list_documents(user: dict = Depends(require_admin)):
     """Lista los documentos de la base de conocimiento de la empresa."""
     company_id = _get_company_id(user)
     res = supabase.table("company_documents")\
@@ -55,7 +56,7 @@ async def list_documents(user: dict = Depends(require_admin)):
 
 
 @router.get("/documents/limit")
-async def get_documents_limit(user: dict = Depends(require_admin)):
+def get_documents_limit(user: dict = Depends(require_admin)):
     """Devuelve el límite de documentos y cuántos lleva subidos la empresa."""
     company_id = _get_company_id(user)
     limit = _get_docs_limit(company_id)
@@ -84,11 +85,11 @@ async def upload_document(
     company_id = _get_company_id(user)
 
     # 1. Verificar límite
-    limit = _get_docs_limit(company_id)
-    count_res = supabase.table("company_documents")\
+    limit = await asyncio.to_thread(_get_docs_limit, company_id)
+    count_query = supabase.table("company_documents")\
         .select("id", count="exact")\
-        .eq("company_id", company_id)\
-        .execute()
+        .eq("company_id", company_id)
+    count_res = await run_with_retry(lambda: count_query.execute())
     if (count_res.count or 0) >= limit:
         raise HTTPException(
             status_code=403,
@@ -111,14 +112,15 @@ async def upload_document(
         raise HTTPException(status_code=413, detail="El archivo no puede superar 15 MB.")
 
     # 3. Crear el registro del documento (status=processing)
-    doc_res = supabase.table("company_documents").insert({
+    insert_query = supabase.table("company_documents").insert({
         "company_id": company_id,
         "title": title.strip()[:200],
         "filename": file.filename or "documento",
         "file_type": file_type,
         "status": "processing",
         "uploaded_by": user.get("id"),
-    }).execute()
+    })
+    doc_res = await run_with_retry(lambda: insert_query.execute())
     document = doc_res.data[0]
     document_id = document["id"]
 
@@ -143,22 +145,25 @@ async def upload_document(
                 "embedding": embedding,
             })
 
-        supabase.table("company_document_chunks").insert(rows).execute()
+        chunks_query = supabase.table("company_document_chunks").insert(rows)
+        await run_with_retry(lambda: chunks_query.execute())
 
-        supabase.table("company_documents").update({
+        ready_query = supabase.table("company_documents").update({
             "status": "ready",
             "chunk_count": len(rows),
-        }).eq("id", document_id).execute()
+        }).eq("id", document_id)
+        await run_with_retry(lambda: ready_query.execute())
 
         document["status"] = "ready"
         document["chunk_count"] = len(rows)
 
     except Exception as e:
         logger.error(f"Error procesando documento {document_id}: {e}")
-        supabase.table("company_documents").update({
+        error_query = supabase.table("company_documents").update({
             "status": "error",
             "error_message": str(e)[:500],
-        }).eq("id", document_id).execute()
+        }).eq("id", document_id)
+        await run_with_retry(lambda: error_query.execute())
         document["status"] = "error"
         document["error_message"] = str(e)[:500]
 
@@ -166,7 +171,7 @@ async def upload_document(
 
 
 @router.delete("/documents/{document_id}")
-async def delete_document(document_id: str, user: dict = Depends(require_admin)):
+def delete_document(document_id: str, user: dict = Depends(require_admin)):
     """Elimina un documento y sus chunks (multi-tenant: solo de tu empresa)."""
     company_id = _get_company_id(user)
 

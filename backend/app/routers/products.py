@@ -68,7 +68,7 @@ async def list_public_products(
 
 
 @router.get("/", response_model=List[ProductWithStock])
-async def list_products(
+def list_products(
     category_id: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = Query(50, le=200),
@@ -104,9 +104,9 @@ async def list_products(
 
 
 @router.get("/{product_id}", response_model=ProductWithStock)
-async def get_product(product_id: str, user: dict = Depends(require_staff)):
+def get_product(product_id: str, user: dict = Depends(require_staff)):
     result = supabase.table("products")\
-        .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\
+        .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, store_location, min_stock_alert, nearest_expiry)")\
         .eq("id", product_id)\
         .eq("company_id", user["company_id"])\
         .single()\
@@ -150,7 +150,8 @@ async def create_product(data: ProductCreate, user: dict = Depends(require_admin
     if product_data.get("category_id"):
         product_data["category_id"] = str(product_data["category_id"])
 
-    result = supabase.table("products").insert(product_data).execute()
+    insert_query = supabase.table("products").insert(product_data)
+    result = await run_with_retry(lambda: insert_query.execute())
     if not result.data:
         raise HTTPException(500, "Error al crear producto")
 
@@ -168,12 +169,12 @@ async def update_product(
     Regenera el embedding SOLO si cambiaron name/description/use_cases.
     """
     # Obtener estado actual
-    current = supabase.table("products")\
+    current_query = supabase.table("products")\
         .select("name, description, use_cases, company_id")\
         .eq("id", product_id)\
         .eq("company_id", user["company_id"])\
-        .single()\
-        .execute()
+        .single()
+    current = await run_with_retry(lambda: current_query.execute())
 
     if not current.data:
         raise HTTPException(404, "Producto no encontrado")
@@ -190,10 +191,10 @@ async def update_product(
     if update_data.get("category_id"):
         update_data["category_id"] = str(update_data["category_id"])
 
-    result = supabase.table("products")\
+    update_query = supabase.table("products")\
         .update(update_data)\
-        .eq("id", product_id)\
-        .execute()
+        .eq("id", product_id)
+    result = await run_with_retry(lambda: update_query.execute())
 
     if not result.data:
         raise HTTPException(500, "Error al actualizar")
@@ -202,7 +203,7 @@ async def update_product(
 
 
 @router.delete("/{product_id}")
-async def delete_product(product_id: str, user: dict = Depends(require_admin)):
+def delete_product(product_id: str, user: dict = Depends(require_admin)):
     """Soft delete — marca is_active = False."""
     supabase.table("products")\
         .update({"is_active": False})\
@@ -230,7 +231,7 @@ async def upload_product_image(
     storage_path = f"{user['company_id']}/{int(time.time())}_{file.filename}"
     upload_url = f"{settings.supabase_url}/storage/v1/object/{bucket}/{storage_path}"
 
-    response = httpx.put(
+    response = await run_with_retry(lambda: httpx.put(
         upload_url,
         content=content,
         headers={
@@ -240,7 +241,7 @@ async def upload_product_image(
             "x-upsert": "true",
         },
         timeout=30,
-    )
+    ))
 
     if response.status_code not in (200, 201):
         raise HTTPException(500, f"Error al subir imagen: {response.text}")
@@ -252,12 +253,12 @@ async def upload_product_image(
 @router.post("/{product_id}/regenerate-embedding")
 async def regenerate_embedding(product_id: str, user: dict = Depends(require_admin)):
     """Fuerza la regeneración del embedding de un producto."""
-    product = supabase.table("products")\
+    product_query = supabase.table("products")\
         .select("name, description, use_cases")\
         .eq("id", product_id)\
         .eq("company_id", user["company_id"])\
-        .single()\
-        .execute()
+        .single()
+    product = await run_with_retry(lambda: product_query.execute())
 
     if not product.data:
         raise HTTPException(404, "Producto no encontrado")
@@ -267,10 +268,10 @@ async def regenerate_embedding(product_id: str, user: dict = Depends(require_adm
         p["name"], p.get("description", ""), p.get("use_cases", "")
     )
 
-    supabase.table("products")\
+    update_query = supabase.table("products")\
         .update({"embedding": embedding})\
-        .eq("id", product_id)\
-        .execute()
+        .eq("id", product_id)
+    await run_with_retry(lambda: update_query.execute())
 
     return {"message": "Embedding regenerado correctamente"}
 
@@ -286,11 +287,11 @@ async def reembed_all_products(user: dict = Depends(require_admin)):
     if not company_id:
         raise HTTPException(401, "No se encontró la empresa asociada")
 
-    products_res = supabase.table("products")\
+    products_query = supabase.table("products")\
         .select("id, name, description, use_cases")\
         .eq("company_id", company_id)\
-        .eq("is_active", True)\
-        .execute()
+        .eq("is_active", True)
+    products_res = await run_with_retry(lambda: products_query.execute())
 
     products = products_res.data or []
     if not products:
@@ -303,10 +304,10 @@ async def reembed_all_products(user: dict = Depends(require_admin)):
             embedding = await generate_product_embedding(
                 p["name"], p.get("description") or "", p.get("use_cases") or ""
             )
-            supabase.table("products")\
+            update_query = supabase.table("products")\
                 .update({"embedding": embedding})\
-                .eq("id", p["id"])\
-                .execute()
+                .eq("id", p["id"])
+            await run_with_retry(lambda q=update_query: q.execute())
             processed += 1
         except Exception as e:
             logger.warning(f"Error re-embebiendo producto {p['id']}: {e}")
@@ -320,7 +321,7 @@ async def reembed_all_products(user: dict = Depends(require_admin)):
 
 
 @router.get("/{product_id}/variant-stock")
-async def get_variant_stock(product_id: str, user: dict = Depends(require_staff)):
+def get_variant_stock(product_id: str, user: dict = Depends(require_staff)):
     """Retorna el stock de todas las combinaciones de opciones de un producto."""
     # Verificar que el producto pertenece a la empresa
     prod = supabase.table("products")\
@@ -345,15 +346,15 @@ async def get_variant_stock_public(company_slug: str, product_id: str):
     company = await get_active_company(company_slug)
     require_public_catalog(company)
 
-    result = supabase.table("product_variants_stock")\
+    query = supabase.table("product_variants_stock")\
         .select("combination, quantity, warehouse_id")\
-        .eq("product_id", product_id)\
-        .execute()
+        .eq("product_id", product_id)
+    result = await run_with_retry(lambda: query.execute())
     return result.data or []
 
 
 @router.put("/{product_id}/variant-stock")
-async def upsert_variant_stock(
+def upsert_variant_stock(
     product_id: str,
     items: List[VariantStockUpsert],
     user: dict = Depends(require_admin),
@@ -431,7 +432,7 @@ async def upsert_variant_stock(
 
 
 @router.get("/{product_id}/variants")
-async def get_variants(product_id: str, user: dict = Depends(require_staff)):
+def get_variants(product_id: str, user: dict = Depends(require_staff)):
     """Retorna todas las variantes de un producto padre."""
     result = supabase.table("products")\
         .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\

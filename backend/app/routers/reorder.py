@@ -31,7 +31,29 @@ async def list_requests(
     if status:
         query = query.eq("status", status)
     result = await _run_with_retry(lambda: query.execute())
-    return result.data or []
+    requests = result.data or []
+    if not requests:
+        return requests
+
+    # current_stock y min_stock_alert se guardan como foto al crear la solicitud y
+    # quedan desactualizados en cuanto cambian después (reservas, ventas, ajustes,
+    # o si el admin edita el mínimo desde Stock). Se sobreescriben aquí con los
+    # valores reales para que la lista siempre refleje el estado vigente.
+    pairs = {(r["product_id"], r["warehouse_id"]) for r in requests}
+    product_ids = list({p for p, _ in pairs})
+    stock_query = supabase.table("product_warehouse_stock")\
+        .select("product_id, warehouse_id, quantity, min_stock_alert")\
+        .in_("product_id", product_ids)
+    stock_res = await _run_with_retry(lambda: stock_query.execute())
+    stock_map = {(s["product_id"], s["warehouse_id"]): s for s in (stock_res.data or [])}
+
+    for r in requests:
+        live = stock_map.get((r["product_id"], r["warehouse_id"]))
+        if live:
+            r["current_stock"] = live["quantity"]
+            r["min_stock_alert"] = live.get("min_stock_alert", r.get("min_stock_alert", 5))
+
+    return requests
 
 
 @router.post("/")

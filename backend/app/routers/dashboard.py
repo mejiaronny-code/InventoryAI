@@ -213,7 +213,7 @@ async def get_activity(
 
 
 @router.get("/superadmin")
-async def get_superadmin_metrics(
+def get_superadmin_metrics(
     month: str = None,
     user: dict = Depends(require_super_admin)
 ):

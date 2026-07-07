@@ -16,7 +16,7 @@ router = APIRouter(prefix="/stock", tags=["stock"])
 
 
 @router.get("/movements")
-async def list_movements(
+def list_movements(
     product_id: str = None,
     warehouse_id: str = None,
     user: dict = Depends(require_staff),
@@ -40,7 +40,17 @@ async def list_movements(
 async def create_movement(data: StockMovementCreate, user: dict = Depends(require_staff)):
     """
     Registra un movimiento de stock y actualiza la cantidad en product_warehouse_stock.
+    Todo el trabajo con Supabase es síncrono — se corre en threadpool para no
+    bloquear el event loop; el email (si aplica) se dispara aquí, ya en contexto async.
     """
+    result, email_info = await asyncio.to_thread(_create_movement_sync, data, user)
+    if email_info:
+        asyncio.create_task(send_low_stock_alert(**email_info))
+    return result
+
+
+def _create_movement_sync(data: StockMovementCreate, user: dict):
+    email_info = None
     movement_dump = data.model_dump()
     if movement_dump.get("expires_at"):
         movement_dump["expires_at"] = movement_dump["expires_at"].isoformat()
@@ -202,13 +212,13 @@ async def create_movement(data: StockMovementCreate, user: dict = Depends(requir
                         min_alert_val = stock_alert_row.get("min_stock_alert", 5)
                         company_res = supabase.table("companies").select("name").eq("id", company_id_alert).single().execute()
                         company_name_alert = company_res.data["name"] if company_res.data else ""
-                        asyncio.create_task(send_low_stock_alert(
+                        email_info = dict(
                             to_email=admin_email,
                             product_name=product.data["name"],
                             current_stock=new_qty,
                             company_name=company_name_alert,
                             min_stock=min_alert_val,
-                        ))
+                        )
             except Exception:
                 pass  # No crítico
 
@@ -236,11 +246,11 @@ async def create_movement(data: StockMovementCreate, user: dict = Depends(requir
             except Exception:
                 pass  # No crítico
 
-    return {"message": "Movimiento registrado", "new_quantity": new_qty}
+    return {"message": "Movimiento registrado", "new_quantity": new_qty}, email_info
 
 
 @router.put("/set")
-async def set_stock(data: StockUpdate, product_id: str, user: dict = Depends(require_admin)):
+def set_stock(data: StockUpdate, product_id: str, user: dict = Depends(require_admin)):
     """Establece el stock de un producto en un almacén directamente."""
     existing = supabase.table("product_warehouse_stock")\
         .select("id")\
@@ -351,7 +361,7 @@ async def get_expiring_products(
 
 
 @router.patch("/location")
-async def update_location(data: LocationUpdate, user: dict = Depends(require_staff)):
+def update_location(data: LocationUpdate, user: dict = Depends(require_staff)):
     """Actualiza la ubicación física (bodega + tienda) sin afectar la cantidad."""
     update_fields = {
         "aisle":          data.aisle          or None,

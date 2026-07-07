@@ -5,9 +5,15 @@ Cache de tokens en memoria para evitar 2 round trips a Supabase por request.
 """
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import asyncio
+import logging
 import time
 import threading
+from jose import jwt as jose_jwt, JWTError
 from app.core.supabase_client import supabase
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
 
@@ -64,17 +70,14 @@ async def get_current_user(
     if cached:
         return cached
 
-    # ── Cache miss: verificar contra Supabase ──
+    # ── Cache miss: verificar el token ──
     try:
-        user_resp = supabase.auth.get_user(token)
-        if not user_resp or not user_resp.user:
-            raise HTTPException(status_code=401, detail="Token inválido")
+        user_id, email = await _verify_token(token)
 
-        user_id = user_resp.user.id
-
-        profile_resp = supabase.table("user_profiles").select(
+        profile_query = supabase.table("user_profiles").select(
             "id, company_id, role, full_name, is_active"
-        ).eq("id", user_id).single().execute()
+        ).eq("id", user_id).single()
+        profile_resp = await asyncio.to_thread(lambda: profile_query.execute())
 
         if not profile_resp.data:
             raise HTTPException(status_code=401, detail="Perfil no encontrado")
@@ -94,7 +97,7 @@ async def get_current_user(
 
         user = {
             "id": user_id,
-            "email": user_resp.user.email,
+            "email": email,
             "company_id": company_id,
             "role": role,
             "full_name": profile.get("full_name"),
@@ -107,7 +110,48 @@ async def get_current_user(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Error de autenticación: {str(e)}")
+        logger.error(f"Error de autenticación: {e}")
+        raise HTTPException(status_code=401, detail="Error de autenticación")
+
+
+async def _verify_token(token: str) -> tuple[str, str | None]:
+    """
+    Verifica el JWT y retorna (user_id, email).
+    Si SUPABASE_JWT_SECRET está configurado, verifica localmente (sin roundtrip
+    de red). Si no, cae al flujo anterior contra Supabase Auth.
+    """
+    # La verificación local solo aplica a tokens firmados con HS256 (el secreto
+    # compartido "legacy"). Proyectos de Supabase con las claves de firma nuevas
+    # (asimétricas, ES256/RS256) emiten tokens que este secreto NO puede validar
+    # — en ese caso se cae automáticamente al flujo remoto, igual que si
+    # SUPABASE_JWT_SECRET no estuviera configurado.
+    alg = None
+    if settings.supabase_jwt_secret:
+        try:
+            alg = jose_jwt.get_unverified_header(token).get("alg")
+        except JWTError:
+            alg = None
+
+    if settings.supabase_jwt_secret and alg == "HS256":
+        try:
+            payload = jose_jwt.decode(
+                token,
+                settings.supabase_jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+        except JWTError as e:
+            # Logueado con el motivo exacto (firma inválida, expirado, audiencia
+            # incorrecta, etc.) — al cliente solo le llega "Token inválido".
+            logger.error(f"Verificación local de JWT falló ({type(e).__name__}): {e}")
+            raise HTTPException(status_code=401, detail="Token inválido")
+        return payload["sub"], payload.get("email")
+
+    # Fallback: verificación remota contra Supabase Auth (bloqueante → threadpool)
+    user_resp = await asyncio.to_thread(supabase.auth.get_user, token)
+    if not user_resp or not user_resp.user:
+        raise HTTPException(status_code=401, detail="Token inválido")
+    return user_resp.user.id, user_resp.user.email
 
 
 async def require_admin(user: dict = Security(get_current_user)) -> dict:

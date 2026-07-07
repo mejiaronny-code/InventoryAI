@@ -163,20 +163,18 @@ async def confirm_pick(reservation_id: str, user: dict = Depends(require_staff))
 
 
 @router.patch("/{reservation_id}/complete")
-async def complete_pick(reservation_id: str, user: dict = Depends(require_staff)):
+def complete_pick(reservation_id: str, user: dict = Depends(require_staff)):
     """Marca una reserva como 'completed' (entregada al cliente)."""
     company_id = user.get("company_id")
     if not company_id:
         raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
 
-    existing = await asyncio.to_thread(
-        lambda: supabase.table("reservations")
-            .select("id, status, product_id, warehouse_id, quantity")
-            .eq("id", reservation_id)
-            .eq("company_id", company_id)
-            .maybe_single()
-            .execute()
-    )
+    existing = supabase.table("reservations")\
+        .select("id, status, product_id, warehouse_id, quantity")\
+        .eq("id", reservation_id)\
+        .eq("company_id", company_id)\
+        .maybe_single()\
+        .execute()
     res_row = existing.data if existing else None
     if not res_row:
         raise HTTPException(404, "Reserva no encontrada")

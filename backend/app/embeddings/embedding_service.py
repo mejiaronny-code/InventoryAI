@@ -10,7 +10,7 @@ Ventajas:
   - Instruction-aware: mejor retrieval con prefijos de instrucción
   - Contexto 4× mayor: 32k tokens
 """
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APIStatusError, APIConnectionError
 from app.core.config import settings
 import logging
 import asyncio
@@ -26,12 +26,19 @@ deepinfra_client = AsyncOpenAI(
 EMBEDDING_MODEL      = "Qwen/Qwen3-Embedding-8B"
 EMBEDDING_DIMENSIONS = 1536   # MRL: misma dim que antes → sin migración de BD
 
-# Instrucción para consultas de búsqueda (NO se usa en documentos).
-# Qwen3-Embedding es instruction-aware: añadir el prefijo al query
-# mejora significativamente la precisión de retrieval.
+# Instrucciones para consultas de búsqueda (NO se usan en documentos).
+# Qwen3-Embedding es instruction-aware: añadir el prefijo correcto al query
+# mejora significativamente la precisión de retrieval. Cada dominio de
+# búsqueda tiene su propia instrucción — usar la de productos para preguntas
+# institucionales (FAQs, horarios, políticas) degrada el retrieval.
 _QUERY_INSTRUCTION = (
     "Instruct: Busca productos en un catálogo de inventario que "
     "coincidan con la siguiente descripción o nombre\nQuery: "
+)
+_COMPANY_INFO_QUERY_INSTRUCTION = (
+    "Instruct: Busca información institucional de una empresa (horarios, "
+    "ubicación, políticas, métodos de pago, envíos, preguntas frecuentes) "
+    "que responda la siguiente pregunta de un cliente\nQuery: "
 )
 
 
@@ -48,28 +55,46 @@ def build_product_text(name: str, description: str = "", use_cases: str = "") ->
     return ". ".join(filter(None, parts))
 
 
-async def generate_embedding(text: str, is_query: bool = True) -> list[float]:
+async def generate_embedding(
+    text: str,
+    is_query: bool = True,
+    retries: int = 3,
+    instruction: str = _QUERY_INSTRUCTION,
+) -> list[float]:
     """
     Genera embedding para un texto.
 
     Args:
-        text:      El texto a embeber.
-        is_query:  True cuando es una consulta de búsqueda (añade prefijo de
-                   instrucción para mejor retrieval). False para documentos
-                   (nombres/descripciones de productos).
+        text:        El texto a embeber.
+        is_query:    True cuando es una consulta de búsqueda (añade prefijo de
+                     instrucción para mejor retrieval). False para documentos
+                     (nombres/descripciones de productos, chunks de la base
+                     de conocimiento).
+        retries:     Reintentos ante sobrecarga transitoria de DeepInfra
+                     (429 "Model busy" / engine_overloaded) con backoff exponencial.
+        instruction: Prefijo de instrucción a usar cuando is_query=True. Por
+                     defecto la de búsqueda de productos — pasa
+                     `_COMPANY_INFO_QUERY_INSTRUCTION` para preguntas
+                     institucionales (search_company_info).
     """
-    try:
-        input_text = (_QUERY_INSTRUCTION + text.strip()) if is_query else text.strip()
-        response = await deepinfra_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=input_text,
-            dimensions=EMBEDDING_DIMENSIONS,
-            encoding_format="float",
-        )
-        return response.data[0].embedding
-    except Exception as e:
-        logger.error(f"Error generando embedding con DeepInfra: {e}")
-        raise
+    input_text = (instruction + text.strip()) if is_query else text.strip()
+    for attempt in range(retries + 1):
+        try:
+            response = await deepinfra_client.embeddings.create(
+                model=EMBEDDING_MODEL,
+                input=input_text,
+                dimensions=EMBEDDING_DIMENSIONS,
+                encoding_format="float",
+            )
+            return response.data[0].embedding
+        except (APIStatusError, APIConnectionError) as e:
+            is_overloaded = getattr(e, "status_code", None) == 429
+            if attempt == retries or not is_overloaded:
+                logger.error(f"Error generando embedding con DeepInfra: {e}")
+                raise
+            wait = 1.5 * (attempt + 1)
+            logger.warning(f"DeepInfra ocupado (429), reintentando en {wait}s (intento {attempt + 1}/{retries})")
+            await asyncio.sleep(wait)
 
 
 async def generate_product_embedding(

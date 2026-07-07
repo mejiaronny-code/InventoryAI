@@ -17,7 +17,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
     Factory que crea los tools del agente inyectando el company_id.
     Esto garantiza que el agente SOLO accede al inventario de esa empresa.
     """
-    from app.embeddings.embedding_service import generate_embedding
+    from app.embeddings.embedding_service import generate_embedding, _COMPANY_INFO_QUERY_INSTRUCTION
     features = features or {}
 
     @tool
@@ -1021,7 +1021,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
         eso usa search_products.
         """
         try:
-            query_embedding = await generate_embedding(query)
+            query_embedding = await generate_embedding(query, instruction=_COMPANY_INFO_QUERY_INSTRUCTION)
 
             result = supabase_client.rpc("search_company_knowledge", {
                 "query_embedding": query_embedding,

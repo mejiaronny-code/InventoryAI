@@ -15,7 +15,7 @@ import threading
 import asyncio
 
 from app.core.auth import require_staff, require_admin
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry
 from app.core.company_features import get_active_company, require_public_catalog
 from app.models.schemas import BookingCreate, BookingUpdate
 from app.routers.reservations import _generate_code
@@ -61,55 +61,8 @@ def _check_booking_rate_limit(request: Request) -> None:
         bucket[hour] = bucket.get(hour, 0) + 1
 
 
-@router.post("/public/{company_slug}")
-async def create_public_booking(company_slug: str, data: BookingCreate, request: Request):
-    """Reserva de mesa / pedido para recoger, creada por el cliente."""
-    # Honeypot: un humano nunca llena este campo oculto → si viene, es bot.
-    # Respondemos "ok" falso para no darle pistas al atacante.
-    if data.website:
-        return {"code": "OK", "message": "Reserva creada"}
-
-    # Rate limit por IP (anti-spam de reservas)
-    _check_booking_rate_limit(request)
-
-    company = await get_active_company(company_slug, "id, name, features")
-    require_public_catalog(company)
-    company_id = company["id"]
-    company_name = company["name"]
-
-    if data.service_type not in ("dine_in", "pickup"):
-        raise HTTPException(400, "Tipo de servicio inválido")
-
-    # Validar que el tipo de servicio esté habilitado para esta empresa
-    features = company.get("features") or {}
-    if data.service_type == "dine_in" and not features.get("table_reservations"):
-        raise HTTPException(400, "Este negocio no acepta reservas de mesa")
-    if data.service_type == "pickup" and not features.get("pickup_orders"):
-        raise HTTPException(400, "Este negocio no acepta pedidos para recoger")
-
-    # Requerir al menos un dato de contacto (sube la fricción a trolls)
-    if not (data.client_phone and data.client_phone.strip()) and \
-       not (data.client_email and str(data.client_email).strip()):
-        raise HTTPException(400, "Proporciona un teléfono o email de contacto")
-
-    # Validar fecha/hora: ni en el pasado ni demasiado a futuro
-    reserved = data.reserved_at
-    now = datetime.now(timezone.utc)
-    if reserved.tzinfo is None:
-        reserved = reserved.replace(tzinfo=timezone.utc)
-    if reserved < now - timedelta(minutes=10):
-        raise HTTPException(400, "La fecha de la reserva no puede ser en el pasado")
-    if reserved > now + timedelta(days=_MAX_DAYS_AHEAD):
-        raise HTTPException(400, f"Solo se puede reservar hasta {_MAX_DAYS_AHEAD} días a futuro")
-
-    # Topar la pre-orden (anti "9999× pizza")
-    if len(data.items) > _MAX_PREORDER_LINES:
-        raise HTTPException(400, "Demasiados platillos en la pre-orden")
-    for it in data.items:
-        if it.quantity > _MAX_PREORDER_QTY:
-            raise HTTPException(400, f"Cantidad máxima por platillo: {_MAX_PREORDER_QTY}")
-
-    # Código único
+def _write_booking_sync(data: BookingCreate, company_id: str) -> str:
+    """Código único + insert de booking/items/notificación. Corre en threadpool."""
     code = _generate_code()
     for _ in range(5):
         existing = supabase.table("bookings").select("id").eq("code", code).execute()
@@ -177,6 +130,61 @@ async def create_public_booking(company_slug: str, data: BookingCreate, request:
         "metadata": {"booking_id": booking_id, "code": code, "client_name": data.client_name},
     }).execute()
 
+    return code
+
+
+@router.post("/public/{company_slug}")
+async def create_public_booking(company_slug: str, data: BookingCreate, request: Request):
+    """Reserva de mesa / pedido para recoger, creada por el cliente."""
+    # Honeypot: un humano nunca llena este campo oculto → si viene, es bot.
+    # Respondemos "ok" falso para no darle pistas al atacante.
+    if data.website:
+        return {"code": "OK", "message": "Reserva creada"}
+
+    # Rate limit por IP (anti-spam de reservas)
+    _check_booking_rate_limit(request)
+
+    company = await get_active_company(company_slug, "id, name, features")
+    require_public_catalog(company)
+    company_id = company["id"]
+    company_name = company["name"]
+
+    if data.service_type not in ("dine_in", "pickup"):
+        raise HTTPException(400, "Tipo de servicio inválido")
+
+    # Validar que el tipo de servicio esté habilitado para esta empresa
+    features = company.get("features") or {}
+    if data.service_type == "dine_in" and not features.get("table_reservations"):
+        raise HTTPException(400, "Este negocio no acepta reservas de mesa")
+    if data.service_type == "pickup" and not features.get("pickup_orders"):
+        raise HTTPException(400, "Este negocio no acepta pedidos para recoger")
+
+    # Requerir al menos un dato de contacto (sube la fricción a trolls)
+    if not (data.client_phone and data.client_phone.strip()) and \
+       not (data.client_email and str(data.client_email).strip()):
+        raise HTTPException(400, "Proporciona un teléfono o email de contacto")
+
+    # Validar fecha/hora: ni en el pasado ni demasiado a futuro
+    reserved = data.reserved_at
+    now = datetime.now(timezone.utc)
+    if reserved.tzinfo is None:
+        reserved = reserved.replace(tzinfo=timezone.utc)
+    if reserved < now - timedelta(minutes=10):
+        raise HTTPException(400, "La fecha de la reserva no puede ser en el pasado")
+    if reserved > now + timedelta(days=_MAX_DAYS_AHEAD):
+        raise HTTPException(400, f"Solo se puede reservar hasta {_MAX_DAYS_AHEAD} días a futuro")
+
+    # Topar la pre-orden (anti "9999× pizza")
+    if len(data.items) > _MAX_PREORDER_LINES:
+        raise HTTPException(400, "Demasiados platillos en la pre-orden")
+    for it in data.items:
+        if it.quantity > _MAX_PREORDER_QTY:
+            raise HTTPException(400, f"Cantidad máxima por platillo: {_MAX_PREORDER_QTY}")
+
+    # Todo el trabajo de escritura en Supabase se corre en threadpool para no
+    # bloquear el event loop (código único, insert de booking/items/notificación).
+    code = await asyncio.to_thread(_write_booking_sync, data, company_id)
+
     # Email de confirmación al cliente (reutiliza la plantilla de reservas)
     if data.client_email:
         label = "Reserva de mesa" if data.service_type == "dine_in" else "Pedido para recoger"
@@ -196,18 +204,19 @@ async def create_public_booking(company_slug: str, data: BookingCreate, request:
 @router.get("/public/{code}")
 async def get_public_booking(code: str, company_slug: str):
     company = await get_active_company(company_slug, "id")
-    result = supabase.table("bookings")\
+    query = supabase.table("bookings")\
         .select("*, restaurant_tables(name, zone), booking_items(quantity, modifiers, products(name, price))")\
         .eq("code", code.upper())\
         .eq("company_id", company["id"])\
-        .maybe_single().execute()
+        .maybe_single()
+    result = await run_with_retry(lambda: query.execute())
     if not (result and result.data):
         raise HTTPException(404, "Reserva no encontrada")
     return result.data
 
 
 @router.get("/")
-async def list_bookings(
+def list_bookings(
     status: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -235,7 +244,7 @@ async def list_bookings(
 
 
 @router.delete("/cleanup")
-async def cleanup_bookings(user: dict = Depends(require_admin)):
+def cleanup_bookings(user: dict = Depends(require_admin)):
     """Elimina las reservas terminadas (completadas / canceladas / no-show)."""
     company_id = user.get("company_id")
     if not company_id:
@@ -250,7 +259,7 @@ async def cleanup_bookings(user: dict = Depends(require_admin)):
 
 
 @router.patch("/{booking_id}")
-async def update_booking(booking_id: str, data: BookingUpdate, user: dict = Depends(require_staff)):
+def update_booking(booking_id: str, data: BookingUpdate, user: dict = Depends(require_staff)):
     company_id = user.get("company_id")
     if not company_id:
         raise HTTPException(401, "No se encontró la empresa asociada")

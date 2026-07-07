@@ -27,7 +27,7 @@ def patched(monkeypatch, fake_supabase):
 
 
 def _run(data):
-    return asyncio.run(recipes.register_sale(data, user=USER))
+    return recipes.register_sale(data, user=USER)
 
 
 def test_redondea_cantidad_de_insumo(patched):

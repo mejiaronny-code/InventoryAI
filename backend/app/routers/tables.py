@@ -14,7 +14,7 @@ router = APIRouter(prefix="/tables", tags=["tables"])
 
 
 @router.get("/")
-async def list_tables(user: dict = Depends(require_staff)):
+def list_tables(user: dict = Depends(require_staff)):
     company_id = user.get("company_id")
     if not company_id:
         raise HTTPException(401, "No se encontró la empresa asociada")
@@ -40,7 +40,7 @@ async def list_tables_public(company_slug: str):
 
 
 @router.post("/")
-async def create_table(data: TableCreate, user: dict = Depends(require_admin)):
+def create_table(data: TableCreate, user: dict = Depends(require_admin)):
     company_id = user.get("company_id")
     if not company_id:
         raise HTTPException(401, "No se encontró la empresa asociada")
@@ -54,7 +54,7 @@ async def create_table(data: TableCreate, user: dict = Depends(require_admin)):
 
 
 @router.patch("/{table_id}")
-async def update_table(table_id: str, data: TableUpdate, user: dict = Depends(require_admin)):
+def update_table(table_id: str, data: TableUpdate, user: dict = Depends(require_admin)):
     company_id = user.get("company_id")
     if not company_id:
         raise HTTPException(401, "No se encontró la empresa asociada")
@@ -72,7 +72,7 @@ async def update_table(table_id: str, data: TableUpdate, user: dict = Depends(re
 
 
 @router.delete("/{table_id}")
-async def delete_table(table_id: str, user: dict = Depends(require_admin)):
+def delete_table(table_id: str, user: dict = Depends(require_admin)):
     company_id = user.get("company_id")
     if not company_id:
         raise HTTPException(401, "No se encontró la empresa asociada")

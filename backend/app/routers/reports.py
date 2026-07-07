@@ -9,23 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 import asyncio
-import httpx
 
 from app.core.auth import require_staff, require_admin
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry as _run_with_retry
 
 router = APIRouter(prefix="/reports", tags=["reports"])
-
-
-async def _run_with_retry(fn, retries: int = 2):
-    """Reintenta la llamada a Supabase si la conexión HTTP/2 se cae en idle."""
-    for attempt in range(retries + 1):
-        try:
-            return await asyncio.to_thread(fn)
-        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError):
-            if attempt == retries:
-                raise
-            await asyncio.sleep(0.3 * (attempt + 1))
 
 
 # ── 4.1  Aging Report ─────────────────────────────────────────────────
@@ -231,19 +219,22 @@ async def import_products(payload: dict, user: dict = Depends(require_admin)):
 
             # Verificar si existe por SKU
             if product_data["sku"]:
-                existing = supabase.table("products")\
+                existing_query = supabase.table("products")\
                     .select("id")\
                     .eq("company_id", company_id)\
                     .eq("sku", product_data["sku"])\
-                    .maybe_single().execute()
+                    .maybe_single()
+                existing = await _run_with_retry(lambda q=existing_query: q.execute())
                 if existing and existing.data:
-                    supabase.table("products")\
+                    update_query = supabase.table("products")\
                         .update({k: v for k, v in product_data.items() if k != "company_id"})\
-                        .eq("id", existing.data["id"]).execute()
+                        .eq("id", existing.data["id"])
+                    await _run_with_retry(lambda q=update_query: q.execute())
                     updated += 1
                     continue
 
-            supabase.table("products").insert(product_data).execute()
+            insert_query = supabase.table("products").insert(product_data)
+            await _run_with_retry(lambda q=insert_query: q.execute())
             created += 1
 
         except Exception as e:

@@ -287,6 +287,7 @@ class StockByWarehouse(BaseModel):
     bin:   Optional[str] = None
     store_location: Optional[str] = None   # Ubicación visible al cliente (ej: "Pasillo 3 - Estante B")
     nearest_expiry: Optional[datetime] = None
+    min_stock_alert: Optional[int] = 5
 
 class ProductWithStock(ProductOut):
     total_stock: int = 0
