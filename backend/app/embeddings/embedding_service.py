@@ -23,8 +23,15 @@ deepinfra_client = AsyncOpenAI(
     base_url="https://api.deepinfra.com/v1/openai",
 )
 
-EMBEDDING_MODEL      = "Qwen/Qwen3-Embedding-8B"
-EMBEDDING_DIMENSIONS = 1536   # MRL: misma dim que antes → sin migración de BD
+EMBEDDING_MODEL      = "Qwen/Qwen3-Embedding-0.6B"
+EMBEDDING_DIMENSIONS = 1024   # máximo soportado por el 0.6B (MRL)
+
+# Migrado de Qwen3-Embedding-8B (1536d) al 0.6B (1024d) — mismo precio en
+# DeepInfra ($0.010/1M), modelo ~13x más chico → muchos menos cold starts
+# (el 8B tardaba 20-40s en "despertar" en la infraestructura compartida de
+# DeepInfra). Validado con datos reales antes de migrar: mismo top-1 en
+# 6/6 búsquedas de productos y 5/5 preguntas de la base de conocimiento
+# (ver migración 014_switch_qwen3_0_6b.sql).
 
 # Instrucciones para consultas de búsqueda (NO se usan en documentos).
 # Qwen3-Embedding es instruction-aware: añadir el prefijo correcto al query

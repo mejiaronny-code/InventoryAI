@@ -599,13 +599,26 @@ def _split_flushable(buf: str) -> tuple[str, str]:
     Retiene todo desde el último '[' que NO tenga un ']' después — así nunca se
     filtra un [ref:uuid] a medio llegar. Los [ref:uuid] completos en la parte
     segura se eliminan (igual que hace el post-proceso de la respuesta no-stream).
+
+    También retiene una imagen markdown incompleta (![alt](url — el modelo
+    transmite la URL carácter por carácter, así que "safe" nunca contenía la
+    URL completa de una sola vez y `_dedupe_images` jamás detectaba que una
+    imagen ya se había mostrado antes (bug real: mismo producto mostrando su
+    imagen duplicada en la sección de colores). Se retiene la imagen entera
+    hasta que llegue el ')' de cierre, para que el dedupe la vea completa.
     """
     import re
+    cut = len(buf)
+
     last_open = buf.rfind("[")
-    if last_open == -1 or "]" in buf[last_open:]:
-        safe, rest = buf, ""
-    else:
-        safe, rest = buf[:last_open], buf[last_open:]
+    if last_open != -1 and "]" not in buf[last_open:]:
+        cut = min(cut, last_open)
+
+    last_img = buf.rfind("![")
+    if last_img != -1 and not re.match(r"!\[[^\]]*\]\([^\)\n]*\)", buf[last_img:]):
+        cut = min(cut, last_img)
+
+    safe, rest = buf[:cut], buf[cut:]
     safe = re.sub(r"\[ref:[^\]]*\]", "", safe)
     return safe, rest
 
