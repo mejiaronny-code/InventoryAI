@@ -10,7 +10,7 @@ import base64
 import imghdr
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from collections import defaultdict
 import threading
 
@@ -59,7 +59,7 @@ def _check_ip_rate_limit(request: Request) -> None:
     """Lanza HTTP 429 si una IP supera _IP_LIMIT_PER_MIN peticiones por minuto."""
     global _ip_request_counter
     ip = _client_ip(request)
-    minute = datetime.utcnow().strftime("%Y-%m-%dT%H:%M")
+    minute = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
 
     with _ip_lock:
         _ip_request_counter += 1

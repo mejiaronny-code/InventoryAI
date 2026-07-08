@@ -7,7 +7,7 @@ from langchain.tools import tool
 from typing import Optional
 from uuid import UUID
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -232,17 +232,38 @@ def create_inventory_tools(
                 return "No encontré productos que coincidan con tu búsqueda."
 
             # 3. Determinar disponibilidad: platillos por is_available, el resto por stock
+            # Se cargan el stock y el stock por variante de TODOS los candidatos en una
+            # sola consulta cada uno (antes se hacía una consulta por producto dentro
+            # del for — con 8-10 candidatos eso eran ~10 round-trips en serie a Supabase).
+            product_ids_all = [p["id"] for p in products]
+            stock_by_product: dict[str, list] = {}
+            if product_ids_all:
+                stock_all_res = supabase_client.table("product_warehouse_stock")\
+                    .select("product_id, quantity, warehouse_id, store_location, warehouses(name)")\
+                    .in_("product_id", product_ids_all)\
+                    .execute()
+                for row in (stock_all_res.data or []):
+                    stock_by_product.setdefault(row["product_id"], []).append(row)
+
+            variant_stock_by_product: dict[str, list] = {}
+            if product_ids_all:
+                try:
+                    vs_all_res = supabase_client.table("product_variants_stock")\
+                        .select("product_id, quantity")\
+                        .in_("product_id", product_ids_all)\
+                        .gt("quantity", 0)\
+                        .execute()
+                    for row in (vs_all_res.data or []):
+                        variant_stock_by_product.setdefault(row["product_id"], []).append(row)
+                except Exception:
+                    pass
+
             available = []
             for p in products:
                 meta = meta_map.get(p["id"], {})
                 is_dish = meta.get("product_type") == "dish"
 
-                stock_q = supabase_client.table("product_warehouse_stock")\
-                    .select("quantity, warehouse_id, store_location, warehouses(name)")\
-                    .eq("product_id", p["id"])\
-                    .execute()
-
-                stock_rows = stock_q.data or []
+                stock_rows = stock_by_product.get(p["id"], [])
 
                 # Filtrar por almacén específico si se indicó
                 if warehouse_id:
@@ -262,14 +283,9 @@ def create_inventory_tools(
                 # Si stock general = 0, revisar si hay variant stock
                 # (puede pasar si el sync falló pero las variantes tienen cantidad)
                 if total_stock == 0:
-                    vs_check = supabase_client.table("product_variants_stock")\
-                        .select("quantity")\
-                        .eq("product_id", p["id"])\
-                        .gt("quantity", 0)\
-                        .limit(1)\
-                        .execute()
-                    if vs_check.data:
-                        total_stock = sum(v["quantity"] for v in vs_check.data)
+                    vs_rows = variant_stock_by_product.get(p["id"], [])
+                    if vs_rows:
+                        total_stock = sum(v["quantity"] for v in vs_rows)
 
                 if total_stock > 0:
                     p["total_stock"] = total_stock
@@ -717,7 +733,7 @@ def create_inventory_tools(
                 reservation_code = f"RES-{product_id[:4].upper()}-{warehouse_id[:4].upper()}"
 
             from datetime import timedelta
-            expires_at = (datetime.utcnow() + timedelta(hours=hours)).isoformat()
+            expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
 
             # Crear reserva
             reservation_data = {
@@ -805,7 +821,7 @@ def create_inventory_tools(
                 return f"La reserva {reservation_code} no se puede cancelar (estado: {res['status']})."
 
             supabase_client.table("reservations")\
-                .update({"status": "cancelled", "updated_at": datetime.utcnow().isoformat()})\
+                .update({"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()})\
                 .eq("id", res["id"])\
                 .execute()
 
@@ -988,8 +1004,8 @@ def create_inventory_tools(
         try:
             from datetime import timedelta
             days = days or 30  # null o None → default 30
-            cutoff = (datetime.utcnow() + timedelta(days=days)).isoformat()
-            now_iso = datetime.utcnow().isoformat()
+            cutoff = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+            now_iso = datetime.now(timezone.utc).isoformat()
 
             product_ids_res = supabase_client.table("products")\
                 .select("id")\
@@ -1025,7 +1041,7 @@ def create_inventory_tools(
                 name = name_map.get(s["product_id"], "—")
                 wh = (s.get("warehouses") or {}).get("name", "—")
                 expiry = s["nearest_expiry"][:10]
-                days_left = (datetime.fromisoformat(s["nearest_expiry"].replace("Z", "")) - datetime.utcnow()).days
+                days_left = (datetime.fromisoformat(s["nearest_expiry"].replace("Z", "+00:00")) - datetime.now(timezone.utc)).days
                 urgency = "🔴" if days_left <= 3 else "🟡" if days_left <= 7 else "🟢"
                 lines.append(f"  {urgency} **{name}** — Vence: {expiry} ({max(days_left, 0)} días) | {s['quantity']} unidades | {wh}")
 

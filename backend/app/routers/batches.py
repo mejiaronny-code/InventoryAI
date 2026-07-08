@@ -5,7 +5,7 @@ Solo activo cuando la empresa tiene el feature 'batch_tracking' habilitado.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 
 from app.core.auth import require_staff, require_admin
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/batches", tags=["batches"])
 
 def _generate_batch_code(product_id: str) -> str:
     """Genera un código de lote único basado en fecha + producto."""
-    date_part = datetime.utcnow().strftime("%y%m%d%H%M")
+    date_part = datetime.now(timezone.utc).strftime("%y%m%d%H%M")
     prod_part = product_id[:4].upper()
     return f"LOT-{date_part}-{prod_part}"
 
@@ -65,7 +65,7 @@ async def list_batches(
         if not include_empty:
             q = q.gt("quantity", 0)
         if expiring_days is not None:
-            cutoff = (datetime.utcnow() + timedelta(days=expiring_days)).isoformat()
+            cutoff = (datetime.now(timezone.utc) + timedelta(days=expiring_days)).isoformat()
             q = q.not_.is_("expires_at", "null").lte("expires_at", cutoff)
         return q.execute()
 
@@ -80,7 +80,7 @@ async def list_batches(
         days_left = None
         if expires:
             try:
-                days_left = (datetime.fromisoformat(expires.replace("Z", "")) - datetime.utcnow()).days
+                days_left = (datetime.fromisoformat(expires.replace("Z", "+00:00")) - datetime.now(timezone.utc)).days
             except Exception:
                 pass
         enriched.append({
@@ -130,7 +130,7 @@ async def create_batch(data: BatchCreate, user: dict = Depends(require_admin)):
         "batch_code": batch_code,
         "quantity": data.quantity,
         "initial_quantity": data.quantity,
-        "received_at": (data.received_at or datetime.utcnow()).isoformat(),
+        "received_at": (data.received_at or datetime.now(timezone.utc)).isoformat(),
         "notes": data.notes,
     }
     if data.expires_at:

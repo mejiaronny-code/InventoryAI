@@ -12,7 +12,7 @@ Seguridad:
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 import logging
 
@@ -305,8 +305,8 @@ async def get_expiring(company_slug: str = Query(...), days: int = Query(30, le=
     company = await _resolve_company(company_slug)
     company_id = company["id"]
 
-    cutoff  = (datetime.utcnow() + timedelta(days=days)).isoformat()
-    now_iso = datetime.utcnow().isoformat()
+    cutoff  = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     product_ids_res = await asyncio.to_thread(
         lambda: supabase.table("products")
@@ -339,7 +339,7 @@ async def get_expiring(company_slug: str = Query(...), days: int = Query(30, le=
     for s in stock_res.data:
         p = name_map.get(s["product_id"], {})
         expiry = s["nearest_expiry"]
-        days_left = (datetime.fromisoformat(expiry.replace("Z", "")) - datetime.utcnow()).days
+        days_left = (datetime.fromisoformat(expiry.replace("Z", "+00:00")) - datetime.now(timezone.utc)).days
         items.append({
             "product_id": s["product_id"],
             "product_name": p.get("name", "—"),

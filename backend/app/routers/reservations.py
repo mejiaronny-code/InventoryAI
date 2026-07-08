@@ -4,7 +4,7 @@ Gestión de reservas para staff y operaciones públicas del cliente.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 import secrets
 import string
@@ -38,7 +38,7 @@ def _client_ip(request: Request) -> str:
 
 def _check_by_email_rate_limit(request: Request) -> None:
     ip = _client_ip(request)
-    hour = datetime.utcnow().strftime("%Y-%m-%dT%H")
+    hour = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
     with _by_email_lock:
         bucket = _ip_by_email_lookups[ip]
         for h in [h for h in bucket if h != hour]:
@@ -98,7 +98,7 @@ async def create_public_reservation(company_slug: str, data: ReservationCreate):
         or (p.get("categories") or {}).get("reservation_time_hours")
         or 48
     )
-    expires_at = (datetime.utcnow() + timedelta(hours=hours)).isoformat()
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
 
     # 5. Generar código único
     for _ in range(5):
@@ -278,7 +278,7 @@ async def update_reservation(
     if not current.data:
         raise HTTPException(404, "Reserva no encontrada")
 
-    update_data = {"status": data.status, "updated_at": datetime.utcnow().isoformat()}
+    update_data = {"status": data.status, "updated_at": datetime.now(timezone.utc).isoformat()}
     if data.notes is not None:
         update_data["notes"] = data.notes
 
@@ -404,7 +404,7 @@ async def delete_cancelled_reservations(user: dict = Depends(require_admin)):
 @router.post("/expire-all")
 async def expire_reservations(user: dict = Depends(require_staff)):
     """Expira las reservas vencidas y genera notificaciones."""
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     company_id = user["company_id"]
 
     # Buscar reservas pendientes vencidas ANTES de expirarlas para poder notificar

@@ -10,6 +10,7 @@ import asyncio
 import logging
 
 from app.core.config import settings
+from app.core.supabase_client import supabase
 from app.embeddings.embedding_service import start_warmup_loop
 from app.agents.chat_agent import start_chat_warmup_loop
 from app.routers import (
@@ -125,9 +126,15 @@ app.include_router(bookings.router,      prefix=API_PREFIX)
 
 # ── HEALTH CHECK ─────────────────────────────────────────────────────
 @app.get("/health")
-async def health():
+def health():
+    try:
+        supabase.table("companies").select("id").limit(1).execute()
+        db_status = "ok"
+    except Exception:
+        db_status = "down"
     return {
-        "status": "ok",
+        "status": "ok" if db_status == "ok" else "degraded",
+        "db": db_status,
         "version": "1.0.0",
         "environment": settings.environment,
     }

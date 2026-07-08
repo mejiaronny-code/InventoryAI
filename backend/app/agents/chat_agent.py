@@ -11,7 +11,8 @@ import json
 import logging
 import os
 import base64
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from openai import AsyncOpenAI
@@ -381,7 +382,7 @@ async def _run_agent(
         "role": "system",
         "content": SYSTEM_PROMPT.format(
             company_name=company_name,
-            current_datetime=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            current_datetime=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             custom_rules_section=custom_rules_section,
             currency_info=currency_info,
             stock_rule=stock_rule,
@@ -630,6 +631,7 @@ async def _run_agent_stream(
     """
     import re
 
+    t_start = time.monotonic()
     features = features or {}
     menu_mode = features.get("menu_mode", False)
     client = _client()
@@ -702,7 +704,7 @@ async def _run_agent_stream(
         "role": "system",
         "content": SYSTEM_PROMPT.format(
             company_name=company_name,
-            current_datetime=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            current_datetime=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             custom_rules_section=custom_rules_section,
             currency_info=currency_info,
             stock_rule=stock_rule,
@@ -720,6 +722,8 @@ async def _run_agent_stream(
 
     MAX_ITERATIONS = 4
     for iteration in range(MAX_ITERATIONS):
+        t_call = time.monotonic()
+        logger.info(f"[timer] llamando a DeepInfra (iter {iteration}) — +{t_call - t_start:.2f}s desde inicio")
         try:
             stream = await client.chat.completions.create(
                 model=CHAT_MODEL,
@@ -741,9 +745,13 @@ async def _run_agent_stream(
         content_acc = ""
         pending = ""
         tool_calls_acc: dict[int, dict] = {}
+        first_chunk_logged = False
 
         try:
             async for chunk in stream:
+                if not first_chunk_logged:
+                    first_chunk_logged = True
+                    logger.info(f"[timer] primer chunk de DeepInfra (iter {iteration}) — +{time.monotonic() - t_call:.2f}s desde la llamada, +{time.monotonic() - t_start:.2f}s desde inicio")
                 if getattr(chunk, "usage", None):
                     total_tokens_in  += chunk.usage.prompt_tokens or 0
                     total_tokens_out += chunk.usage.completion_tokens or 0
@@ -856,7 +864,8 @@ async def _run_agent_stream(
         logger.info(
             f"Chat (stream) completado [{CHAT_MODEL}] — "
             f"tokens: {total_tokens_in}in / {total_tokens_out}out "
-            f"(${_calculate_cost(CHAT_MODEL, total_tokens_in, total_tokens_out):.6f})"
+            f"(${_calculate_cost(CHAT_MODEL, total_tokens_in, total_tokens_out):.6f}) — "
+            f"[timer] total: {time.monotonic() - t_start:.2f}s"
         )
         yield {"done": True, "used_tools": used_tools}
         return

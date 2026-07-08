@@ -4,7 +4,7 @@ Movimientos de stock y ajustes de inventario.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 
 from app.core.auth import require_staff, require_admin
@@ -161,7 +161,7 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
                     # Generar código automático: LOTE-YYYYMMDD-XXXX
                     import random, string
                     suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
-                    batch_code = f"LOTE-{datetime.utcnow().strftime('%Y%m%d')}-{suffix}"
+                    batch_code = f"LOTE-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{suffix}"
                 expires_iso = data.expires_at.isoformat() if data.expires_at else None
                 batch_q = supabase.table("product_batches").insert({
                     "company_id": company_id_for_batch,
@@ -194,7 +194,8 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
                 .eq("warehouse_id", str(data.warehouse_id))
             _retry(update_expiry_q.execute)
         # Notificación si vence en 7 días o menos
-        days_to_expiry = (data.expires_at - datetime.utcnow()).days
+        expires_at_aware = data.expires_at if data.expires_at.tzinfo else data.expires_at.replace(tzinfo=timezone.utc)
+        days_to_expiry = (expires_at_aware - datetime.now(timezone.utc)).days
         if days_to_expiry <= 7:
             product_info_q = supabase.table("products").select("name, company_id")\
                 .eq("id", str(data.product_id)).single()
@@ -354,8 +355,8 @@ async def get_expiring_products(
 ):
     """Retorna productos con nearest_expiry dentro de los próximos N días."""
     company_id = user["company_id"]
-    cutoff  = (datetime.utcnow() + timedelta(days=days)).isoformat()
-    now_iso = datetime.utcnow().isoformat()
+    cutoff  = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     product_ids_res = await asyncio.to_thread(
         lambda: supabase.table("products")
@@ -390,7 +391,7 @@ async def get_expiring_products(
         p = name_map.get(s["product_id"], {})
         wh = (s.get("warehouses") or {}).get("name", "—")
         expiry = s["nearest_expiry"]
-        days_left = (datetime.fromisoformat(expiry.replace("Z", "")) - datetime.utcnow()).days
+        days_left = (datetime.fromisoformat(expiry.replace("Z", "+00:00")) - datetime.now(timezone.utc)).days
         result.append({
             "product_id": s["product_id"],
             "product_name": p.get("name", "—"),

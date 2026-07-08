@@ -4,7 +4,7 @@ Métricas del dashboard para admin y super admin.
 Queries paralelas con asyncio.to_thread para máximo rendimiento.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 from app.core.auth import require_staff, require_super_admin
 from app.core.supabase_client import supabase
@@ -19,7 +19,7 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
     if not company_id:
         raise HTTPException(status_code=403, detail="Esta cuenta no tiene empresa asignada")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0).isoformat()
     cutoff_30d = (now + timedelta(days=30)).isoformat()
 
@@ -243,7 +243,7 @@ def get_superadmin_metrics(
     active_companies = sum(1 for c in all_companies if c.get("is_active"))
 
     # Calcular rango del mes seleccionado
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if month:
         year, mon = int(month[:4]), int(month[5:7])
         month_start = datetime(year, mon, 1)

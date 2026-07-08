@@ -17,9 +17,11 @@ function parseMarkdown(text) {
     //    nombres de archivo subidos tienen espacios literales en la URL
     //    (ej. ".../Mochila prueba.jpg") — excluir \s hacía que esas imágenes
     //    nunca se reconocieran como <img> y la red de seguridad #2 las borraba.
+    //    El espacio crudo en el src además rompe el fetch en el navegador
+    //    (funciona con %20 pero no sin codificar) — se codifica antes de insertarlo.
     .replace(
       /!\\?\[([^\]]*)\\?\]\\?\((https?:\/\/[^\)\n]+)\)\\?/g,
-      '<img src="$2" alt="$1" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" onerror="this.style.display=\'none\'" />'
+      (_match, alt, url) => `<img src="${url.replace(/ /g, '%20')}" alt="${alt}" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" onerror="this.style.display='none'" />`
     )
     // 2. Red de seguridad: markdown de imagen sobrante o CORTADO a medias
     //    (la respuesta del modelo se truncó sin cerrar el paréntesis) -> fuera,

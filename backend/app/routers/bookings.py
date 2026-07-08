@@ -48,7 +48,7 @@ def _client_ip(request: Request) -> str:
 def _check_booking_rate_limit(request: Request) -> None:
     """Lanza 429 si una IP crea demasiadas reservas por hora."""
     ip = _client_ip(request)
-    hour = datetime.utcnow().strftime("%Y-%m-%dT%H")
+    hour = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
     with _ip_lock:
         bucket = _ip_bookings[ip]
         for h in [h for h in bucket if h != hour]:
@@ -272,7 +272,7 @@ def update_booking(booking_id: str, data: BookingUpdate, user: dict = Depends(re
     if not (current and current.data):
         raise HTTPException(404, "Reserva no encontrada")
 
-    update_data: dict = {"updated_at": datetime.utcnow().isoformat()}
+    update_data: dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if data.status is not None:
         if data.status not in VALID_STATUSES:
             raise HTTPException(400, "Estado inválido")

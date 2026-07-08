@@ -9,6 +9,7 @@ import { notificationsAPI, companiesAPI } from '../../services/api'
 import { useRealtimeNotifications } from '../../hooks/useRealtimeNotifications'
 import ChatWidget from '../chat/ChatWidget'
 import ThemeProvider from '../shared/ThemeProvider'
+import LiveClock from '../shared/LiveClock'
 import { CompanyFeaturesProvider } from '../../context/CompanyFeaturesContext'
 import {
   LayoutDashboard, Package, Tag, Warehouse, BarChart3,
@@ -203,9 +204,12 @@ export default function AdminLayout() {
       <div className="px-4 py-3 mx-3 mt-3 rounded-xl bg-ink-50 border border-ink-100">
         <p className="text-xs text-ink-500 font-medium">Conectado como</p>
         <p className="text-sm font-semibold text-ink-900 truncate">{user?.full_name || user?.email}</p>
-        <span className={clsx('badge text-xs mt-0.5', user?.role === 'admin' ? 'badge-orange' : 'badge-gray')}>
-          {user?.role === 'admin' ? 'Admin' : 'Empleado'}
-        </span>
+        <div className="flex items-center justify-between mt-0.5">
+          <span className={clsx('badge text-xs', user?.role === 'admin' ? 'badge-orange' : 'badge-gray')}>
+            {user?.role === 'admin' ? 'Admin' : 'Empleado'}
+          </span>
+          <LiveClock compact />
+        </div>
       </div>
 
       {/* Nav */}
@@ -291,8 +295,8 @@ export default function AdminLayout() {
           <button onClick={() => setSidebarOpen(true)} className="p-2 rounded-lg hover:bg-ink-100">
             <Menu size={20} />
           </button>
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-md overflow-hidden flex items-center justify-center bg-brand-500">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <div className="w-6 h-6 rounded-md overflow-hidden flex items-center justify-center bg-brand-500 shrink-0">
               {companyLogo
                 ? <img src={companyLogo} alt="logo" className="w-full h-full object-contain" />
                 : <Zap size={13} className="text-white" />
@@ -300,6 +304,7 @@ export default function AdminLayout() {
             </div>
             <span className="font-bold text-ink-900 truncate max-w-[140px]">{companyName}</span>
           </div>
+          <LiveClock compact />
         </header>
 
         {/* Page content */}

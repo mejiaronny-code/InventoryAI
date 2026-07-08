@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext'
 import { useState } from 'react'
 import { LayoutDashboard, Building2, LogOut, Shield, Menu, X } from 'lucide-react'
 import clsx from 'clsx'
+import LiveClock from '../shared/LiveClock'
 
 const navItems = [
   { to: '/superadmin/companies', icon: Building2,      label: 'Empresas' },
@@ -31,6 +32,7 @@ export default function SuperAdminLayout() {
             <p className="text-xs text-ink-400">InventoryAI</p>
           </div>
         </div>
+        <LiveClock dark className="mt-2" />
       </div>
 
       <nav className="flex-1 px-3 py-3 space-y-0.5">
@@ -95,12 +97,13 @@ export default function SuperAdminLayout() {
           <button onClick={() => setSidebarOpen(true)} className="p-2 rounded-lg text-ink-300 hover:bg-ink-800">
             <Menu size={20} />
           </button>
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-brand-500 rounded-md flex items-center justify-center">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <div className="w-6 h-6 bg-brand-500 rounded-md flex items-center justify-center shrink-0">
               <Shield size={13} className="text-white" />
             </div>
             <span className="font-bold text-white text-sm">Super Admin</span>
           </div>
+          <LiveClock compact dark />
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">

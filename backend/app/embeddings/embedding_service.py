@@ -128,8 +128,10 @@ async def start_warmup_loop(interval_seconds: int = 600) -> None:
     Loop infinito que hace warm-up cada `interval_seconds` (default: 10 min).
     Correr como asyncio background task desde el lifespan de FastAPI.
     """
-    # Esperar 30s al inicio para que el servidor esté completamente listo
-    await asyncio.sleep(30)
+    # Calentar casi de inmediato al arrancar — en dev, reiniciar el servidor
+    # con --reload resetea este loop constantemente, y un mensaje real puede
+    # llegar antes del primer ping si se espera demasiado.
+    await asyncio.sleep(2)
     while True:
         await warmup_embedding_model()
         await asyncio.sleep(interval_seconds)
