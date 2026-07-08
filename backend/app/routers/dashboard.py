@@ -182,23 +182,42 @@ async def get_activity(
     if product_ids:
         movements_res = await asyncio.to_thread(
             lambda: supabase.table("stock_movements")
-                .select("id, type, quantity, notes, created_at, products(name), warehouses(name)")
+                .select("id, type, quantity, notes, created_at, created_by, products(name), warehouses(name)")
                 .in_("product_id", product_ids)
                 .order("created_at", desc=True)
                 .limit(limit)
                 .execute()
         )
+        movements = movements_res.data or []
+
+        # created_by referencia auth.users, no user_profiles directamente —
+        # no se puede pedir como embed de Postgrest. Se resuelve el nombre
+        # con una consulta aparte, para saber QUIÉN hizo cada movimiento
+        # (trazabilidad ante robos/faltantes de stock).
+        creator_ids = list({m["created_by"] for m in movements if m.get("created_by")})
+        creator_names = {}
+        if creator_ids:
+            profiles_res = await asyncio.to_thread(
+                lambda: supabase.table("user_profiles")
+                    .select("id, full_name")
+                    .in_("id", creator_ids)
+                    .execute()
+            )
+            creator_names = {p["id"]: p.get("full_name") for p in (profiles_res.data or [])}
+
         type_labels = {
             "entrada": "Entrada de stock", "salida": "Salida de stock",
             "ajuste": "Ajuste de stock",   "transferencia": "Transferencia",
         }
-        for m in (movements_res.data or []):
+        for m in movements:
             product_name  = (m.get("products")   or {}).get("name", "Producto")
             warehouse_name = (m.get("warehouses") or {}).get("name", "Almacén")
+            created_by_name = creator_names.get(m.get("created_by")) or None
             activities.append({
                 "id": m["id"], "category": "stock", "type": m["type"],
                 "message": f"{type_labels.get(m['type'], m['type'].capitalize())}: {product_name} × {m['quantity']} — {warehouse_name}",
                 "notes": m.get("notes"), "created_at": m["created_at"],
+                "created_by_name": created_by_name,
             })
 
     for n in (notifs_res.data or []):

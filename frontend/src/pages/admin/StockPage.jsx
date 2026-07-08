@@ -125,6 +125,7 @@ function Modal({ open, onClose, title, children }) {
 
 function EditStockModal({ open, onClose, item, onSaved }) {
   const [newQty, setNewQty] = useState('')
+  const [reason, setReason] = useState('')
   const [aisle, setAisle] = useState('')
   const [shelf, setShelf] = useState('')
   const [bin, setBin] = useState('')
@@ -136,6 +137,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
   useEffect(() => {
     if (open && item) {
       setNewQty(String(item.current_qty))
+      setReason('')
       setAisle(item.aisle || '')
       setShelf(item.shelf || '')
       setBin(item.bin || '')
@@ -157,16 +159,22 @@ function EditStockModal({ open, onClose, item, onSaved }) {
     e.preventDefault()
     const qty = parseInt(newQty)
     if (isNaN(qty) || qty < 0) { toast.error('Cantidad inválida'); return }
+    const isDecrease = qty < item.current_qty
+    if (isDecrease && !reason.trim()) {
+      toast.error('Indica el motivo de la baja (ej. venta, daño, extravío)')
+      return
+    }
     setSaving(true)
     try {
       const tasks = []
       if (qty !== item.current_qty) {
+        const baseNote = `Ajuste manual: ${item.current_qty} → ${qty}`
         tasks.push(stockAPI.createMovement({
           product_id: item.product_id,
           warehouse_id: item.warehouse_id,
           type: 'ajuste',
           quantity: qty,
-          notes: `Ajuste manual: ${item.current_qty} → ${qty}`,
+          notes: isDecrease ? `${baseNote} — Motivo: ${reason.trim()}` : baseNote,
         }))
       }
       tasks.push(stockAPI.updateLocation({
@@ -234,13 +242,30 @@ function EditStockModal({ open, onClose, item, onSaved }) {
               type="number" min="0" value={newQty}
               onChange={e => setNewQty(e.target.value)}
               className="input text-center text-xl font-bold"
-              autoFocus required
+              autoFocus
             />
           </div>
 
           <p className="text-xs text-ink-400 text-center">
             Se registrará como <span className="font-semibold text-ink-600">ajuste manual</span> en el historial.
           </p>
+
+          {parseInt(newQty) < item.current_qty && (
+            <div>
+              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                Motivo de la baja *
+              </label>
+              <input
+                value={reason}
+                onChange={e => setReason(e.target.value)}
+                className="input"
+                placeholder="Venta, daño, extravío, conteo físico..."
+              />
+              <p className="text-[11px] text-ink-400 mt-1">
+                Obligatorio al bajar la cantidad — queda registrado en Actividad para trazabilidad ante robos o faltantes.
+              </p>
+            </div>
+          )}
 
           {/* Alerta de stock mínimo */}
           <div>
@@ -549,6 +574,9 @@ export default function StockPage() {
   const [serialForm, setSerialForm] = useState({ product_id: '', warehouse_id: '', serial_numbers: '', notes: '' })
   const [serialSaving, setSerialSaving] = useState(false)
   const [stockSearch, setStockSearch] = useState('')
+  const [movementSearch, setMovementSearch] = useState('')
+  const [movementDateFrom, setMovementDateFrom] = useState('')
+  const [movementDateTo, setMovementDateTo] = useState('')
   const [form, setForm] = useState({ product_id: '', warehouse_id: '', type: 'entrada', quantity: 1, notes: '', expires_at: '', batch_code: '' })
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -613,8 +641,26 @@ export default function StockPage() {
       )
     : currentStockRows
 
+  const filteredMovements = movements.filter(m => {
+    if (movementSearch) {
+      const q = movementSearch.toLowerCase()
+      const haystack = [
+        m.products?.name, m.warehouses?.name, m.notes, m.created_by_name,
+      ].filter(Boolean).join(' ').toLowerCase()
+      if (!haystack.includes(q)) return false
+    }
+    if (movementDateFrom && m.created_at < movementDateFrom) return false
+    if (movementDateTo && m.created_at > `${movementDateTo}T23:59:59`) return false
+    return true
+  })
+
   const handleSave = async (e) => {
-    e.preventDefault(); setSaving(true)
+    e.preventDefault()
+    if (form.type === 'salida' && !form.notes.trim()) {
+      toast.error('Indica el motivo de la salida (ej. venta, daño, extravío)')
+      return
+    }
+    setSaving(true)
     try {
       const payload = {
         ...form,
@@ -860,7 +906,44 @@ export default function StockPage() {
 
       {/* Tab: Historial de movimientos */}
       {activeTab === 'movements' && (
-        <div className="table-container">
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+              <input
+                value={movementSearch}
+                onChange={e => setMovementSearch(e.target.value)}
+                placeholder="Buscar por producto, almacén, notas o usuario..."
+                className="input pl-9 text-sm w-full"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-ink-400 shrink-0">Desde</label>
+              <input
+                type="date" value={movementDateFrom}
+                onChange={e => setMovementDateFrom(e.target.value)}
+                className="input text-sm"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-ink-400 shrink-0">Hasta</label>
+              <input
+                type="date" value={movementDateTo}
+                onChange={e => setMovementDateTo(e.target.value)}
+                className="input text-sm"
+              />
+            </div>
+            {(movementSearch || movementDateFrom || movementDateTo) && (
+              <button
+                onClick={() => { setMovementSearch(''); setMovementDateFrom(''); setMovementDateTo('') }}
+                className="btn-ghost text-xs px-2 py-1.5"
+              >
+                Limpiar
+              </button>
+            )}
+          </div>
+
+          <div className="table-container">
           <table className="table">
             <thead>
               <tr>
@@ -869,17 +952,20 @@ export default function StockPage() {
                 <th>Almacén</th>
                 <th>Cantidad</th>
                 <th>Notas</th>
+                <th>Usuario</th>
                 <th>Fecha</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 [...Array(5)].map((_, i) => (
-                  <tr key={i}><td colSpan={6}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>
+                  <tr key={i}><td colSpan={7}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>
                 ))
-              ) : movements.length === 0 ? (
-                <tr><td colSpan={6} className="text-center py-12 text-ink-400">Sin movimientos</td></tr>
-              ) : movements.map(m => {
+              ) : filteredMovements.length === 0 ? (
+                <tr><td colSpan={7} className="text-center py-12 text-ink-400">
+                  {movements.length === 0 ? 'Sin movimientos' : 'Sin resultados para ese filtro'}
+                </td></tr>
+              ) : filteredMovements.map(m => {
                 const t = typeConfig[m.type] || typeConfig.ajuste
                 const TIcon = t.icon
                 return (
@@ -901,6 +987,7 @@ export default function StockPage() {
                       </span>
                     </td>
                     <td className="text-xs text-ink-400">{m.notes || '—'}</td>
+                    <td className="text-xs text-ink-500">{m.created_by_name || '—'}</td>
                     <td className="text-xs text-ink-400">
                       {format(new Date(m.created_at), 'd MMM HH:mm', { locale: es })}
                     </td>
@@ -909,6 +996,7 @@ export default function StockPage() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -1224,8 +1312,20 @@ export default function StockPage() {
             <input type="number" min="1" value={form.quantity} onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))} className="input" required />
           </div>
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Notas</label>
-            <input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input" placeholder="Motivo del movimiento..." />
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+              Notas {form.type === 'salida' ? '*' : ''}
+            </label>
+            <input
+              value={form.notes}
+              onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+              className="input"
+              placeholder={form.type === 'salida' ? 'Motivo de la salida (venta, daño, extravío...)' : 'Motivo del movimiento...'}
+            />
+            {form.type === 'salida' && (
+              <p className="text-[11px] text-ink-400 mt-1">
+                Obligatorio en salidas — queda registrado en Actividad para trazabilidad ante robos o faltantes.
+              </p>
+            )}
           </div>
           {hasFeature('expiration_dates') && form.type === 'entrada' && (
             <div>

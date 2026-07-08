@@ -2,13 +2,15 @@
 app/routers/reservations.py
 Gestión de reservas para staff y operaciones públicas del cliente.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Optional
 from datetime import datetime, timedelta
+from collections import defaultdict
 import secrets
 import string
 import asyncio
 import json
+import threading
 
 from app.core.auth import require_admin, require_staff
 from app.core.supabase_client import supabase
@@ -17,6 +19,36 @@ from app.services.notifications import send_reservation_email
 from app.models.schemas import ReservationCreate, ReservationUpdate
 
 router = APIRouter(prefix="/reservations", tags=["reservations"])
+
+# ── Anti-abuso: consulta pública "mis reservas" por email ────────────
+# Sin este límite, cualquiera con un email ajeno podía enumerar su historial
+# de reservas (nombre, teléfono, productos). Ahora también exige el código de
+# UNA reserva propia como prueba de que es el dueño del email.
+_MAX_BY_EMAIL_PER_IP_HOUR = 10
+_ip_by_email_lookups: dict[str, dict[str, int]] = defaultdict(dict)
+_by_email_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_by_email_rate_limit(request: Request) -> None:
+    ip = _client_ip(request)
+    hour = datetime.utcnow().strftime("%Y-%m-%dT%H")
+    with _by_email_lock:
+        bucket = _ip_by_email_lookups[ip]
+        for h in [h for h in bucket if h != hour]:
+            del bucket[h]
+        if bucket.get(hour, 0) >= _MAX_BY_EMAIL_PER_IP_HOUR:
+            raise HTTPException(
+                status_code=429,
+                detail="Demasiadas consultas en poco tiempo. Intenta más tarde.",
+            )
+        bucket[hour] = bucket.get(hour, 0) + 1
 
 
 def _generate_code(length: int = 8) -> str:
@@ -130,8 +162,21 @@ async def create_public_reservation(company_slug: str, data: ReservationCreate):
 
 
 @router.get("/public/by-email")
-async def get_reservations_by_email(company_slug: str, email: str):
-    """Historial de reservas de un cliente por email (sin login)."""
+async def get_reservations_by_email(
+    company_slug: str,
+    email: str,
+    code: str,
+    request: Request,
+):
+    """
+    Historial de reservas de un cliente por email (sin login).
+    Exige además el código de UNA reserva propia como prueba de que el email
+    es suyo — solo quien recibió el email de confirmación de al menos una
+    reserva conoce un código válido. Sin esto, cualquiera podía consultar el
+    historial completo de otra persona solo sabiendo su email.
+    """
+    _check_by_email_rate_limit(request)
+
     company = supabase.table("companies")\
         .select("id")\
         .eq("slug", company_slug)\
@@ -141,10 +186,28 @@ async def get_reservations_by_email(company_slug: str, email: str):
     if not company.data:
         raise HTTPException(404, "Empresa no encontrada")
 
+    company_id = company.data["id"]
+    email_clean = email.lower().strip()
+
+    ownership_check = supabase.table("reservations")\
+        .select("id")\
+        .eq("company_id", company_id)\
+        .eq("client_email", email_clean)\
+        .eq("reservation_code", code.upper().strip())\
+        .maybe_single()\
+        .execute()
+
+    if not (ownership_check and ownership_check.data):
+        raise HTTPException(
+            404,
+            "No encontramos ninguna reserva con ese email y código. "
+            "Usa el código que recibiste por email en la confirmación.",
+        )
+
     result = supabase.table("reservations")\
         .select("*, products(name, unit, price), warehouses(name)")\
-        .eq("company_id", company.data["id"])\
-        .eq("client_email", email.lower().strip())\
+        .eq("company_id", company_id)\
+        .eq("client_email", email_clean)\
         .order("created_at", desc=True)\
         .limit(50)\
         .execute()
@@ -236,7 +299,9 @@ async def update_reservation(
         qty          = res["quantity"]
         notes        = res.get("notes") or ""
 
-        # 1. Movimiento de salida en stock general
+        # 1. Movimiento de salida en stock general — decremento atómico
+        # (ver migración 011_atomic_stock.sql), evita la carrera del
+        # read-modify-write si dos reservas del mismo producto se completan casi a la vez.
         stock_row = supabase.table("product_warehouse_stock")\
             .select("id, quantity")\
             .eq("product_id", product_id)\
@@ -245,11 +310,11 @@ async def update_reservation(
             .execute()
 
         if stock_row.data:
-            new_qty = max(0, stock_row.data["quantity"] - qty)
-            supabase.table("product_warehouse_stock")\
-                .update({"quantity": new_qty})\
-                .eq("id", stock_row.data["id"])\
-                .execute()
+            supabase.rpc("decrement_stock_clamped", {
+                "p_product_id": product_id,
+                "p_warehouse_id": warehouse_id,
+                "p_qty": qty,
+            }).execute()
 
             supabase.table("stock_movements").insert({
                 "product_id":   product_id,
@@ -260,53 +325,67 @@ async def update_reservation(
             }).execute()
 
         # 2. Decrementar variant stock si la reserva tenía opciones (ej: "Color: Verde")
-        if notes:
-            # Parsear notas → {"Color": "Verde", "Talla": "M"}
-            # Acepta separador "·" (AI) o "," (catálogo UI) — toma solo la primera parte
-            # antes de " — " por si el cliente añadió notas libres al final.
-            options_part = notes.split(" — ")[0]
-
-            combination: dict = {}
-            # Normalizar: reemplazar coma por · para unificar el split
-            normalized = options_part.replace(",", "·")
-            for part in normalized.split("·"):
-                part = part.strip()
-                if ":" in part:
-                    k, v = part.split(":", 1)
-                    k = k.strip()
-                    v = v.strip()
-                    if k:  # evitar claves vacías
-                        combination[k] = v
-
-            if combination:
-                # Buscar la combinación en variant stock
-                vs_rows = supabase.table("product_variants_stock")\
-                    .select("id, quantity, combination")\
-                    .eq("product_id", product_id)\
-                    .eq("warehouse_id", warehouse_id)\
-                    .execute()
-
-                for vs in (vs_rows.data or []):
-                    db_combo = vs.get("combination") or {}
-                    # Si combination llegó como string (edge case), parsear
-                    if isinstance(db_combo, str):
-                        try:
-                            db_combo = json.loads(db_combo)
-                        except Exception:
-                            db_combo = {}
-                    # Match case-insensitive: todas las claves de combination presentes
-                    if all(
-                        str(db_combo.get(k, "")).strip().lower() == v.lower()
-                        for k, v in combination.items()
-                    ):
-                        new_vs_qty = max(0, vs["quantity"] - qty)
-                        supabase.table("product_variants_stock")\
-                            .update({"quantity": new_vs_qty})\
-                            .eq("id", vs["id"])\
-                            .execute()
-                        break
+        decrement_variant_stock_from_notes(product_id, warehouse_id, qty, notes)
 
     return result.data[0]
+
+
+def decrement_variant_stock_from_notes(product_id: str, warehouse_id: str, qty: int, notes: str) -> None:
+    """
+    Descuenta el stock por variante (color/talla) cuando la reserva/pedido
+    tenía una opción elegida en sus notas (ej. "Color: Verde"). Se llama al
+    completar cualquier flujo que descuenta stock general de un producto con
+    variantes — reservas (aquí mismo) y picking (`routers/picking.py`) —
+    para que el desglose por color no se desincronice del total general.
+    """
+    if not notes:
+        return
+    # Parsear notas → {"Color": "Verde", "Talla": "M"}
+    # Acepta separador "·" (AI) o "," (catálogo UI) — toma solo la primera parte
+    # antes de " — " por si el cliente añadió notas libres al final.
+    options_part = notes.split(" — ")[0]
+
+    combination: dict = {}
+    # Normalizar: reemplazar coma por · para unificar el split
+    normalized = options_part.replace(",", "·")
+    for part in normalized.split("·"):
+        part = part.strip()
+        if ":" in part:
+            k, v = part.split(":", 1)
+            k = k.strip()
+            v = v.strip()
+            if k:  # evitar claves vacías
+                combination[k] = v
+
+    if not combination:
+        return
+
+    # Buscar la combinación en variant stock
+    vs_rows = supabase.table("product_variants_stock")\
+        .select("id, quantity, combination")\
+        .eq("product_id", product_id)\
+        .eq("warehouse_id", warehouse_id)\
+        .execute()
+
+    for vs in (vs_rows.data or []):
+        db_combo = vs.get("combination") or {}
+        # Si combination llegó como string (edge case), parsear
+        if isinstance(db_combo, str):
+            try:
+                db_combo = json.loads(db_combo)
+            except Exception:
+                db_combo = {}
+        # Match case-insensitive: todas las claves de combination presentes
+        if all(
+            str(db_combo.get(k, "")).strip().lower() == v.lower()
+            for k, v in combination.items()
+        ):
+            new_vs_qty = max(0, vs["quantity"] - qty)
+            supabase.table("product_variants_stock")\
+                .update({"quantity": new_vs_qty})\
+                .eq("id", vs["id"])\
+                .execute()
+            break
 
 
 @router.delete("/cancelled")

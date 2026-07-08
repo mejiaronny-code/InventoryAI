@@ -4,7 +4,7 @@ Gestión de empresas — super admin y admin de empresa.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from app.core.auth import require_super_admin, require_admin, get_current_user
-from app.core.supabase_client import supabase, run_with_retry
+from app.core.supabase_client import supabase, run_with_retry, run_with_retry_sync as _retry
 from app.core.config import settings
 from app.models.schemas import CompanyCreate, CompanyUpdate, CompanyOut, BUSINESS_PRESETS, DEFAULT_FEATURES
 from typing import List
@@ -315,14 +315,16 @@ def _create_company_user_sync(company_id: str, body: CreateUserBody):
         raise HTTPException(400, f"Error al crear usuario: {str(e)}")
 
     user_id = new_auth_user["id"]
-    supabase.table("user_profiles").insert({
+    insert_q = supabase.table("user_profiles").insert({
         "id": user_id,
         "full_name": body.full_name,
         "company_id": company_id,
         "role": body.role,
-    }).execute()
+    })
+    _retry(insert_q.execute)
 
-    company_res = supabase.table("companies").select("name").eq("id", company_id).single().execute()
+    company_res_q = supabase.table("companies").select("name").eq("id", company_id).single()
+    company_res = _retry(company_res_q.execute)
     company_name = company_res.data["name"] if company_res.data else "tu empresa"
 
     return {"message": "Usuario creado", "user_id": user_id}, company_name
@@ -379,10 +381,10 @@ def _upload_logo_sync(company_id: str, ext: str, content: bytes, content_type: s
         f"?t={int(__import__('time').time())}"
     )
 
-    supabase.table("companies")\
+    update_q = supabase.table("companies")\
         .update({"logo_url": public_url})\
-        .eq("id", company_id)\
-        .execute()
+        .eq("id", company_id)
+    _retry(update_q.execute)
 
     return public_url
 
@@ -416,16 +418,16 @@ def update_my_company(data: CompanyUpdate, user: dict = Depends(require_admin)):
 
 
 def _request_account_deletion_sync(user: dict):
-    company = supabase.table("companies")\
+    company_q = supabase.table("companies")\
         .select("name")\
         .eq("id", user["company_id"])\
-        .single()\
-        .execute()
+        .single()
+    company = _retry(company_q.execute)
 
     company_name = company.data["name"] if company.data else "—"
     requested_by = user.get("email") or user.get("full_name") or user["id"]
 
-    supabase.table("notifications").insert({
+    notif_q = supabase.table("notifications").insert({
         "company_id": user["company_id"],
         "type": "system",
         "message": (
@@ -439,7 +441,8 @@ def _request_account_deletion_sync(user: dict):
             "company_name": company_name,
             "requested_by": requested_by,
         },
-    }).execute()
+    })
+    _retry(notif_q.execute)
 
     return company_name, requested_by
 

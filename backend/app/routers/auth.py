@@ -7,7 +7,7 @@ from pydantic import BaseModel, EmailStr
 import asyncio
 import httpx
 from app.core.auth import require_admin, require_super_admin, get_current_user
-from app.core.supabase_client import supabase, supabase_auth
+from app.core.supabase_client import supabase, supabase_auth, run_with_retry_sync as _retry
 from app.core.config import settings
 from app.services.notifications import send_welcome_email, send_password_reset_email
 
@@ -103,14 +103,16 @@ def _create_employee_sync(data: RegisterEmployeeRequest, user: dict):
     if not auth_result.user:
         raise HTTPException(500, "Error al crear usuario")
 
-    supabase.table("user_profiles").insert({
+    insert_q = supabase.table("user_profiles").insert({
         "id": auth_result.user.id,
         "company_id": user["company_id"],
         "full_name": data.full_name,
         "role": data.role if data.role in ("admin", "employee") else "employee",
-    }).execute()
+    })
+    _retry(insert_q.execute)
 
-    company_res = supabase.table("companies").select("name").eq("id", user["company_id"]).single().execute()
+    company_res_q = supabase.table("companies").select("name").eq("id", user["company_id"]).single()
+    company_res = _retry(company_res_q.execute)
     company_name = company_res.data["name"] if company_res.data else "tu empresa"
 
     return {"message": "Empleado creado", "id": auth_result.user.id}, company_name

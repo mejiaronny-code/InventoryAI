@@ -37,6 +37,7 @@ class _Query:
         self._filters = []          # (col, op, value)
         self._payload = None
         self._single = None         # None | "maybe" | "one"
+        self._range = None          # (start, end) inclusive, como .range() de supabase-py
 
     # ── builders ──────────────────────────────────────────────
     def select(self, *args, **kwargs):
@@ -86,6 +87,10 @@ class _Query:
     def limit(self, *args, **kwargs):
         return self
 
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def maybe_single(self):
         self._single = "maybe"
         return self
@@ -128,6 +133,9 @@ class _Query:
 
         if self._op == "select":
             matched = [dict(r) for r in rows if self._matches(r)]
+            if self._range:
+                start, end = self._range
+                matched = matched[start:end + 1]
             return self._apply_single(matched)
 
         if self._op == "insert":
@@ -159,6 +167,39 @@ class _Query:
         raise AssertionError(f"op no soportada: {self._op}")
 
 
+class _StockRpcCall:
+    """
+    Simula `decrement_stock_strict`/`decrement_stock_clamped` (ver
+    supabase/migrations/011_atomic_stock.sql) sobre el `db` en memoria, para
+    poder testear la lógica de negocio sin una base de datos real.
+    """
+    def __init__(self, db, name, params):
+        self._db = db
+        self._name = name
+        self._params = params or {}
+
+    def execute(self):
+        rows = self._db.setdefault("product_warehouse_stock", [])
+        pid = self._params.get("p_product_id")
+        wid = self._params.get("p_warehouse_id")
+        qty = self._params.get("p_qty")
+        row = next((r for r in rows if r.get("product_id") == pid and r.get("warehouse_id") == wid), None)
+
+        if self._name == "decrement_stock_strict":
+            if not row or row["quantity"] < qty:
+                raise Exception("INSUFFICIENT_STOCK")
+            row["quantity"] -= qty
+            return _Result(row["quantity"])
+
+        if self._name == "decrement_stock_clamped":
+            if not row:
+                return _Result(None)
+            row["quantity"] = max(row["quantity"] - qty, 0)
+            return _Result(row["quantity"])
+
+        raise AssertionError(f"RPC no soportada en FakeSupabase: {self._name}")
+
+
 class FakeSupabase:
     """Cliente falso. `db` es {tabla: [filas]}."""
 
@@ -168,8 +209,10 @@ class FakeSupabase:
     def table(self, name):
         return _Query(self.db, name)
 
-    def rpc(self, *args, **kwargs):
-        # Las funciones RPC (búsqueda semántica) no se ejercitan en estos tests.
+    def rpc(self, name, params=None):
+        if name in ("decrement_stock_strict", "decrement_stock_clamped"):
+            return _StockRpcCall(self.db, name, params)
+        # Otras funciones RPC (búsqueda semántica, etc.) no se ejercitan en estos tests.
         return _Query(self.db, "_rpc")
 
     def seed(self, table, rows):

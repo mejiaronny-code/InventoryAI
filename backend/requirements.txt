@@ -29,3 +29,7 @@ aiofiles==24.1.0
 # Extracción de texto — base de conocimiento de la empresa (PDF/Word)
 pypdf==5.0.1
 python-docx==1.1.2
+
+# Base de datos de zonas horarias IANA para zoneinfo — Linux/Mac ya la traen
+# del sistema, pero Windows (dev local) y algunas imágenes Docker mínimas no.
+tzdata==2026.2

@@ -218,7 +218,7 @@
 
   /* ── Modal responsive ── */
   .modal-box {
-    @apply relative bg-white rounded-2xl shadow-2xl w-[95vw] max-w-md animate-slide-up;
+    @apply relative bg-white rounded-2xl shadow-2xl w-[95vw] max-w-md animate-slide-up max-h-[90vh] overflow-y-auto;
   }
 
   /* ── Divider ── */

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 
 from app.core.auth import require_staff, require_admin
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry_sync as _retry
 from app.models.schemas import StockMovementCreate, StockMovementOut, StockUpdate, LocationUpdate
 from app.services.notifications import send_low_stock_alert
 
@@ -33,7 +33,22 @@ def list_movements(
         query = query.eq("warehouse_id", warehouse_id)
 
     result = query.execute()
-    return result.data or []
+    movements = result.data or []
+
+    # created_by referencia auth.users, no user_profiles directamente — no se
+    # puede pedir como embed de Postgrest. Se resuelve el nombre aparte, para
+    # saber QUIÉN hizo cada movimiento (trazabilidad ante robos/faltantes).
+    creator_ids = list({m["created_by"] for m in movements if m.get("created_by")})
+    if creator_ids:
+        profiles_res = supabase.table("user_profiles")\
+            .select("id, full_name")\
+            .in_("id", creator_ids)\
+            .execute()
+        creator_names = {p["id"]: p.get("full_name") for p in (profiles_res.data or [])}
+        for m in movements:
+            m["created_by_name"] = creator_names.get(m.get("created_by"))
+
+    return movements
 
 
 @router.post("/movement")
@@ -50,6 +65,10 @@ async def create_movement(data: StockMovementCreate, user: dict = Depends(requir
 
 
 def _create_movement_sync(data: StockMovementCreate, user: dict):
+    # Todas las consultas de esta función se envuelven con _retry (reintento
+    # ante cortes transitorios de conexión HTTP/2 con Supabase — ver
+    # core/supabase_client.py::run_with_retry_sync). Esta función corre en un
+    # hilo aparte (asyncio.to_thread), así que se usa la variante síncrona.
     email_info = None
     movement_dump = data.model_dump()
     if movement_dump.get("expires_at"):
@@ -66,59 +85,76 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
     }
 
     # Obtener stock actual (maybe_single evita error PGRST116 cuando no hay fila aún)
-    current = supabase.table("product_warehouse_stock")\
+    current_q = supabase.table("product_warehouse_stock")\
         .select("quantity")\
         .eq("product_id", str(data.product_id))\
         .eq("warehouse_id", str(data.warehouse_id))\
-        .maybe_single()\
-        .execute()
+        .maybe_single()
+    current = _retry(current_q.execute)
 
     # maybe_single() retorna None directamente (no objeto con .data) cuando no hay fila
     current_row = current.data if current else None
     current_qty = current_row["quantity"] if current_row else 0
 
-    # Calcular nuevo stock
-    if data.type == "entrada":
-        new_qty = current_qty + data.quantity
-    elif data.type == "salida":
-        new_qty = current_qty - data.quantity
-        if new_qty < 0:
-            raise HTTPException(400, "Stock insuficiente para la salida")
-    elif data.type == "ajuste":
-        new_qty = data.quantity  # ajuste directo al valor indicado
+    if data.type == "salida":
+        # Decremento atómico en Postgres (ver migración 011_atomic_stock.sql):
+        # evita la carrera del read-modify-write cuando dos salidas del mismo
+        # producto/almacén llegan casi al mismo tiempo (sobreventa).
+        try:
+            rpc_q = supabase.rpc("decrement_stock_strict", {
+                "p_product_id": str(data.product_id),
+                "p_warehouse_id": str(data.warehouse_id),
+                "p_qty": data.quantity,
+            })
+            rpc_result = _retry(rpc_q.execute)
+            new_qty = rpc_result.data
+        except Exception as e:
+            if "INSUFFICIENT_STOCK" in str(e):
+                raise HTTPException(400, "Stock insuficiente para la salida")
+            raise
     else:
-        new_qty = current_qty  # transferencia se maneja por separado
+        # Calcular nuevo stock
+        if data.type == "entrada":
+            new_qty = current_qty + data.quantity
+        elif data.type == "ajuste":
+            new_qty = data.quantity  # ajuste directo al valor indicado
+        else:
+            new_qty = current_qty  # transferencia se maneja por separado
 
-    # Actualizar stock
-    if current_row:
-        supabase.table("product_warehouse_stock")\
-            .update({"quantity": new_qty})\
-            .eq("product_id", str(data.product_id))\
-            .eq("warehouse_id", str(data.warehouse_id))\
-            .execute()
-    else:
-        supabase.table("product_warehouse_stock").insert({
-            "product_id": str(data.product_id),
-            "warehouse_id": str(data.warehouse_id),
-            "quantity": max(new_qty, 0),
-        }).execute()
+        # Actualizar stock
+        if current_row:
+            update_q = supabase.table("product_warehouse_stock")\
+                .update({"quantity": new_qty})\
+                .eq("product_id", str(data.product_id))\
+                .eq("warehouse_id", str(data.warehouse_id))
+            _retry(update_q.execute)
+        else:
+            insert_q = supabase.table("product_warehouse_stock").insert({
+                "product_id": str(data.product_id),
+                "warehouse_id": str(data.warehouse_id),
+                "quantity": max(new_qty, 0),
+            })
+            _retry(insert_q.execute)
 
     # Registrar movimiento
-    result = supabase.table("stock_movements").insert(movement_data).execute()
+    movement_q = supabase.table("stock_movements").insert(movement_data)
+    result = _retry(movement_q.execute)
 
     # Crear lote automáticamente si es entrada y se proveyó batch_code (o generar uno)
     if data.type == "entrada":
-        product_company = supabase.table("products")\
+        product_company_q = supabase.table("products")\
             .select("company_id")\
             .eq("id", str(data.product_id))\
-            .single().execute()
+            .single()
+        product_company = _retry(product_company_q.execute)
         if product_company.data:
             company_id_for_batch = product_company.data["company_id"]
             # Verificar si la empresa tiene batch_tracking habilitado
-            company_features = supabase.table("companies")\
+            company_features_q = supabase.table("companies")\
                 .select("features")\
                 .eq("id", company_id_for_batch)\
-                .single().execute()
+                .single()
+            company_features = _retry(company_features_q.execute)
             features = (company_features.data or {}).get("features") or {}
             if features.get("batch_tracking"):
                 if not batch_code:
@@ -127,7 +163,7 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
                     suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
                     batch_code = f"LOTE-{datetime.utcnow().strftime('%Y%m%d')}-{suffix}"
                 expires_iso = data.expires_at.isoformat() if data.expires_at else None
-                supabase.table("product_batches").insert({
+                batch_q = supabase.table("product_batches").insert({
                     "company_id": company_id_for_batch,
                     "product_id": str(data.product_id),
                     "warehouse_id": str(data.warehouse_id),
@@ -136,33 +172,35 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
                     "initial_quantity": data.quantity,
                     "expires_at": expires_iso,
                     "notes": data.notes,
-                }).execute()
+                })
+                _retry(batch_q.execute)
 
     # Actualizar nearest_expiry si es una entrada con fecha de vencimiento
     if data.type == "entrada" and data.expires_at:
         expires_iso = data.expires_at.isoformat()
         # Obtener nearest_expiry actual
-        current_expiry_res = supabase.table("product_warehouse_stock")\
+        current_expiry_q = supabase.table("product_warehouse_stock")\
             .select("nearest_expiry")\
             .eq("product_id", str(data.product_id))\
             .eq("warehouse_id", str(data.warehouse_id))\
-            .maybe_single()\
-            .execute()
+            .maybe_single()
+        current_expiry_res = _retry(current_expiry_q.execute)
         current_nearest = ((current_expiry_res.data if current_expiry_res else None) or {}).get("nearest_expiry")
         # Guardar la más próxima
         if not current_nearest or expires_iso < current_nearest:
-            supabase.table("product_warehouse_stock")\
+            update_expiry_q = supabase.table("product_warehouse_stock")\
                 .update({"nearest_expiry": expires_iso})\
                 .eq("product_id", str(data.product_id))\
-                .eq("warehouse_id", str(data.warehouse_id))\
-                .execute()
+                .eq("warehouse_id", str(data.warehouse_id))
+            _retry(update_expiry_q.execute)
         # Notificación si vence en 7 días o menos
         days_to_expiry = (data.expires_at - datetime.utcnow()).days
         if days_to_expiry <= 7:
-            product_info = supabase.table("products").select("name, company_id")\
-                .eq("id", str(data.product_id)).single().execute()
+            product_info_q = supabase.table("products").select("name, company_id")\
+                .eq("id", str(data.product_id)).single()
+            product_info = _retry(product_info_q.execute)
             if product_info.data:
-                supabase.table("notifications").insert({
+                notif_q = supabase.table("notifications").insert({
                     "company_id": product_info.data["company_id"],
                     "type": "system",
                     "message": f"⚠️ Vencimiento próximo: {product_info.data['name']} vence en {days_to_expiry} día(s)",
@@ -172,45 +210,49 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
                         "expires_at": expires_iso,
                         "days_to_expiry": days_to_expiry,
                     },
-                }).execute()
+                })
+                _retry(notif_q.execute)
 
     # Verificar alerta de stock mínimo
-    stock_alert = supabase.table("product_warehouse_stock")\
+    stock_alert_q = supabase.table("product_warehouse_stock")\
         .select("min_stock_alert")\
         .eq("product_id", str(data.product_id))\
         .eq("warehouse_id", str(data.warehouse_id))\
-        .maybe_single()\
-        .execute()
+        .maybe_single()
+    stock_alert = _retry(stock_alert_q.execute)
 
     stock_alert_row = stock_alert.data if stock_alert else None
     if stock_alert_row and new_qty <= stock_alert_row.get("min_stock_alert", 5):
-        product = supabase.table("products").select("name, company_id").eq("id", str(data.product_id)).single().execute()
+        product_q = supabase.table("products").select("name, company_id").eq("id", str(data.product_id)).single()
+        product = _retry(product_q.execute)
         if product.data:
             company_id_alert = product.data["company_id"]
             # Notificación de stock bajo
-            supabase.table("notifications").insert({
+            low_stock_notif_q = supabase.table("notifications").insert({
                 "company_id": company_id_alert,
                 "type": "low_stock",
                 "message": f"⚠️ Stock bajo: {product.data['name']} — {new_qty} unidades restantes",
                 "target_role": "all",
                 "metadata": {"product_id": str(data.product_id), "current_stock": new_qty},
-            }).execute()
+            })
+            _retry(low_stock_notif_q.execute)
             # Email de alerta al admin
             try:
-                admin_res = supabase.table("user_profiles")\
+                admin_res_q = supabase.table("user_profiles")\
                     .select("id")\
                     .eq("company_id", company_id_alert)\
                     .eq("role", "admin")\
                     .eq("is_active", True)\
-                    .limit(1)\
-                    .execute()
+                    .limit(1)
+                admin_res = _retry(admin_res_q.execute)
                 if admin_res.data:
                     admin_id = admin_res.data[0]["id"]
                     admin_auth = supabase.auth.admin.get_user_by_id(admin_id)
                     admin_email = admin_auth.user.email if admin_auth and admin_auth.user else None
                     if admin_email:
                         min_alert_val = stock_alert_row.get("min_stock_alert", 5)
-                        company_res = supabase.table("companies").select("name").eq("id", company_id_alert).single().execute()
+                        company_res_q = supabase.table("companies").select("name").eq("id", company_id_alert).single()
+                        company_res = _retry(company_res_q.execute)
                         company_name_alert = company_res.data["name"] if company_res.data else ""
                         email_info = dict(
                             to_email=admin_email,
@@ -224,16 +266,17 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
 
             # Crear solicitud de reabastecimiento automática si no existe una pendiente
             try:
-                existing_reorder = supabase.table("reorder_requests")\
+                existing_reorder_q = supabase.table("reorder_requests")\
                     .select("id")\
                     .eq("company_id", company_id_alert)\
                     .eq("product_id", str(data.product_id))\
                     .eq("warehouse_id", str(data.warehouse_id))\
                     .eq("status", "pending")\
-                    .maybe_single().execute()
+                    .maybe_single()
+                existing_reorder = _retry(existing_reorder_q.execute)
                 if not (existing_reorder and existing_reorder.data):
                     min_alert = stock_alert_row.get("min_stock_alert", 5)
-                    supabase.table("reorder_requests").insert({
+                    reorder_q = supabase.table("reorder_requests").insert({
                         "company_id":         company_id_alert,
                         "product_id":         str(data.product_id),
                         "warehouse_id":       str(data.warehouse_id),
@@ -242,7 +285,8 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
                         "min_stock_alert":    min_alert,
                         "status":             "pending",
                         "notes":              "Generado automáticamente por stock bajo",
-                    }).execute()
+                    })
+                    _retry(reorder_q.execute)
             except Exception:
                 pass  # No crítico
 

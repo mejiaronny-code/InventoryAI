@@ -303,6 +303,7 @@ async def _run_agent(
     currency_code: str = "USD",
     show_stock: bool = True,
     features: dict | None = None,
+    company_timezone: str = "America/Tegucigalpa",
 ) -> tuple[str, list[str]]:
     """Loop agéntico usando DeepInfra (OpenAI-compatible)."""
     features = features or {}
@@ -388,7 +389,7 @@ async def _run_agent(
         ),
     }
 
-    tools_list = create_inventory_tools(company_id, supabase, currency_symbol=symbol, show_stock=show_stock, features=features)
+    tools_list = create_inventory_tools(company_id, supabase, currency_symbol=symbol, show_stock=show_stock, features=features, company_timezone=company_timezone)
     tool_map = {t.name: t for t in tools_list}
     used_tools: list[str] = []
     total_tokens_in = 0
@@ -617,6 +618,7 @@ async def _run_agent_stream(
     currency_code: str = "USD",
     show_stock: bool = True,
     features: dict | None = None,
+    company_timezone: str = "America/Tegucigalpa",
 ):
     """
     Variante streaming de `_run_agent`: misma lógica de prompt/tools/historial,
@@ -708,7 +710,7 @@ async def _run_agent_stream(
         ),
     }
 
-    tools_list = create_inventory_tools(company_id, supabase, currency_symbol=symbol, show_stock=show_stock, features=features)
+    tools_list = create_inventory_tools(company_id, supabase, currency_symbol=symbol, show_stock=show_stock, features=features, company_timezone=company_timezone)
     tool_map = {t.name: t for t in tools_list}
     used_tools: list[str] = []
     total_tokens_in = 0
@@ -893,6 +895,12 @@ async def chat_stream(session_id: str, message: str, company_slug: str):
     ai_rules      = settings_data.get("ai_rules") or []
     currency_code = settings_data.get("currency") or "USD"
     show_stock    = settings_data.get("show_stock", True)
+    # Zona horaria de la empresa para mostrar horas de reservas/reservaciones
+    # legibles al cliente (en vez de UTC crudo). Configurable por empresa vía
+    # settings.timezone (nombre IANA, ej. "America/Guatemala"); por defecto
+    # asumimos Centroamérica (UTC-6, sin horario de verano) mientras no haya
+    # un selector en el admin.
+    company_timezone = settings_data.get("timezone") or "America/Tegucigalpa"
 
     company_full = supabase.table("companies") \
         .select("subscription_id, subscriptions(status)") \
@@ -910,7 +918,7 @@ async def chat_stream(session_id: str, message: str, company_slug: str):
     try:
         async for event in _run_agent_stream(
             session_id, message, company_id, company_name,
-            ai_rules, currency_code, show_stock, features,
+            ai_rules, currency_code, show_stock, features, company_timezone,
         ):
             yield event
     except Exception as e:
@@ -944,6 +952,7 @@ async def chat(
     ai_rules      = settings_data.get("ai_rules") or []
     currency_code = settings_data.get("currency") or "USD"
     show_stock    = settings_data.get("show_stock", True)
+    company_timezone = settings_data.get("timezone") or "America/Tegucigalpa"
 
     # Verificar suscripción
     company_full = supabase.table("companies") \
@@ -960,7 +969,7 @@ async def chat(
     try:
         return await _run_agent(
             session_id, message, company_id, company_name,
-            ai_rules, currency_code, show_stock, features,
+            ai_rules, currency_code, show_stock, features, company_timezone,
         )
     except Exception as e:
         logger.error(f"Error inesperado en chat: {e}")

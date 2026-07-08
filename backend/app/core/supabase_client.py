@@ -6,6 +6,7 @@ from supabase import create_client, Client
 from app.core.config import settings
 from functools import lru_cache
 import asyncio
+import time
 import httpx
 
 
@@ -61,3 +62,19 @@ async def run_with_retry(fn, retries: int = 2):
             if attempt == retries:
                 raise
             await asyncio.sleep(0.3 * (attempt + 1))
+
+
+def run_with_retry_sync(fn, retries: int = 2):
+    """
+    Gemela síncrona de `run_with_retry`, para usar DENTRO de funciones que ya
+    corren en un hilo aparte (las que se invocan vía `asyncio.to_thread` desde
+    un router — ej. `stock.py::_create_movement_sync`). No se puede usar
+    `await`/`asyncio.sleep` ahí porque no hay event loop en ese hilo.
+    """
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError):
+            if attempt == retries:
+                raise
+            time.sleep(0.3 * (attempt + 1))

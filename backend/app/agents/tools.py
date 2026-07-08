@@ -8,11 +8,42 @@ from typing import Optional
 from uuid import UUID
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 
-def create_inventory_tools(company_id: str, supabase_client, currency_symbol: str = "$", show_stock: bool = True, features: dict | None = None):
+_MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+
+
+def _format_local(iso_str: str, tz_name: str) -> str:
+    """
+    Convierte un datetime ISO en UTC a la zona horaria de la empresa y lo
+    formatea legible para mostrar al cliente en el chat (ej. "8 jul, 5:29 pm")
+    — evita mostrar "UTC" crudo, que confunde a clientes fuera de esa zona.
+    Formato manual (no usa %-d/%#d de strftime) para que funcione igual en
+    Windows y Linux.
+    """
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        local_dt = dt.astimezone(ZoneInfo(tz_name))
+        hour_12 = local_dt.hour % 12 or 12
+        ampm = "am" if local_dt.hour < 12 else "pm"
+        return f"{local_dt.day} {_MESES[local_dt.month - 1]}, {hour_12}:{local_dt.minute:02d} {ampm}"
+    except Exception:
+        return iso_str[:16].replace("T", " ") + " UTC"  # fallback si algo falla
+
+
+def create_inventory_tools(
+    company_id: str,
+    supabase_client,
+    currency_symbol: str = "$",
+    show_stock: bool = True,
+    features: dict | None = None,
+    company_timezone: str = "America/Tegucigalpa",
+):
     """
     Factory que crea los tools del agente inyectando el company_id.
     Esto garantiza que el agente SOLO accede al inventario de esa empresa.
@@ -732,7 +763,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                         product_name=product_data.get('name', 'Producto'),
                         reservation_code=reservation_code,
                         quantity=quantity,
-                        expires_at=expires_at[:16].replace('T', ' ') + ' UTC',
+                        expires_at=_format_local(expires_at, company_timezone),
                         company_name=company_id,  # se podría mejorar pasando el nombre
                     ))
                 except Exception:
@@ -744,7 +775,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                 f"👤 Cliente: {client_name}\n"
                 f"📦 Producto: {product_data.get('name', product_id)}\n"
                 f"🔢 Cantidad: {quantity} unidades\n"
-                f"⏰ Expira: {expires_at[:16].replace('T', ' ')} UTC\n\n"
+                f"⏰ Expira: {_format_local(expires_at, company_timezone)}\n\n"
                 f"Guarda tu código **{reservation_code}** para consultar el estado de tu reserva."
             )
 
@@ -832,7 +863,7 @@ def create_inventory_tools(company_id: str, supabase_client, currency_symbol: st
                     lines.append(f"Personas: {b['party_size']}")
                 if table:
                     lines.append(f"Ubicación: {table}")
-                lines.append(f"Fecha/hora: {b['reserved_at'][:16].replace('T', ' ')}")
+                lines.append(f"Fecha/hora: {_format_local(b['reserved_at'], company_timezone)}")
                 lines.append(f"Platillos: {items_str}")
                 return "\n".join(lines)
 

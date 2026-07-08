@@ -24,6 +24,7 @@ export default function MyReservationsPage() {
   const { companySlug } = useParams()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
+  const [code, setCode] = useState('')
   const [reservations, setReservations] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -44,13 +45,17 @@ export default function MyReservationsPage() {
       setError('Ingresa un email válido')
       return
     }
+    if (!code.trim()) {
+      setError('Ingresa el código de alguna de tus reservas')
+      return
+    }
     setError('')
     setLoading(true)
     try {
-      const res = await reservationsAPI.getByEmail(companySlug, email.trim())
+      const res = await reservationsAPI.getByEmail(companySlug, email.trim(), code.trim())
       setReservations(res.data)
-    } catch {
-      setError('No pudimos consultar tus reservas. Intenta de nuevo.')
+    } catch (err) {
+      setError(err.response?.data?.detail || 'No pudimos consultar tus reservas. Intenta de nuevo.')
     } finally {
       setLoading(false)
     }
@@ -81,29 +86,42 @@ export default function MyReservationsPage() {
             </div>
             <div>
               <h2 className="font-semibold text-ink-900">Buscar por email</h2>
-              <p className="text-xs text-ink-400">Usa el mismo email con el que hiciste la reserva</p>
+              <p className="text-xs text-ink-400">Usa el mismo email con el que hiciste la reserva, más el código de cualquiera de tus reservas</p>
             </div>
           </div>
-          <form onSubmit={handleSearch} className="flex gap-2">
+          <form onSubmit={handleSearch} className="space-y-2">
             <input
               type="email"
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder="tucorreo@ejemplo.com"
-              className="input flex-1"
+              className="input w-full"
               autoComplete="email"
             />
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary shrink-0"
-            >
-              {loading
-                ? <Loader2 size={16} className="animate-spin" />
-                : <Search size={16} />
-              }
-              Buscar
-            </button>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={code}
+                onChange={e => setCode(e.target.value)}
+                placeholder="Código de reserva (ej. AB12CD34)"
+                className="input flex-1"
+                autoCapitalize="characters"
+              />
+              <button
+                type="submit"
+                disabled={loading}
+                className="btn-primary shrink-0"
+              >
+                {loading
+                  ? <Loader2 size={16} className="animate-spin" />
+                  : <Search size={16} />
+                }
+                Buscar
+              </button>
+            </div>
+            <p className="text-[11px] text-ink-400">
+              El código lo encuentras en el email de confirmación de cualquiera de tus reservas.
+            </p>
           </form>
           {error && <p className="text-sm text-red-500 mt-2">{error}</p>}
         </div>

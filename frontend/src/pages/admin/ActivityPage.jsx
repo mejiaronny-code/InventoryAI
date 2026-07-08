@@ -164,6 +164,9 @@ export default function ActivityPage() {
                           <span className={clsx('badge text-xs', categoryColor[item.category])}>
                             {categoryLabel[item.category]}
                           </span>
+                          {item.created_by_name && (
+                            <span className="text-xs text-ink-500 font-medium">{item.created_by_name}</span>
+                          )}
                           <span className="text-xs text-ink-400">
                             {format(new Date(item.created_at), 'HH:mm')}
                           </span>

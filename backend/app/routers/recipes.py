@@ -103,14 +103,17 @@ def _deplete_ingredient(company_id: str, ingredient_id: str, needed: int,
     wh_id = row["warehouse_id"]
     current = row["quantity"]
     deducted = min(current, needed)
-    new_qty = current - deducted
     short = needed - deducted
 
-    supabase.table("product_warehouse_stock")\
-        .update({"quantity": new_qty})\
-        .eq("product_id", ingredient_id)\
-        .eq("warehouse_id", wh_id)\
-        .execute()
+    # Decremento atómico (nunca baja de 0 — mismo comportamiento que antes,
+    # ver migración 011_atomic_stock.sql). Elimina la carrera del
+    # read-modify-write si dos ventas descuentan el mismo insumo casi a la vez.
+    rpc_result = supabase.rpc("decrement_stock_clamped", {
+        "p_product_id": ingredient_id,
+        "p_warehouse_id": wh_id,
+        "p_qty": deducted,
+    }).execute()
+    new_qty = rpc_result.data if rpc_result.data is not None else max(current - deducted, 0)
 
     # Movimiento de salida (stock_movements NO tiene company_id — va por product_id)
     supabase.table("stock_movements").insert({

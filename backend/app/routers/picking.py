@@ -9,6 +9,7 @@ import asyncio
 
 from app.core.auth import require_staff, require_admin
 from app.core.supabase_client import supabase
+from app.routers.reservations import decrement_variant_stock_from_notes
 
 router = APIRouter(prefix="/picking", tags=["picking"])
 
@@ -170,7 +171,7 @@ def complete_pick(reservation_id: str, user: dict = Depends(require_staff)):
         raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
 
     existing = supabase.table("reservations")\
-        .select("id, status, product_id, warehouse_id, quantity")\
+        .select("id, status, product_id, warehouse_id, quantity, notes")\
         .eq("id", reservation_id)\
         .eq("company_id", company_id)\
         .maybe_single()\
@@ -183,7 +184,8 @@ def complete_pick(reservation_id: str, user: dict = Depends(require_staff)):
     if res_row["status"] == "cancelled":
         raise HTTPException(400, "No se puede completar una reserva cancelada")
 
-    # Descontar stock físico
+    # Descontar stock físico — decremento atómico (ver migración
+    # 011_atomic_stock.sql), evita la carrera del read-modify-write.
     stock = supabase.table("product_warehouse_stock")\
         .select("quantity")\
         .eq("product_id", res_row["product_id"])\
@@ -191,15 +193,15 @@ def complete_pick(reservation_id: str, user: dict = Depends(require_staff)):
         .maybe_single()\
         .execute()
     stock_row = stock.data if stock else None
-    current_qty = stock_row["quantity"] if stock_row else 0
-    new_qty = max(current_qty - res_row["quantity"], 0)
+    new_qty = 0
 
     if stock_row:
-        supabase.table("product_warehouse_stock")\
-            .update({"quantity": new_qty})\
-            .eq("product_id", res_row["product_id"])\
-            .eq("warehouse_id", res_row["warehouse_id"])\
-            .execute()
+        rpc_result = supabase.rpc("decrement_stock_clamped", {
+            "p_product_id": res_row["product_id"],
+            "p_warehouse_id": res_row["warehouse_id"],
+            "p_qty": res_row["quantity"],
+        }).execute()
+        new_qty = rpc_result.data if rpc_result.data is not None else 0
 
     # Registrar movimiento de salida
     supabase.table("stock_movements").insert({
@@ -210,6 +212,14 @@ def complete_pick(reservation_id: str, user: dict = Depends(require_staff)):
         "notes":        f"Entrega de reserva #{reservation_id[:8]}",
         "created_by":   user["id"],
     }).execute()
+
+    # Descontar stock por variante (color/talla) si la reserva tenía una
+    # opción elegida — si no, el desglose por color queda desincronizado
+    # del total general (bug real detectado: la suma de colores no cuadraba
+    # con el stock total tras completar por Picking).
+    decrement_variant_stock_from_notes(
+        res_row["product_id"], res_row["warehouse_id"], res_row["quantity"], res_row.get("notes") or ""
+    )
 
     # Actualizar reserva
     supabase.table("reservations")\

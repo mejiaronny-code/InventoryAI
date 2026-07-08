@@ -2,7 +2,7 @@
 app/models/schemas.py
 Modelos Pydantic para validación de request/response
 """
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from typing import Optional, List, Any
 from uuid import UUID
 from datetime import datetime
@@ -353,6 +353,15 @@ class StockMovementCreate(BaseModel):
     notes: Optional[str] = None
     expires_at: Optional[datetime] = None
     batch_code: Optional[str] = None  # si la empresa usa batch_tracking
+
+    @model_validator(mode="after")
+    def _require_notes_on_salida(self):
+        # Trazabilidad ante robo/faltante: toda baja manual de stock debe
+        # quedar con un motivo documentado (quién y por qué), no solo el
+        # número. Las entradas/ajustes no lo exigen.
+        if self.type == "salida" and not (self.notes and self.notes.strip()):
+            raise ValueError("Debes indicar el motivo de la salida de stock")
+        return self
 
 class StockMovementOut(BaseModel):
     id: UUID
