@@ -5,7 +5,7 @@
  * - Imagen: meta-llama/llama-4-scout-17b-16e-instruct (solo al subir imagen)
  */
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { chatAPI } from '../../services/api'
+import { chatAPI, BASE_URL } from '../../services/api'
 import { v4 as uuidv4 } from 'uuid'
 import { MessageCircle, X, Send, Image, Loader2, Bot, User, ImagePlus, Zap, Mic, Square } from 'lucide-react'
 import clsx from 'clsx'
@@ -13,9 +13,12 @@ import clsx from 'clsx'
 function parseMarkdown(text) {
   return text
     // 1. Imágenes markdown BIEN formadas -> <img> (debe ir antes de las redes
-    //    de seguridad para no borrarlas).
+    //    de seguridad para no borrarlas). [^\)\n] (no \s) porque algunos
+    //    nombres de archivo subidos tienen espacios literales en la URL
+    //    (ej. ".../Mochila prueba.jpg") — excluir \s hacía que esas imágenes
+    //    nunca se reconocieran como <img> y la red de seguridad #2 las borraba.
     .replace(
-      /!\\?\[([^\]]*)\\?\]\\?\((https?:\/\/[^\)\s]+)\)\\?/g,
+      /!\\?\[([^\]]*)\\?\]\\?\((https?:\/\/[^\)\n]+)\)\\?/g,
       '<img src="$2" alt="$1" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" onerror="this.style.display=\'none\'" />'
     )
     // 2. Red de seguridad: markdown de imagen sobrante o CORTADO a medias
@@ -133,16 +136,100 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
       return
     }
 
-    // Chat de texto normal
+    // Chat de texto normal — streaming con fallback al endpoint clásico
     const text = input.trim()
     addMessage('user', text)
     setInput('')
     setLoading(true)
+
+    let assistantIndex = null
+    setMessages(prev => {
+      assistantIndex = prev.length
+      return [...prev, { role: 'assistant', content: '', timestamp: new Date(), streaming: true }]
+    })
+
+    const appendDelta = (delta) => {
+      setMessages(prev => {
+        const next = [...prev]
+        if (next[assistantIndex]) {
+          next[assistantIndex] = { ...next[assistantIndex], content: next[assistantIndex].content + delta }
+        }
+        return next
+      })
+    }
+
+    const finalizeStreaming = () => {
+      setMessages(prev => {
+        const next = [...prev]
+        if (next[assistantIndex]) next[assistantIndex] = { ...next[assistantIndex], streaming: false }
+        return next
+      })
+    }
+
+    const setAssistantContent = (content) => {
+      setMessages(prev => {
+        const next = [...prev]
+        next[assistantIndex] = { role: 'assistant', content, timestamp: new Date() }
+        return next
+      })
+    }
+
+    let gotAnyDelta = false
     try {
-      const res = await chatAPI.sendMessage(sessionId, text, companySlug)
-      addMessage('assistant', res.data.response)
+      const token = localStorage.getItem('access_token')
+      const res = await fetch(`${BASE_URL}/chat/message/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ session_id: sessionId, message: text, company_slug: companySlug }),
+      })
+
+      if (!res.ok || !res.body) throw new Error('stream_not_ok')
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        // Los eventos SSE llegan separados por doble salto de línea; lo que
+        // quede incompleto al final del chunk se conserva para el siguiente.
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop()
+
+        for (const part of parts) {
+          const line = part.trim()
+          if (!line.startsWith('data: ')) continue
+          let evt
+          try { evt = JSON.parse(line.slice(6)) } catch { continue }
+
+          if (evt.delta) {
+            gotAnyDelta = true
+            appendDelta(evt.delta)
+          } else if (evt.error) {
+            gotAnyDelta = true
+            appendDelta(evt.error)
+          } else if (evt.done) {
+            finalizeStreaming()
+          }
+        }
+      }
+
+      if (!gotAnyDelta) throw new Error('stream_empty')
     } catch (e) {
-      addMessage('assistant', 'Ocurrió un error. Intenta de nuevo en un momento.')
+      // El streaming falló antes de traer nada útil — reintenta una vez
+      // contra el endpoint clásico para no dejar al usuario sin respuesta.
+      try {
+        const res = await chatAPI.sendMessage(sessionId, text, companySlug)
+        setAssistantContent(res.data.response)
+      } catch {
+        setAssistantContent('Ocurrió un error. Intenta de nuevo en un momento.')
+      }
     } finally {
       setLoading(false)
     }
@@ -374,6 +461,12 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
                 )}
                 {msg.role === 'user' ? (
                   <div className="chat-bubble-user">{msg.content}</div>
+                ) : msg.streaming && !msg.content ? (
+                  <div className="chat-bubble-ai flex items-center gap-1.5 py-3.5 px-4">
+                    <div className="typing-dot" />
+                    <div className="typing-dot" />
+                    <div className="typing-dot" />
+                  </div>
                 ) : (
                   <div
                     className="chat-bubble-ai chat-markdown"
@@ -389,7 +482,7 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
             </div>
           ))}
 
-          {loading && <TypingIndicator />}
+          {loading && !messages[messages.length - 1]?.streaming && <TypingIndicator />}
           <div ref={messagesEndRef} />
         </div>
 

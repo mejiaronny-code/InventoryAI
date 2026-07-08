@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 import base64
 import imghdr
+import json
 import logging
 from datetime import date, datetime
 from collections import defaultdict
@@ -16,7 +17,7 @@ import threading
 logger = logging.getLogger(__name__)
 
 from app.models.schemas import ChatMessage, ChatResponse
-from app.agents.chat_agent import chat, chat_with_image
+from app.agents.chat_agent import chat, chat_with_image, chat_stream
 from app.core.supabase_client import supabase
 from app.core.company_features import get_active_company, require_public_catalog
 from app.services.transcription import transcribe_audio, ALLOWED_AUDIO_TYPES, MAX_AUDIO_SIZE
@@ -160,6 +161,39 @@ async def send_message(data: ChatMessage, request: Request):
         response=response,
         session_id=data.session_id,
         used_tools=used_tools,
+    )
+
+
+@router.post("/message/stream")
+async def send_message_stream(data: ChatMessage, request: Request):
+    """
+    Igual que /chat/message pero streamea la respuesta como Server-Sent Events
+    (SSE) — el texto llega en fragmentos conforme el modelo lo genera, en vez de
+    esperar la respuesta completa. Mismas validaciones y límites que /message.
+    """
+    if not data.message.strip():
+        raise HTTPException(400, "El mensaje no puede estar vacío")
+
+    _check_ip_rate_limit(request)
+    await _check_public_catalog(data.company_slug)
+    _check_rate_limit(data.company_slug)
+
+    async def event_generator():
+        try:
+            async for event in chat_stream(
+                session_id=data.session_id,
+                message=data.message,
+                company_slug=data.company_slug,
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.error(f"Error en stream de chat: {e}")
+            yield f"data: {json.dumps({'error': 'Ocurrió un error procesando el mensaje.'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

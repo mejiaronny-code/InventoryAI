@@ -5,7 +5,7 @@
  */
 import axios from 'axios'
 
-const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1'
+export const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1'
 
 // ── Cache de respuestas GET ───────────────────────────────────────
 // TTLs: datos que cambian poco = 30s, notificaciones = 8s

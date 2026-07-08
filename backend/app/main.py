@@ -11,6 +11,7 @@ import logging
 
 from app.core.config import settings
 from app.embeddings.embedding_service import start_warmup_loop
+from app.agents.chat_agent import start_chat_warmup_loop
 from app.routers import (
     auth,
     products,
@@ -47,11 +48,16 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 InventoryAI API iniciando...")
     logger.info(f"   Entorno: {settings.environment}")
     logger.info(f"   LangSmith: {'✅' if settings.langchain_tracing_v2 else '❌'}")
-    # Warm-up del modelo de embeddings cada 10 minutos para evitar cold starts
+    # Warm-up del modelo de embeddings y del modelo de chat cada 10 minutos
+    # para evitar cold starts (respuesta lenta en el primer mensaje tras un
+    # rato de inactividad).
     warmup_task = asyncio.create_task(start_warmup_loop(interval_seconds=600))
+    chat_warmup_task = asyncio.create_task(start_chat_warmup_loop(interval_seconds=600))
     logger.info("   Embedding warm-up: ✅ (cada 10 min)")
+    logger.info("   Chat warm-up: ✅ (cada 10 min)")
     yield
     warmup_task.cancel()
+    chat_warmup_task.cancel()
     logger.info("🛑 API apagándose...")
 
 
