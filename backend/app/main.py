@@ -10,6 +10,15 @@ import asyncio
 import logging
 
 from app.core.config import settings
+
+if settings.sentry_dsn:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        environment=settings.environment,
+        traces_sample_rate=0,  # solo errores, sin performance monitoring (gratis)
+    )
+
 from app.core.supabase_client import supabase
 from app.embeddings.embedding_service import start_warmup_loop
 from app.agents.chat_agent import start_chat_warmup_loop
@@ -49,6 +58,7 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 InventoryAI API iniciando...")
     logger.info(f"   Entorno: {settings.environment}")
     logger.info(f"   LangSmith: {'✅' if settings.langchain_tracing_v2 else '❌'}")
+    logger.info(f"   Sentry: {'✅' if settings.sentry_dsn else '❌'}")
     # Warm-up del modelo de embeddings y del modelo de chat cada 10 minutos
     # para evitar cold starts (respuesta lenta en el primer mensaje tras un
     # rato de inactividad).

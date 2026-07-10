@@ -33,3 +33,6 @@ python-docx==1.1.2
 # Base de datos de zonas horarias IANA para zoneinfo — Linux/Mac ya la traen
 # del sistema, pero Windows (dev local) y algunas imágenes Docker mínimas no.
 tzdata==2026.2
+
+# Monitoreo de errores en producción (opcional — se activa solo si SENTRY_DSN existe)
+sentry-sdk[fastapi]==2.19.0

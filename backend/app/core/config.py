@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # por este header compartido. Vacío = endpoints de integración deshabilitados.
     integration_service_key: str = ""
 
+    # Sentry (monitoreo de errores) — vacío = deshabilitado (local/CI no lo necesitan)
+    sentry_dsn: str = ""
+
     # Margen sobre el costo real de IA que se le muestra a la empresa.
     # `ai_usage_log.cost_usd` siempre guarda el costo REAL de DeepInfra (para
     # las métricas internas del super admin); este multiplicador solo se aplica
