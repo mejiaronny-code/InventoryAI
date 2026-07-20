@@ -63,6 +63,13 @@ def _find_auth_user_by_email(email: str) -> dict | None:
         return None
 
 
+# Único subconjunto de `settings` que el catálogo público/embed necesita
+# (colores de marca, moneda, si se muestra stock, saludo del chat). El resto
+# (ai_rules, límites de IA, timezone, etc.) es config interna que no debe
+# filtrarse a un endpoint sin autenticación.
+_PUBLIC_SETTINGS_KEYS = {"primary_color", "bg_color", "text_color", "currency", "show_stock", "chat_welcome"}
+
+
 @router.get("/", response_model=List[CompanyOut])
 async def list_companies_public():
     query = supabase.table("companies")\
@@ -70,6 +77,9 @@ async def list_companies_public():
         .eq("is_active", True)
     result = await run_with_retry(lambda: query.execute())
     companies = result.data or []
+    for c in companies:
+        raw_settings = c.get("settings") or {}
+        c["settings"] = {k: v for k, v in raw_settings.items() if k in _PUBLIC_SETTINGS_KEYS}
     # Excluir empresas con suscripción cancelada
     return [
         c for c in companies

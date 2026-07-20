@@ -54,6 +54,12 @@ class _Query:
         self._payload = payload
         return self
 
+    def upsert(self, payload, on_conflict=None):
+        self._op = "upsert"
+        self._payload = payload
+        self._on_conflict = [c.strip() for c in on_conflict.split(",")] if on_conflict else None
+        return self
+
     def delete(self):
         self._op = "delete"
         return self
@@ -163,6 +169,26 @@ class _Query:
                 (removed if self._matches(r) else kept).append(r)
             self._db[self._table] = kept
             return _Result([dict(r) for r in removed])
+
+        if self._op == "upsert":
+            payload = self._payload
+            items = payload if isinstance(payload, list) else [payload]
+            keys = self._on_conflict or ["id"]
+            out = []
+            for item in items:
+                existing = next(
+                    (r for r in rows if all(r.get(k) == item.get(k) for k in keys)),
+                    None,
+                )
+                if existing is not None:
+                    existing.update(item)
+                    out.append(dict(existing))
+                else:
+                    row = dict(item)
+                    row.setdefault("id", str(uuid.uuid4()))
+                    rows.append(row)
+                    out.append(dict(row))
+            return _Result(out)
 
         raise AssertionError(f"op no soportada: {self._op}")
 

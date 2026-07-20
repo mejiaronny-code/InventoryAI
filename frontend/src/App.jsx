@@ -1,11 +1,18 @@
 /**
  * App.jsx
  * Router principal de la aplicación.
+ *
+ * Code-splitting: las páginas de admin/superadmin se cargan con React.lazy
+ * — un cliente que solo visita el catálogo público NUNCA descarga el bundle
+ * del panel de administración (ProductsPage, ReportsPage, etc.) ni el de
+ * super admin. Las páginas públicas se mantienen en el bundle principal
+ * porque son la puerta de entrada más común (menos saltos de red).
  */
+import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 
-// Public pages
+// Public pages — bundle principal (entrada más común, sin lazy)
 import HomePage from './pages/public/HomePage'
 import CompanyCatalogPage from './pages/public/CompanyCatalogPage'
 import ReservationStatusPage from './pages/public/ReservationStatusPage'
@@ -14,37 +21,45 @@ import NotFoundPage from './pages/public/NotFoundPage'
 import EmbedChatPage from './pages/public/EmbedChatPage'
 import ResetPasswordPage from './pages/public/ResetPasswordPage'
 import ForgotPasswordPage from './pages/public/ForgotPasswordPage'
-
-// Admin pages
 import LoginPage from './pages/admin/LoginPage'
-import AdminLayout from './components/admin/AdminLayout'
-import DashboardPage from './pages/admin/DashboardPage'
-import ProductsPage from './pages/admin/ProductsPage'
-import CategoriesPage from './pages/admin/CategoriesPage'
-import WarehousesPage from './pages/admin/WarehousesPage'
-import StockPage from './pages/admin/StockPage'
-import ReservationsPage from './pages/admin/ReservationsPage'
-import NotificationsPage from './pages/admin/NotificationsPage'
-import SettingsPage from './pages/admin/SettingsPage'
-import EmployeesPage from './pages/admin/EmployeesPage'
-import ActivityPage from './pages/admin/ActivityPage'
-import SerialsPage from './pages/admin/SerialsPage'
-import PickingPage from './pages/admin/PickingPage'
-import ReorderPage from './pages/admin/ReorderPage'
-import ReconciliationPage from './pages/admin/ReconciliationPage'
-import ReportsPage from './pages/admin/ReportsPage'
-import KnowledgeBasePage from './pages/admin/KnowledgeBasePage'
-import TablesPage from './pages/admin/TablesPage'
-import BookingsPage from './pages/admin/BookingsPage'
 
-// Super Admin pages
-import SuperAdminLayout from './components/admin/SuperAdminLayout'
-import SuperAdminCompaniesPage from './pages/superadmin/CompaniesPage'
-import SuperAdminMetricsPage from './pages/superadmin/MetricsPage'
+// Admin pages — lazy (solo se descargan al entrar a /admin)
+const AdminLayout        = lazy(() => import('./components/admin/AdminLayout'))
+const DashboardPage      = lazy(() => import('./pages/admin/DashboardPage'))
+const ProductsPage       = lazy(() => import('./pages/admin/ProductsPage'))
+const CategoriesPage     = lazy(() => import('./pages/admin/CategoriesPage'))
+const WarehousesPage     = lazy(() => import('./pages/admin/WarehousesPage'))
+const StockPage          = lazy(() => import('./pages/admin/StockPage'))
+const ReservationsPage   = lazy(() => import('./pages/admin/ReservationsPage'))
+const NotificationsPage  = lazy(() => import('./pages/admin/NotificationsPage'))
+const SettingsPage       = lazy(() => import('./pages/admin/SettingsPage'))
+const EmployeesPage      = lazy(() => import('./pages/admin/EmployeesPage'))
+const ActivityPage       = lazy(() => import('./pages/admin/ActivityPage'))
+const SerialsPage        = lazy(() => import('./pages/admin/SerialsPage'))
+const PickingPage        = lazy(() => import('./pages/admin/PickingPage'))
+const ReorderPage        = lazy(() => import('./pages/admin/ReorderPage'))
+const ReconciliationPage = lazy(() => import('./pages/admin/ReconciliationPage'))
+const ReportsPage        = lazy(() => import('./pages/admin/ReportsPage'))
+const KnowledgeBasePage  = lazy(() => import('./pages/admin/KnowledgeBasePage'))
+const TablesPage         = lazy(() => import('./pages/admin/TablesPage'))
+const BookingsPage       = lazy(() => import('./pages/admin/BookingsPage'))
+
+// Super Admin pages — lazy (solo se descargan al entrar a /superadmin)
+const SuperAdminLayout        = lazy(() => import('./components/admin/SuperAdminLayout'))
+const SuperAdminCompaniesPage = lazy(() => import('./pages/superadmin/CompaniesPage'))
+const SuperAdminMetricsPage   = lazy(() => import('./pages/superadmin/MetricsPage'))
+
+function PageLoader() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="w-8 h-8 border-3 border-brand-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  )
+}
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth()
-  if (loading) return <div className="min-h-screen flex items-center justify-center"><div className="w-8 h-8 border-3 border-brand-500 border-t-transparent rounded-full animate-spin" /></div>
+  if (loading) return <PageLoader />
   if (!user) return <Navigate to="/admin/login" replace />
   if (allowedRoles && !allowedRoles.includes(user.role)) return <Navigate to="/admin/dashboard" replace />
   return children
@@ -71,33 +86,35 @@ function AppRoutes() {
         path="/admin"
         element={
           <ProtectedRoute allowedRoles={['admin', 'employee']}>
-            <AdminLayout />
+            <Suspense fallback={<PageLoader />}>
+              <AdminLayout />
+            </Suspense>
           </ProtectedRoute>
         }
       >
         <Route index element={<Navigate to="/admin/dashboard" replace />} />
-        <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="products" element={<ProductsPage />} />
-        <Route path="categories" element={<CategoriesPage />} />
-        <Route path="warehouses" element={<WarehousesPage />} />
-        <Route path="stock" element={<StockPage />} />
-        <Route path="reservations" element={<ReservationsPage />} />
-        <Route path="bookings" element={<BookingsPage />} />
-        <Route path="tables" element={<TablesPage />} />
-        <Route path="notifications" element={<NotificationsPage />} />
-        <Route path="activity" element={<ActivityPage />} />
-        <Route path="serials" element={<SerialsPage />} />
-        <Route path="picking" element={<PickingPage />} />
-        <Route path="reorder" element={<ReorderPage />} />
-        <Route path="conteo" element={<ReconciliationPage />} />
-        <Route path="reports" element={<ReportsPage />} />
-        <Route path="knowledge" element={<KnowledgeBasePage />} />
-        <Route path="settings" element={<SettingsPage />} />
+        <Route path="dashboard" element={<Suspense fallback={<PageLoader />}><DashboardPage /></Suspense>} />
+        <Route path="products" element={<Suspense fallback={<PageLoader />}><ProductsPage /></Suspense>} />
+        <Route path="categories" element={<Suspense fallback={<PageLoader />}><CategoriesPage /></Suspense>} />
+        <Route path="warehouses" element={<Suspense fallback={<PageLoader />}><WarehousesPage /></Suspense>} />
+        <Route path="stock" element={<Suspense fallback={<PageLoader />}><StockPage /></Suspense>} />
+        <Route path="reservations" element={<Suspense fallback={<PageLoader />}><ReservationsPage /></Suspense>} />
+        <Route path="bookings" element={<Suspense fallback={<PageLoader />}><BookingsPage /></Suspense>} />
+        <Route path="tables" element={<Suspense fallback={<PageLoader />}><TablesPage /></Suspense>} />
+        <Route path="notifications" element={<Suspense fallback={<PageLoader />}><NotificationsPage /></Suspense>} />
+        <Route path="activity" element={<Suspense fallback={<PageLoader />}><ActivityPage /></Suspense>} />
+        <Route path="serials" element={<Suspense fallback={<PageLoader />}><SerialsPage /></Suspense>} />
+        <Route path="picking" element={<Suspense fallback={<PageLoader />}><PickingPage /></Suspense>} />
+        <Route path="reorder" element={<Suspense fallback={<PageLoader />}><ReorderPage /></Suspense>} />
+        <Route path="conteo" element={<Suspense fallback={<PageLoader />}><ReconciliationPage /></Suspense>} />
+        <Route path="reports" element={<Suspense fallback={<PageLoader />}><ReportsPage /></Suspense>} />
+        <Route path="knowledge" element={<Suspense fallback={<PageLoader />}><KnowledgeBasePage /></Suspense>} />
+        <Route path="settings" element={<Suspense fallback={<PageLoader />}><SettingsPage /></Suspense>} />
         <Route
           path="employees"
           element={
             <ProtectedRoute allowedRoles={['admin']}>
-              <EmployeesPage />
+              <Suspense fallback={<PageLoader />}><EmployeesPage /></Suspense>
             </ProtectedRoute>
           }
         />
@@ -108,13 +125,15 @@ function AppRoutes() {
         path="/superadmin"
         element={
           <ProtectedRoute allowedRoles={['super_admin']}>
-            <SuperAdminLayout />
+            <Suspense fallback={<PageLoader />}>
+              <SuperAdminLayout />
+            </Suspense>
           </ProtectedRoute>
         }
       >
         <Route index element={<Navigate to="/superadmin/companies" replace />} />
-        <Route path="companies" element={<SuperAdminCompaniesPage />} />
-        <Route path="metrics" element={<SuperAdminMetricsPage />} />
+        <Route path="companies" element={<Suspense fallback={<PageLoader />}><SuperAdminCompaniesPage /></Suspense>} />
+        <Route path="metrics" element={<Suspense fallback={<PageLoader />}><SuperAdminMetricsPage /></Suspense>} />
       </Route>
 
       {/* ── 404 ── */}

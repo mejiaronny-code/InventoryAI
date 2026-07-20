@@ -72,6 +72,12 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 API apagándose...")
 
 
+# ⚠️ Deploy en 1 SOLA RÉPLICA hasta migrar a Redis (ver SECURITY_ROADMAP.md
+# Fase 3). Rate limits, cache de auth, historial de chat y cache de empresa
+# viven en memoria del proceso — con 2+ réplicas cada una cuenta/cachea por
+# separado (límites se multiplican, historial se "pierde" según a qué
+# réplica cae cada request). Escalar horizontalmente sin Redis primero
+# rompe estas garantías silenciosamente.
 app = FastAPI(
     title="InventoryAI API",
     version="1.0.0",

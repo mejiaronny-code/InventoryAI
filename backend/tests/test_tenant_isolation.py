@@ -7,9 +7,12 @@ CLAUDE.md). Esta suite siembra dos empresas con datos propios y confirma que
 ninguna de las dos ve nunca una fila de la otra en los endpoints de staff/admin
 más comunes.
 """
+import asyncio
 import pytest
+from fastapi import HTTPException
 
-from app.routers import products, categories, warehouses, notifications, stock
+from app.routers import products, categories, warehouses, notifications, stock, recipes
+from app.core import company_features
 
 
 COMPANY_A = "comp-a"
@@ -21,8 +24,13 @@ USER_B = {"id": "user-b", "company_id": COMPANY_B, "role": "admin"}
 @pytest.fixture
 def seeded(fake_supabase, monkeypatch):
     """Dos empresas con un producto, categoría, almacén y notificación cada una."""
-    for mod in (products, categories, warehouses, notifications, stock):
+    for mod in (products, categories, warehouses, notifications, stock, recipes, company_features):
         monkeypatch.setattr(mod, "supabase", fake_supabase)
+
+    fake_supabase.seed("companies", [
+        {"id": COMPANY_A, "slug": "empresa-a", "name": "Empresa A", "is_active": True, "features": {}},
+        {"id": COMPANY_B, "slug": "empresa-b", "name": "Empresa B", "is_active": True, "features": {}},
+    ])
 
     fake_supabase.seed("products", [
         {"id": "prod-a", "company_id": COMPANY_A, "name": "Producto A",
@@ -119,3 +127,98 @@ def test_super_admin_sin_company_id_no_ve_datos_de_nadie(seeded):
     ids = {p["id"] for p in result}
     assert "prod-a" not in ids
     assert "prod-b" not in ids
+
+
+# ── Regresión: mutaciones cross-tenant que un usuario de la Empresa A podía
+# ── hacer contra recursos de la Empresa B pasando su UUID a mano (bugs
+# ── reales cerrados en este PR — ver plan de hardening de seguridad).
+
+from app.models.schemas import StockMovementCreate, StockUpdate, LocationUpdate, RecipeUpsert, RecipeItem
+
+PROD_A_UUID = "11111111-1111-1111-1111-111111111111"
+PROD_B_UUID = "22222222-2222-2222-2222-222222222222"
+WH_A_UUID   = "33333333-3333-3333-3333-333333333333"
+WH_B_UUID   = "44444444-4444-4444-4444-444444444444"
+
+
+@pytest.fixture
+def seeded_uuid(seeded):
+    """
+    Variante de `seeded` con productos/almacenes de UUID válido — los schemas
+    de mutación (StockMovementCreate, StockUpdate, RecipeItem) tipan
+    product_id/warehouse_id/ingredient_id como UUID real, a diferencia de los
+    ids de juguete ("prod-a") que usan los tests de solo-lectura de arriba.
+    """
+    seeded.seed("products", [
+        {"id": PROD_A_UUID, "company_id": COMPANY_A, "name": "Producto A UUID",
+         "unit": "unidad", "price": 10, "is_active": True},
+        {"id": PROD_B_UUID, "company_id": COMPANY_B, "name": "Producto B UUID",
+         "unit": "unidad", "price": 20, "is_active": True},
+    ])
+    seeded.seed("warehouses", [
+        {"id": WH_A_UUID, "company_id": COMPANY_A, "name": "Almacén A UUID"},
+        {"id": WH_B_UUID, "company_id": COMPANY_B, "name": "Almacén B UUID"},
+    ])
+    return seeded
+
+
+def test_stock_movement_bloquea_producto_de_otra_empresa(seeded_uuid):
+    """Empresa A no puede registrar un movimiento sobre un producto de Empresa B."""
+    data = StockMovementCreate(product_id=PROD_B_UUID, warehouse_id=WH_B_UUID,
+                                type="entrada", quantity=5)
+    with pytest.raises(HTTPException) as exc:
+        stock._create_movement_sync(data, USER_A)
+    assert exc.value.status_code == 404
+
+
+def test_stock_movement_bloquea_almacen_de_otra_empresa(seeded_uuid):
+    """Ídem, pero el producto es propio y el almacén es de la otra empresa."""
+    data = StockMovementCreate(product_id=PROD_A_UUID, warehouse_id=WH_B_UUID,
+                                type="entrada", quantity=5)
+    with pytest.raises(HTTPException) as exc:
+        stock._create_movement_sync(data, USER_A)
+    assert exc.value.status_code == 404
+
+
+def test_stock_movement_propio_funciona(seeded_uuid):
+    """Control positivo: producto y almacén propios sí deben funcionar."""
+    data = StockMovementCreate(product_id=PROD_A_UUID, warehouse_id=WH_A_UUID,
+                                type="entrada", quantity=5)
+    result, _ = stock._create_movement_sync(data, USER_A)
+    assert result["message"] == "Movimiento registrado"
+
+
+def test_stock_set_bloquea_producto_de_otra_empresa(seeded_uuid):
+    data = StockUpdate(warehouse_id=WH_B_UUID, quantity=10, min_stock_alert=5)
+    with pytest.raises(HTTPException) as exc:
+        stock.set_stock(data, product_id=PROD_B_UUID, user=USER_A)
+    assert exc.value.status_code == 404
+
+
+def test_stock_location_bloquea_producto_de_otra_empresa(seeded):
+    """LocationUpdate usa ids de tipo str — reutiliza los ids de juguete de `seeded`."""
+    data = LocationUpdate(product_id="prod-b", warehouse_id="wh-b", store_location="Pasillo 3")
+    with pytest.raises(HTTPException) as exc:
+        stock.update_location(data, user=USER_A)
+    assert exc.value.status_code == 404
+
+
+def test_recipe_bloquea_insumo_de_otra_empresa(seeded_uuid):
+    """
+    Empresa A tiene un platillo propio (prod-a de `seeded`) e intenta usar
+    como insumo un producto que en realidad es de la Empresa B.
+    """
+    data = RecipeUpsert(items=[RecipeItem(ingredient_id=PROD_B_UUID, quantity=1, unit="g")])
+    with pytest.raises(HTTPException) as exc:
+        recipes.set_recipe(dish_id="prod-a", data=data, user=USER_A)
+    assert exc.value.status_code == 404
+
+
+def test_variant_stock_publico_bloquea_producto_de_otra_empresa(seeded):
+    """
+    GET /products/public/{slug}/{product_id}/variant-stock: el product_id de
+    la URL pertenece a Empresa B, pero se consulta con el slug de Empresa A.
+    """
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(products.get_variant_stock_public("empresa-a", "prod-b"))
+    assert exc.value.status_code == 404

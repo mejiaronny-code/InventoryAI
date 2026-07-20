@@ -18,7 +18,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 
 from app.core.config import settings
-from app.core.supabase_client import supabase
+from app.core.supabase_client import supabase, run_with_retry
 from app.agents.tools import create_inventory_tools
 
 # LangSmith tracing (opcional)
@@ -52,8 +52,72 @@ def _client() -> AsyncOpenAI:
         base_url=DEEPINFRA_BASE_URL,
     )
 
+# ── Contexto de empresa por slug (cache con TTL) ─────────────────────
+# `chat()`/`chat_stream()` hacían 2 queries SERIALES y BLOQUEANTES a
+# `companies` en cada mensaje (una para settings/features, otra para el
+# estado de la suscripción) — con 30-60s de latencia visible cuando el
+# modelo estaba lento, esas dos consultas se sumaban a cada mensaje. Se
+# unifican en una sola query con join + se cachean por slug ~60s (los
+# datos de empresa casi no cambian mensaje a mensaje).
+_company_cache: dict[str, tuple[float, dict]] = {}
+_COMPANY_CACHE_TTL = 60.0
+
+
+async def _get_company_context(company_slug: str) -> dict | None:
+    """Retorna {id, name, settings, features, subscription_status} o None si no existe/inactiva."""
+    cached = _company_cache.get(company_slug)
+    if cached and (time.monotonic() - cached[0]) < _COMPANY_CACHE_TTL:
+        return cached[1]
+
+    query = supabase.table("companies") \
+        .select("id, name, settings, features, subscription_id, subscriptions(status)") \
+        .eq("slug", company_slug) \
+        .eq("is_active", True) \
+        .single()
+    resp = await run_with_retry(lambda: query.execute())
+    if not resp.data:
+        return None
+
+    sub = resp.data.get("subscriptions") or {}
+    context = {
+        "id": resp.data["id"],
+        "name": resp.data["name"],
+        "settings": resp.data.get("settings") or {},
+        "features": resp.data.get("features") or {},
+        "subscription_status": sub.get("status"),
+    }
+    _company_cache[company_slug] = (time.monotonic(), context)
+    return context
+
+
 # ── Historial de conversación por sesión ─────────────────────────────
+# Cada sesión individual ya se poda a _STORE_LIMIT mensajes (abajo), pero el
+# DICCIONARIO en sí (una entrada por session_id que haya escrito alguna vez)
+# nunca se achicaba — con tráfico público sostenido (cada visitante nuevo del
+# catálogo genera un session_id) esto crece sin límite hasta el próximo
+# deploy. Es efímero por diseño (vive en memoria de un solo proceso, se borra
+# igual en cada deploy/restart) — esta poda solo evita que crezca sin límite
+# ENTRE deploys.
 _history_store: dict[str, list] = {}
+_history_last_seen: dict[str, float] = {}
+_HISTORY_MAX_SESSIONS = 2000
+_HISTORY_TTL_SECONDS = 6 * 3600  # 6 horas de inactividad
+
+
+def _touch_history(session_id: str) -> None:
+    _history_last_seen[session_id] = time.monotonic()
+    if len(_history_store) > _HISTORY_MAX_SESSIONS:
+        _prune_history_store()
+
+
+def _prune_history_store() -> None:
+    now = time.monotonic()
+    stale = [sid for sid, ts in _history_last_seen.items() if now - ts > _HISTORY_TTL_SECONDS]
+    for sid in stale:
+        _history_store.pop(sid, None)
+        _history_last_seen.pop(sid, None)
+    if stale:
+        logger.info(f"_history_store: podadas {len(stale)} sesiones inactivas ({len(_history_store)} restantes)")
 
 # Cuántos mensajes se envían al modelo / se conservan por sesión.
 # Las tools inflan el historial (assistant tool_calls + tool result), así que
@@ -313,6 +377,7 @@ async def _run_agent(
 
     if session_id not in _history_store:
         _history_store[session_id] = []
+    _touch_history(session_id)
     history: list = _history_store[session_id]
     history.append({"role": "user", "content": message})
 
@@ -651,6 +716,7 @@ async def _run_agent_stream(
 
     if session_id not in _history_store:
         _history_store[session_id] = []
+    _touch_history(session_id)
     history: list = _history_store[session_id]
     history.append({"role": "user", "content": message})
 
@@ -897,23 +963,16 @@ async def chat_stream(session_id: str, message: str, company_slug: str):
     Igual que `chat()` pero streameando la respuesta final token a token.
     Yields los mismos eventos que `_run_agent_stream`.
     """
-    company_resp = supabase.table("companies") \
-        .select("id, name, settings, features") \
-        .eq("slug", company_slug) \
-        .eq("is_active", True) \
-        .single() \
-        .execute()
-
-    if not company_resp.data:
+    company = await _get_company_context(company_slug)
+    if not company:
         yield {"delta": "Empresa no encontrada."}
         yield {"done": True, "used_tools": []}
         return
 
-    company       = company_resp.data
     company_id    = company["id"]
     company_name  = company["name"]
-    settings_data = company.get("settings") or {}
-    features      = company.get("features") or {}
+    settings_data = company["settings"]
+    features      = company["features"]
     ai_rules      = settings_data.get("ai_rules") or []
     currency_code = settings_data.get("currency") or "USD"
     show_stock    = settings_data.get("show_stock", True)
@@ -924,18 +983,10 @@ async def chat_stream(session_id: str, message: str, company_slug: str):
     # un selector en el admin.
     company_timezone = settings_data.get("timezone") or "America/Tegucigalpa"
 
-    company_full = supabase.table("companies") \
-        .select("subscription_id, subscriptions(status)") \
-        .eq("id", company_id) \
-        .single() \
-        .execute()
-
-    if company_full.data:
-        sub = company_full.data.get("subscriptions")
-        if sub and sub.get("status") == "suspended":
-            yield {"delta": "Este servicio está temporalmente suspendido."}
-            yield {"done": True, "used_tools": []}
-            return
+    if company["subscription_status"] == "suspended":
+        yield {"delta": "Este servicio está temporalmente suspendido."}
+        yield {"done": True, "used_tools": []}
+        return
 
     try:
         async for event in _run_agent_stream(
@@ -956,37 +1007,21 @@ async def chat(
     company_slug: str,
 ) -> tuple[str, list[str]]:
     """Procesa un mensaje de chat y retorna (respuesta, tools_usados)."""
-    company_resp = supabase.table("companies") \
-        .select("id, name, settings, features") \
-        .eq("slug", company_slug) \
-        .eq("is_active", True) \
-        .single() \
-        .execute()
-
-    if not company_resp.data:
+    company = await _get_company_context(company_slug)
+    if not company:
         return "Empresa no encontrada.", []
 
-    company       = company_resp.data
     company_id    = company["id"]
     company_name  = company["name"]
-    settings_data = company.get("settings") or {}
-    features      = company.get("features") or {}
+    settings_data = company["settings"]
+    features      = company["features"]
     ai_rules      = settings_data.get("ai_rules") or []
     currency_code = settings_data.get("currency") or "USD"
     show_stock    = settings_data.get("show_stock", True)
     company_timezone = settings_data.get("timezone") or "America/Tegucigalpa"
 
-    # Verificar suscripción
-    company_full = supabase.table("companies") \
-        .select("subscription_id, subscriptions(status)") \
-        .eq("id", company_id) \
-        .single() \
-        .execute()
-
-    if company_full.data:
-        sub = company_full.data.get("subscriptions")
-        if sub and sub.get("status") == "suspended":
-            return "Este servicio está temporalmente suspendido.", []
+    if company["subscription_status"] == "suspended":
+        return "Este servicio está temporalmente suspendido.", []
 
     try:
         return await _run_agent(
@@ -1013,12 +1048,12 @@ async def chat_with_image(
     3. Qwen2.5-VL compara la imagen del cliente contra las fotos de los
        candidatos del inventario y elige la mejor coincidencia.
     """
-    company_resp = supabase.table("companies") \
-        .select("id, name, settings") \
-        .eq("slug", company_slug) \
-        .eq("is_active", True) \
-        .single() \
-        .execute()
+    company_resp = await run_with_retry(lambda: supabase.table("companies")
+        .select("id, name, settings")
+        .eq("slug", company_slug)
+        .eq("is_active", True)
+        .single()
+        .execute())
 
     if not company_resp.data:
         return "Empresa no encontrada.", []
@@ -1081,21 +1116,21 @@ async def chat_with_image(
         # ── FASE 2: Búsqueda semántica + keyword ──────────────────────
         query_embedding = await generate_embedding(f"{search_query} {user_text}".strip())
 
-        rpc_result = supabase.rpc("search_products_semantic", {
+        rpc_result = await run_with_retry(lambda: supabase.rpc("search_products_semantic", {
             "query_embedding":   query_embedding,
             "company_id_filter": company_id,
             "match_threshold":   0.10,
             "match_count":       8,
-        }).execute()
+        }).execute())
 
         candidate_ids = [p["id"] for p in (rpc_result.data or [])]
 
         # Complementar con keyword del tipo de producto
         for kw in [product_type] + ([brand] if brand else []):
             if len(kw) > 2:
-                kw_res = supabase.table("products") \
-                    .select("id").eq("company_id", company_id).eq("is_active", True) \
-                    .ilike("name", f"%{kw}%").limit(4).execute()
+                kw_res = await run_with_retry(lambda kw=kw: supabase.table("products")
+                    .select("id").eq("company_id", company_id).eq("is_active", True)
+                    .ilike("name", f"%{kw}%").limit(4).execute())
                 for row in (kw_res.data or []):
                     if row["id"] not in candidate_ids:
                         candidate_ids.append(row["id"])
@@ -1109,10 +1144,10 @@ async def chat_with_image(
                 ["vision_no_candidates"],
             )
 
-        details_res = supabase.table("products") \
-            .select("id, name, price, unit, description, tags") \
-            .in_("id", candidate_ids[:8]) \
-            .execute()
+        details_res = await run_with_retry(lambda: supabase.table("products")
+            .select("id, name, price, unit, description, tags")
+            .in_("id", candidate_ids[:8])
+            .execute())
         candidates = details_res.data or []
 
         # ── FASE 3: Puntuar cada candidato con texto (sin cargar URLs) ─
@@ -1171,9 +1206,9 @@ async def chat_with_image(
                     return p
             return None
 
-        def _stock_badge(product):
-            res   = supabase.table("product_warehouse_stock") \
-                .select("quantity").eq("product_id", product["id"]).execute()
+        async def _stock_badge(product):
+            res   = await run_with_retry(lambda: supabase.table("product_warehouse_stock")
+                .select("quantity").eq("product_id", product["id"]).execute())
             total = sum(s["quantity"] for s in (res.data or []))
             if show_stock:
                 return f"✅ {total} en stock" if total > 0 else "❌ Sin stock"
@@ -1200,6 +1235,7 @@ async def chat_with_image(
         def _save_to_history(assistant_reply: str, found_product_id: str | None = None):
             if session_id not in _history_store:
                 _history_store[session_id] = []
+            _touch_history(session_id)
             _history_store[session_id].append({
                 "role": "user",
                 "content": f"[Imagen enviada] {user_text}",
@@ -1216,7 +1252,7 @@ async def chat_with_image(
         # ── CASO 1: Match exacto ───────────────────────────────────────
         if exact_match:
             product, c = exact_match
-            badge     = _stock_badge(product)
+            badge     = await _stock_badge(product)
             price_fmt = f"{float(product['price']):,.2f}"
             reply = (
                 f"🎯 {c.get('reason', 'Producto encontrado')}\n\n"
@@ -1233,7 +1269,7 @@ async def chat_with_image(
             lines = [f"🔍 No tenemos {product_type}{brand_str} exacto, pero encontré opciones similares:\n"]
             first_product_id = None
             for i, (product, c) in enumerate(similar_list):
-                badge     = _stock_badge(product)
+                badge     = await _stock_badge(product)
                 price_fmt = f"{float(product['price']):,.2f}"
                 lines.append(
                     f"**{product['name']}**  {badge}\n"
@@ -1279,18 +1315,32 @@ def _log_ai_usage(
     tokens_input: int = 0,
     tokens_output: int = 0,
 ):
+    """
+    Logging de uso best-effort — no debe demorar ni afectar la respuesta al
+    cliente. Se llama sin `await` desde ~6 puntos (turnos de chat, imagen,
+    fallbacks); en vez de bloquear el event loop con el insert síncrono, se
+    dispara como tarea en segundo plano (mismo patrón que el email de
+    reservas) y no se espera su resultado.
+    """
     cost = _calculate_cost(model, tokens_input, tokens_output)
+
+    async def _insert():
+        try:
+            await run_with_retry(lambda: supabase.table("ai_usage_log").insert({
+                "company_id":    company_id,
+                "session_id":    session_id,
+                "model":         model,
+                "tokens_input":  tokens_input,
+                "tokens_output": tokens_output,
+                "cost_usd":      cost,
+            }).execute())
+        except Exception:
+            pass
+
     try:
-        supabase.table("ai_usage_log").insert({
-            "company_id":    company_id,
-            "session_id":    session_id,
-            "model":         model,
-            "tokens_input":  tokens_input,
-            "tokens_output": tokens_output,
-            "cost_usd":      cost,
-        }).execute()
-    except Exception:
-        pass
+        asyncio.create_task(_insert())
+    except RuntimeError:
+        pass  # no hay event loop corriendo — no debería pasar en producción
 
 
 def clear_session(session_id: str):

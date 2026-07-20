@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from typing import Optional, List
 from uuid import UUID
 import httpx
+import json
 import time
 import logging
 
@@ -15,7 +16,7 @@ from app.core.auth import require_admin, require_staff, get_current_user
 from app.core.supabase_client import supabase, run_with_retry
 from app.core.config import settings
 from app.core.company_features import get_active_company, require_public_catalog
-from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, StockByWarehouse, VariantStockUpsert, VariantStockOut
+from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, StockByWarehouse, VariantStockUpsert, VariantStockUpsertRequest, VariantStockOut
 from app.embeddings.embedding_service import (
     generate_product_embedding,
     should_regenerate_embedding,
@@ -346,6 +347,13 @@ async def get_variant_stock_public(company_slug: str, product_id: str):
     company = await get_active_company(company_slug)
     require_public_catalog(company)
 
+    # El producto DEBE pertenecer a esta empresa — si no, cualquiera podría
+    # pasar el product_id de OTRA empresa en la URL y filtrar su stock por variante.
+    owns_product = await run_with_retry(lambda: supabase.table("products")
+        .select("id").eq("id", product_id).eq("company_id", company["id"]).maybe_single().execute())
+    if not (owns_product and owns_product.data):
+        raise HTTPException(404, "Producto no encontrado")
+
     query = supabase.table("product_variants_stock")\
         .select("combination, quantity, warehouse_id")\
         .eq("product_id", product_id)
@@ -356,18 +364,26 @@ async def get_variant_stock_public(company_slug: str, product_id: str):
 @router.put("/{product_id}/variant-stock")
 def upsert_variant_stock(
     product_id: str,
-    items: List[VariantStockUpsert],
+    body: VariantStockUpsertRequest,
     user: dict = Depends(require_admin),
 ):
     """
     Upsert batch de stock por combinación.
     Reemplaza todas las combinaciones del producto+almacén indicados.
+
+    Trazabilidad: este era el único camino para bajar stock que NO pedía
+    motivo ni quedaba en `stock_movements` — un ajuste manual aquí era
+    invisible en el historial (riesgo real de robo/faltante sin rastro,
+    reportado por un usuario). Ahora se compara contra el stock actual en BD:
+    si alguna combinación BAJA de cantidad, exige `notes` y registra un
+    movimiento tipo "ajuste" por cada combinación que cambió.
     """
+    items = body.items
     company_id = user["company_id"]
 
     # Verificar que el producto pertenece a la empresa
     prod = supabase.table("products")\
-        .select("id")\
+        .select("id, name")\
         .eq("id", product_id)\
         .eq("company_id", company_id)\
         .maybe_single()\
@@ -377,6 +393,29 @@ def upsert_variant_stock(
 
     if not items:
         return {"message": "Sin cambios"}
+
+    # Cantidades actuales, para poder detectar bajas y registrar el delta real
+    current_res = supabase.table("product_variants_stock")\
+        .select("warehouse_id, combination, quantity")\
+        .eq("product_id", product_id)\
+        .execute()
+    current_map = {
+        (row["warehouse_id"], json.dumps(row["combination"], sort_keys=True)): row["quantity"]
+        for row in (current_res.data or [])
+    }
+
+    changes = []  # (warehouse_id, combination, old_qty, new_qty)
+    any_decrease = False
+    for item in items:
+        key = (str(item.warehouse_id), json.dumps(item.combination, sort_keys=True))
+        old_qty = current_map.get(key, 0)
+        if item.quantity != old_qty:
+            changes.append((str(item.warehouse_id), item.combination, old_qty, item.quantity))
+            if item.quantity < old_qty:
+                any_decrease = True
+
+    if any_decrease and not (body.notes and body.notes.strip()):
+        raise HTTPException(400, "Debes indicar el motivo de la baja de stock")
 
     # Agrupar por warehouse para hacer upserts
     rows = [
@@ -392,6 +431,24 @@ def upsert_variant_stock(
     result = supabase.table("product_variants_stock")\
         .upsert(rows, on_conflict="product_id,warehouse_id,combination")\
         .execute()
+
+    # Registrar cada combinación que cambió como un movimiento de stock —
+    # así aparece en el historial igual que cualquier otro ajuste manual.
+    product_name = prod.data.get("name", "")
+    for warehouse_id, combination, old_qty, new_qty in changes:
+        combo_str = ", ".join(f"{k}: {v}" for k, v in combination.items())
+        delta = new_qty - old_qty
+        movement_notes = f"Variante [{combo_str}] de {product_name}: {old_qty} → {new_qty}"
+        if body.notes and body.notes.strip():
+            movement_notes += f" — Motivo: {body.notes.strip()}"
+        supabase.table("stock_movements").insert({
+            "product_id": product_id,
+            "warehouse_id": warehouse_id,
+            "type": "entrada" if delta > 0 else "salida",
+            "quantity": abs(delta),
+            "notes": movement_notes,
+            "created_by": user["id"],
+        }).execute()
 
     # ── Sincronizar stock general por almacén ────────────────────────
     # Sumar todas las combinaciones de este producto por warehouse

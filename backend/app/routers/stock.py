@@ -15,6 +15,27 @@ from app.services.notifications import send_low_stock_alert
 router = APIRouter(prefix="/stock", tags=["stock"])
 
 
+def _assert_product_in_company(product_id: str, company_id: str):
+    """
+    Defensa de aislamiento multi-tenant: el backend usa la service_role key de
+    Supabase (bypasea RLS), así que esta comprobación explícita es la ÚNICA
+    barrera contra mutar/leer stock de un producto de OTRA empresa pasando su
+    UUID directamente. Sin esto, cualquier usuario autenticado podría alterar
+    inventario ajeno.
+    """
+    q = supabase.table("products").select("id").eq("id", product_id).eq("company_id", company_id).maybe_single()
+    res = _retry(q.execute)
+    if not (res and res.data):
+        raise HTTPException(404, "Producto no encontrado")
+
+
+def _assert_warehouse_in_company(warehouse_id: str, company_id: str):
+    q = supabase.table("warehouses").select("id").eq("id", warehouse_id).eq("company_id", company_id).maybe_single()
+    res = _retry(q.execute)
+    if not (res and res.data):
+        raise HTTPException(404, "Almacén no encontrado")
+
+
 @router.get("/movements")
 def list_movements(
     product_id: str = None,
@@ -69,6 +90,9 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
     # ante cortes transitorios de conexión HTTP/2 con Supabase — ver
     # core/supabase_client.py::run_with_retry_sync). Esta función corre en un
     # hilo aparte (asyncio.to_thread), así que se usa la variante síncrona.
+    _assert_product_in_company(str(data.product_id), user["company_id"])
+    _assert_warehouse_in_company(str(data.warehouse_id), user["company_id"])
+
     email_info = None
     movement_dump = data.model_dump()
     if movement_dump.get("expires_at"):
@@ -297,6 +321,9 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
 @router.put("/set")
 def set_stock(data: StockUpdate, product_id: str, user: dict = Depends(require_admin)):
     """Establece el stock de un producto en un almacén directamente."""
+    _assert_product_in_company(product_id, user["company_id"])
+    _assert_warehouse_in_company(str(data.warehouse_id), user["company_id"])
+
     existing = supabase.table("product_warehouse_stock")\
         .select("id")\
         .eq("product_id", product_id)\
@@ -408,6 +435,9 @@ async def get_expiring_products(
 @router.patch("/location")
 def update_location(data: LocationUpdate, user: dict = Depends(require_staff)):
     """Actualiza la ubicación física (bodega + tienda) sin afectar la cantidad."""
+    _assert_product_in_company(data.product_id, user["company_id"])
+    _assert_warehouse_in_company(data.warehouse_id, user["company_id"])
+
     update_fields = {
         "aisle":          data.aisle          or None,
         "shelf":          data.shelf          or None,

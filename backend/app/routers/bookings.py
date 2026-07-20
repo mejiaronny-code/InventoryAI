@@ -17,6 +17,7 @@ import asyncio
 from app.core.auth import require_staff, require_admin
 from app.core.supabase_client import supabase, run_with_retry
 from app.core.company_features import get_active_company, require_public_catalog
+from app.core.net import client_ip as _client_ip
 from app.models.schemas import BookingCreate, BookingUpdate
 from app.routers.reservations import _generate_code
 from app.routers.recipes import _deplete_ingredient
@@ -36,13 +37,6 @@ _MAX_DAYS_AHEAD           = 90   # cuán a futuro se puede reservar
 # Contador en memoria por IP: { ip: { "YYYY-MM-DDTHH": count } }
 _ip_bookings: dict[str, dict[str, int]] = defaultdict(dict)
 _ip_lock = threading.Lock()
-
-
-def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _check_booking_rate_limit(request: Request) -> None:

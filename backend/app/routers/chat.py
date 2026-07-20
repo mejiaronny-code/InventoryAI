@@ -20,6 +20,7 @@ from app.models.schemas import ChatMessage, ChatResponse
 from app.agents.chat_agent import chat, chat_with_image, chat_stream
 from app.core.supabase_client import supabase
 from app.core.company_features import get_active_company, require_public_catalog
+from app.core.net import client_ip as _client_ip
 from app.services.transcription import transcribe_audio, ALLOWED_AUDIO_TYPES, MAX_AUDIO_SIZE
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -47,12 +48,6 @@ _ip_lock = threading.Lock()
 _ip_request_counter = 0   # para el barrido global periódico
 
 
-def _client_ip(request: Request) -> str:
-    """IP real del cliente. En Railway/Vercel la IP viene en X-Forwarded-For."""
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _check_ip_rate_limit(request: Request) -> None:

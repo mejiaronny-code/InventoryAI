@@ -52,14 +52,29 @@ Guía de hardening progresivo para el SaaS. Ordenada por prioridad real: impacto
 
 ---
 
-## 🟠 FASE 3 — Redis para rate limiting robusto (CUANDO HAYA TRÁFICO REAL)
+## 🟠 FASE 3 — Redis para estado compartido (CUANDO HAYA TRÁFICO REAL)
 
 > Necesario si escalas a 2+ réplicas en Railway o si el rate limiter en memoria se resetea con demasiada frecuencia.
 
 ### 3.1 Problema actual
-- El rate limiter vive en memoria del proceso Python.
-- Se **resetea en cada deploy** de Railway.
-- Con 2+ réplicas, el límite se multiplica por réplica (cada una cuenta por separado).
+No es solo el rate limiter — hay **varios diccionarios en memoria de proceso** que
+asumen una sola réplica corriendo. Todos comparten la misma limitación: viven en RAM
+de UN proceso Python, se **resetean en cada deploy**, y con 2+ réplicas cada una
+cuenta/cachea por separado (el límite/caché efectivo se multiplica o queda
+inconsistente entre requests que caen en distinta réplica). Inventario completo:
+
+| Dónde | Qué guarda | Efecto con 2+ réplicas |
+|---|---|---|
+| `routers/chat.py` (`_counts`, `_ip_counts`) | Tope diario de mensajes por empresa + rate limit por IP | El límite se multiplica por réplica |
+| `routers/reservations.py` (`_ip_by_email_lookups`) | Rate limit de "mis reservas" por email | Ídem |
+| `routers/bookings.py` (`_ip_bookings`) | Rate limit de reservas de mesa por IP | Ídem |
+| `core/auth.py` (`_auth_cache`) | Cache de tokens verificados (TTL 5 min) | Cache-miss más seguido, no inconsistencia grave |
+| `agents/chat_agent.py` (`_history_store`, `_company_cache`) | Historial de conversación por sesión + cache de datos de empresa (TTL 60s) | Un mensaje puede "perder" el historial si cae en otra réplica |
+
+**⚠️ Guardrail operativo — leer antes de escalar:** mientras no se migre esto a Redis,
+el despliegue de Railway **debe permanecer en 1 sola réplica**. Si se necesita más
+capacidad (2+ réplicas, autoscaling), esta fase deja de ser opcional y pasa a
+bloqueante — hacerla ANTES de escalar horizontalmente, no después.
 
 ### 3.2 Solución
 - Agregar el plugin de **Redis** en Railway (gratis en el plan Hobby, ~$5/mes en producción).

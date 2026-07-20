@@ -139,16 +139,20 @@ def _forgot_password_sync(email: str):
     full_name = "Usuario"
 
     try:
+        # `filter` acota la búsqueda a este email en vez de bajar la primera
+        # página de TODOS los usuarios del SaaS y filtrar en Python (mismo
+        # patrón que _lookup_user_by_email en routers/companies.py).
         users_res = httpx.get(
             f"{settings.supabase_url}/auth/v1/admin/users",
             headers={
                 "apikey": settings.supabase_service_role_key,
                 "Authorization": f"Bearer {settings.supabase_service_role_key}",
             },
+            params={"filter": email},
             timeout=10,
         )
-        all_users = users_res.json().get("users", [])
-        matched = next((u for u in all_users if u.get("email") == email), None)
+        matched_users = users_res.json().get("users", [])
+        matched = next((u for u in matched_users if u.get("email") == email), None)
         if matched:
             prof = supabase.table("user_profiles").select("full_name").eq("id", matched["id"]).single().execute()
             if prof.data:
@@ -208,15 +212,18 @@ def list_employees(user: dict = Depends(require_admin)):
         .execute()
     profiles = result.data or []
 
-    # Obtener emails desde Supabase Auth (auth.users)
-    try:
-        auth_users = supabase.auth.admin.list_users()
-        email_map = {u.id: u.email for u in auth_users}
-    except Exception:
-        email_map = {}
-
+    # Obtener emails desde Supabase Auth (auth.users) — por ID, uno por
+    # empleado de ESTA empresa. `list_users()` solo trae la primera página
+    # de TODOS los usuarios del SaaS (todas las empresas); con más usuarios
+    # de los que caben en una página, empleados reales quedaban con email
+    # vacío en el listado. La lista de empleados por empresa es chica
+    # (decenas, no miles), así que N lookups puntuales es lo correcto aquí.
     for p in profiles:
-        p["email"] = email_map.get(p["id"], "")
+        try:
+            auth_user = supabase.auth.admin.get_user_by_id(p["id"])
+            p["email"] = auth_user.user.email if auth_user and auth_user.user else ""
+        except Exception:
+            p["email"] = ""
 
     return profiles
 

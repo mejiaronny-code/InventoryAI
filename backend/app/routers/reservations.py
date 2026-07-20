@@ -15,6 +15,7 @@ import threading
 from app.core.auth import require_admin, require_staff
 from app.core.supabase_client import supabase
 from app.core.company_features import get_active_company, require_public_catalog
+from app.core.net import client_ip as _client_ip
 from app.services.notifications import send_reservation_email
 from app.models.schemas import ReservationCreate, ReservationUpdate
 
@@ -27,13 +28,6 @@ router = APIRouter(prefix="/reservations", tags=["reservations"])
 _MAX_BY_EMAIL_PER_IP_HOUR = 10
 _ip_by_email_lookups: dict[str, dict[str, int]] = defaultdict(dict)
 _by_email_lock = threading.Lock()
-
-
-def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _check_by_email_rate_limit(request: Request) -> None:
@@ -415,8 +409,9 @@ async def expire_reservations(user: dict = Depends(require_staff)):
         .lt("expires_at", now)\
         .execute()
 
-    # Llamar al RPC para actualizar status en la DB
-    supabase.rpc("expire_reservations").execute()
+    # Llamar al RPC para actualizar status en la DB — acotado a esta empresa
+    # (ver migración 015_expire_reservations_scoped.sql).
+    supabase.rpc("expire_reservations", {"p_company_id": company_id}).execute()
 
     # Generar notificación por cada reserva expirada de esta empresa
     for r in (expiring.data or []):

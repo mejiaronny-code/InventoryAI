@@ -6,11 +6,26 @@ Cada tool tiene acceso al contexto de la empresa (company_id).
 from langchain.tools import tool
 from typing import Optional
 from uuid import UUID
+import asyncio
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from app.core.supabase_client import run_with_retry
+
 logger = logging.getLogger(__name__)
+
+
+async def _exec(query):
+    """
+    Ejecuta un query de Supabase en un hilo aparte (no bloquea el event loop
+    del servidor) con reintento ante cortes transitorios de conexión. Los
+    tools del chat son `async def` pero antes llamaban `.execute()`
+    directo — cada llamada bloqueaba TODO el servidor mientras esperaba la
+    respuesta de red de Supabase, serializando peticiones de chat concurrentes
+    de empresas distintas.
+    """
+    return await run_with_retry(lambda: query.execute())
 
 
 _MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
@@ -59,11 +74,10 @@ def create_inventory_tools(
         o cuando pregunte qué tiendas existen, para poder filtrar el stock por tienda.
         """
         try:
-            result = supabase_client.table("warehouses")\
-                .select("id, name, location")\
-                .eq("company_id", company_id)\
-                .eq("is_active", True)\
-                .execute()
+            result = await _exec(supabase_client.table("warehouses")
+                .select("id, name, location")
+                .eq("company_id", company_id)
+                .eq("is_active", True))
 
             if not result.data:
                 return "No hay tiendas/almacenes registrados."
@@ -105,26 +119,24 @@ def create_inventory_tools(
             if not query.strip():
                 # Destacados primero (marcados manualmente por el admin), y se
                 # completa con los más recientes hasta llegar a 10.
-                featured_q = supabase_client.table("products") \
-                    .select("id, name, price, unit, description, tags") \
-                    .eq("company_id", company_id) \
-                    .eq("is_active", True) \
-                    .eq("is_featured", True) \
-                    .neq("product_type", "ingredient") \
-                    .order("created_at", desc=True) \
-                    .limit(10) \
-                    .execute()
+                featured_q = await _exec(supabase_client.table("products")
+                    .select("id, name, price, unit, description, tags")
+                    .eq("company_id", company_id)
+                    .eq("is_active", True)
+                    .eq("is_featured", True)
+                    .neq("product_type", "ingredient")
+                    .order("created_at", desc=True)
+                    .limit(10))
                 products_map = {p["id"]: p for p in (featured_q.data or [])}
 
                 if len(products_map) < 10:
-                    recent_q = supabase_client.table("products") \
-                        .select("id, name, price, unit, description, tags") \
-                        .eq("company_id", company_id) \
-                        .eq("is_active", True) \
-                        .neq("product_type", "ingredient") \
-                        .order("created_at", desc=True) \
-                        .limit(10) \
-                        .execute()
+                    recent_q = await _exec(supabase_client.table("products")
+                        .select("id, name, price, unit, description, tags")
+                        .eq("company_id", company_id)
+                        .eq("is_active", True)
+                        .neq("product_type", "ingredient")
+                        .order("created_at", desc=True)
+                        .limit(10))
                     for p in (recent_q.data or []):
                         if p["id"] not in products_map and len(products_map) < 10:
                             products_map[p["id"]] = p
@@ -140,9 +152,9 @@ def create_inventory_tools(
                     "match_count": 10,
                 }
 
-                result = supabase_client.rpc(
+                result = await _exec(supabase_client.rpc(
                     "search_products_semantic", rpc_params
-                ).execute()
+                ))
 
                 products_map = {p["id"]: p for p in (result.data or [])}
 
@@ -155,54 +167,61 @@ def create_inventory_tools(
             # mencionan "ir a la playa"). Si solo buscamos en `name`, ese
             # producto queda invisible para el chat — por eso buscamos en los
             # 4 campos semánticamente relevantes.
+            #
+            # Solo corre si la semántica trajo pocos candidatos — si ya hay
+            # 5+ resultados el fallback casi nunca aporta algo nuevo y son
+            # round-trips de más a Supabase en cada búsqueda. Las 3 palabras
+            # (name/desc/use_cases + tags cada una) corren en paralelo con
+            # asyncio.gather en vez de en serie.
             kw_words = [w for w in query.lower().split() if len(w) > 3]
-            for word in kw_words[:3]:
-                search_term = word[:-1] if word.endswith("s") and len(word) > 4 else word
-
-                base_q = supabase_client.table("products") \
-                    .select("id, name, price, unit, description, tags") \
-                    .eq("company_id", company_id) \
-                    .eq("is_active", True)
-
-                # Nombre, descripción y usos recomendados → coincidencia parcial (ilike)
-                kw_res = base_q \
-                    .or_(
+            if query.strip() and len(products_map) < 5 and kw_words:
+                async def _kw_and_tag_search(search_term: str):
+                    base_q = supabase_client.table("products") \
+                        .select("id, name, price, unit, description, tags") \
+                        .eq("company_id", company_id) \
+                        .eq("is_active", True)
+                    # Nombre, descripción y usos recomendados → coincidencia parcial (ilike)
+                    kw_task = _exec(base_q.or_(
                         f"name.ilike.%{search_term}%,"
                         f"description.ilike.%{search_term}%,"
                         f"use_cases.ilike.%{search_term}%"
-                    ) \
-                    .limit(8) \
-                    .execute()
-                for p in (kw_res.data or []):
-                    if p["id"] not in products_map:
-                        products_map[p["id"]] = p
+                    ).limit(8))
 
-                # Tags → coincidencia exacta del término dentro del array
-                try:
-                    tag_res = supabase_client.table("products") \
-                        .select("id, name, price, unit, description, tags") \
-                        .eq("company_id", company_id) \
-                        .eq("is_active", True) \
-                        .contains("tags", [search_term]) \
-                        .limit(8) \
-                        .execute()
-                    for p in (tag_res.data or []):
+                    async def _tag_search():
+                        try:
+                            # Tags → coincidencia exacta del término dentro del array
+                            return await _exec(supabase_client.table("products")
+                                .select("id, name, price, unit, description, tags")
+                                .eq("company_id", company_id)
+                                .eq("is_active", True)
+                                .contains("tags", [search_term])
+                                .limit(8))
+                        except Exception:
+                            return None  # si la columna/sintaxis no soporta contains, no rompe la búsqueda
+
+                    return await asyncio.gather(kw_task, _tag_search())
+
+                terms = [w[:-1] if w.endswith("s") and len(w) > 4 else w for w in kw_words[:3]]
+                all_results = await asyncio.gather(*[_kw_and_tag_search(t) for t in terms])
+                for kw_res, tag_res in all_results:
+                    for p in (kw_res.data or []):
                         if p["id"] not in products_map:
                             products_map[p["id"]] = p
-                except Exception:
-                    pass  # si la columna/sintaxis no soporta contains, no rompe la búsqueda
+                    if tag_res:
+                        for p in (tag_res.data or []):
+                            if p["id"] not in products_map:
+                                products_map[p["id"]] = p
 
             # 2c. Búsqueda por código de barras — si el query parece un código
             # (una sola palabra alfanumérica sin espacios)
             query_stripped = query.strip()
             if " " not in query_stripped and len(query_stripped) >= 4:
-                bc_res = supabase_client.table("products") \
-                    .select("id, name, price, unit, description, tags") \
-                    .eq("company_id", company_id) \
-                    .eq("is_active", True) \
-                    .eq("barcode", query_stripped) \
-                    .limit(1) \
-                    .execute()
+                bc_res = await _exec(supabase_client.table("products")
+                    .select("id, name, price, unit, description, tags")
+                    .eq("company_id", company_id)
+                    .eq("is_active", True)
+                    .eq("barcode", query_stripped)
+                    .limit(1))
                 for p in (bc_res.data or []):
                     if p["id"] not in products_map:
                         products_map[p["id"]] = p
@@ -216,10 +235,9 @@ def create_inventory_tools(
             meta_map: dict[str, dict] = {}
             if products:
                 try:
-                    meta_res = supabase_client.table("products")\
-                        .select("id, product_type, is_available")\
-                        .in_("id", [p["id"] for p in products])\
-                        .execute()
+                    meta_res = await _exec(supabase_client.table("products")
+                        .select("id, product_type, is_available")
+                        .in_("id", [p["id"] for p in products]))
                     meta_map = {r["id"]: r for r in (meta_res.data or [])}
                     products = [
                         p for p in products
@@ -237,26 +255,28 @@ def create_inventory_tools(
             # del for — con 8-10 candidatos eso eran ~10 round-trips en serie a Supabase).
             product_ids_all = [p["id"] for p in products]
             stock_by_product: dict[str, list] = {}
-            if product_ids_all:
-                stock_all_res = supabase_client.table("product_warehouse_stock")\
-                    .select("product_id, quantity, warehouse_id, store_location, warehouses(name)")\
-                    .in_("product_id", product_ids_all)\
-                    .execute()
-                for row in (stock_all_res.data or []):
-                    stock_by_product.setdefault(row["product_id"], []).append(row)
-
             variant_stock_by_product: dict[str, list] = {}
             if product_ids_all:
-                try:
-                    vs_all_res = supabase_client.table("product_variants_stock")\
-                        .select("product_id, quantity")\
-                        .in_("product_id", product_ids_all)\
-                        .gt("quantity", 0)\
-                        .execute()
+                async def _vs_all():
+                    try:
+                        return await _exec(supabase_client.table("product_variants_stock")
+                            .select("product_id, quantity")
+                            .in_("product_id", product_ids_all)
+                            .gt("quantity", 0))
+                    except Exception:
+                        return None
+
+                stock_all_res, vs_all_res = await asyncio.gather(
+                    _exec(supabase_client.table("product_warehouse_stock")
+                        .select("product_id, quantity, warehouse_id, store_location, warehouses(name)")
+                        .in_("product_id", product_ids_all)),
+                    _vs_all(),
+                )
+                for row in (stock_all_res.data or []):
+                    stock_by_product.setdefault(row["product_id"], []).append(row)
+                if vs_all_res:
                     for row in (vs_all_res.data or []):
                         variant_stock_by_product.setdefault(row["product_id"], []).append(row)
-                except Exception:
-                    pass
 
             available = []
             for p in products:
@@ -294,11 +314,10 @@ def create_inventory_tools(
 
             # 4. Filtrar por categoría si se especifica
             if category_id and available:
-                cat_result = supabase_client.table("products")\
-                    .select("id, category_id")\
-                    .in_("id", [p["id"] for p in available])\
-                    .eq("category_id", category_id)\
-                    .execute()
+                cat_result = await _exec(supabase_client.table("products")
+                    .select("id, category_id")
+                    .in_("id", [p["id"] for p in available])
+                    .eq("category_id", category_id))
                 valid_ids = {r["id"] for r in (cat_result.data or [])}
                 available = [p for p in available if p["id"] in valid_ids]
 
@@ -310,26 +329,31 @@ def create_inventory_tools(
             # 5. Obtener imágenes y opciones de producto
             top = available[:6]
             top_ids = [p["id"] for p in top]
-            try:
-                prod_res = supabase_client.table("products")\
-                    .select("id, images, product_options, allergens, dietary, is_available, prep_time_minutes, product_type")\
-                    .in_("id", top_ids)\
-                    .execute()
-                prod_extra = {r["id"]: r for r in (prod_res.data or [])}
-            except Exception:
-                prod_extra = {}
+
+            async def _prod_extra():
+                try:
+                    return await _exec(supabase_client.table("products")
+                        .select("id, images, product_options, allergens, dietary, is_available, prep_time_minutes, product_type")
+                        .in_("id", top_ids))
+                except Exception:
+                    return None
+
+            async def _vs_by_product():
+                try:
+                    return await _exec(supabase_client.table("product_variants_stock")
+                        .select("product_id, combination, quantity")
+                        .in_("product_id", top_ids))
+                except Exception:
+                    return None
+
+            prod_res, vs_res = await asyncio.gather(_prod_extra(), _vs_by_product())
+            prod_extra = {r["id"]: r for r in (prod_res.data or [])} if prod_res else {}
 
             # 5b. Obtener stock por combinación (variant stock) para los productos con opciones
             vs_by_product: dict[str, list] = {}
-            try:
-                vs_res = supabase_client.table("product_variants_stock")\
-                    .select("product_id, combination, quantity")\
-                    .in_("product_id", top_ids)\
-                    .execute()
+            if vs_res:
                 for vs in (vs_res.data or []):
                     vs_by_product.setdefault(vs["product_id"], []).append(vs)
-            except Exception:
-                pass
 
             # 6. Formatear respuesta
             lines = [f"Encontré {len(available)} producto(s):\n"]
@@ -447,12 +471,11 @@ def create_inventory_tools(
         Úsalo cuando el cliente quiere saber más sobre un producto específico.
         """
         try:
-            result = supabase_client.table("products")\
-                .select("*, categories(name, reservation_time_hours), images")\
-                .eq("id", product_id)\
-                .eq("company_id", company_id)\
-                .single()\
-                .execute()
+            result = await _exec(supabase_client.table("products")
+                .select("*, categories(name, reservation_time_hours), images")
+                .eq("id", product_id)
+                .eq("company_id", company_id)
+                .single())
 
             if not result.data:
                 return "Producto no encontrado."
@@ -461,10 +484,9 @@ def create_inventory_tools(
             cat = p.get("categories", {}) or {}
 
             # Stock por almacén
-            stock_result = supabase_client.table("product_warehouse_stock")\
-                .select("quantity, min_stock_alert, store_location, warehouses(name, location)")\
-                .eq("product_id", product_id)\
-                .execute()
+            stock_result = await _exec(supabase_client.table("product_warehouse_stock")
+                .select("quantity, min_stock_alert, store_location, warehouses(name, location)")
+                .eq("product_id", product_id))
 
             stock_lines = []
             for s in (stock_result.data or []):
@@ -496,10 +518,9 @@ def create_inventory_tools(
             options_lines = ""
             if product_options:
                 # Stock por combinación
-                vs_result = supabase_client.table("product_variants_stock")\
-                    .select("combination, quantity")\
-                    .eq("product_id", product_id)\
-                    .execute()
+                vs_result = await _exec(supabase_client.table("product_variants_stock")
+                    .select("combination, quantity")
+                    .eq("product_id", product_id))
                 vs_data = vs_result.data or []
                 vs_map = {
                     "/".join(f"{k}:{v}" for k, v in vs["combination"].items()): vs["quantity"]
@@ -578,33 +599,31 @@ def create_inventory_tools(
         try:
             # Los platillos NO se gestionan por stock: su disponibilidad es el
             # flag is_available ("agotado hoy"). No revisar product_warehouse_stock.
-            prod_meta = supabase_client.table("products")\
-                .select("product_type, is_available, name")\
-                .eq("id", product_id)\
-                .eq("company_id", company_id)\
-                .maybe_single().execute()
+            prod_meta = await _exec(supabase_client.table("products")
+                .select("product_type, is_available, name")
+                .eq("id", product_id)
+                .eq("company_id", company_id)
+                .maybe_single())
             meta = prod_meta.data if prod_meta and prod_meta.data else {}
             if meta.get("product_type") == "dish":
                 if meta.get("is_available") is False:
                     return f"{meta.get('name', 'El platillo')} está AGOTADO HOY."
                 return f"{meta.get('name', 'El platillo')} está disponible. Procede a tomar el pedido con create_booking."
 
-            # Stock total
-            stock_result = supabase_client.table("product_warehouse_stock")\
-                .select("quantity, warehouse_id, store_location, warehouses(name)")\
-                .eq("product_id", product_id)\
-                .execute()
+            # Stock total y reservas activas en paralelo
+            stock_result, reservas_result = await asyncio.gather(
+                _exec(supabase_client.table("product_warehouse_stock")
+                    .select("quantity, warehouse_id, store_location, warehouses(name)")
+                    .eq("product_id", product_id)),
+                _exec(supabase_client.table("reservations")
+                    .select("quantity, warehouse_id")
+                    .eq("product_id", product_id)
+                    .eq("company_id", company_id)
+                    .in_("status", ["pending", "confirmed"])),
+            )
 
             if not stock_result.data:
                 return "Sin stock registrado para este producto."
-
-            # Reservas activas
-            reservas_result = supabase_client.table("reservations")\
-                .select("quantity, warehouse_id")\
-                .eq("product_id", product_id)\
-                .eq("company_id", company_id)\
-                .in_("status", ["pending", "confirmed"])\
-                .execute()
 
             # Calcular por almacén
             reserved_by_wh: dict[str, int] = {}
@@ -681,36 +700,33 @@ def create_inventory_tools(
         if not client_email or "@" not in client_email:
             return "Error: Se requiere un correo electrónico válido del cliente. Pídelo antes de continuar."
         try:
-            # Verificar stock disponible
-            stock_q = supabase_client.table("product_warehouse_stock")\
-                .select("quantity")\
-                .eq("product_id", product_id)\
-                .eq("warehouse_id", warehouse_id)\
-                .single()\
-                .execute()
+            # Verificar stock disponible, reservas activas y datos del producto
+            # en paralelo — ninguna depende del resultado de otra.
+            stock_q, reservas_activas, product_res = await asyncio.gather(
+                _exec(supabase_client.table("product_warehouse_stock")
+                    .select("quantity")
+                    .eq("product_id", product_id)
+                    .eq("warehouse_id", warehouse_id)
+                    .single()),
+                _exec(supabase_client.table("reservations")
+                    .select("quantity")
+                    .eq("product_id", product_id)
+                    .eq("warehouse_id", warehouse_id)
+                    .in_("status", ["pending", "confirmed"])),
+                _exec(supabase_client.table("products")
+                    .select("reservation_time_hours, name, categories(reservation_time_hours)")
+                    .eq("id", product_id)
+                    .single()),
+            )
 
             if not stock_q.data:
                 return "Error: No hay stock registrado en ese almacén."
-
-            reservas_activas = supabase_client.table("reservations")\
-                .select("quantity")\
-                .eq("product_id", product_id)\
-                .eq("warehouse_id", warehouse_id)\
-                .in_("status", ["pending", "confirmed"])\
-                .execute()
 
             total_reserved = sum(r["quantity"] for r in (reservas_activas.data or []))
             available = stock_q.data["quantity"] - total_reserved
 
             if available < quantity:
                 return f"Stock insuficiente. Solo hay {available} unidades disponibles."
-
-            # Calcular expiración
-            product_res = supabase_client.table("products")\
-                .select("reservation_time_hours, name, categories(reservation_time_hours)")\
-                .eq("id", product_id)\
-                .single()\
-                .execute()
 
             product_data = product_res.data or {}
             cat_data = product_data.get("categories") or {}
@@ -721,14 +737,13 @@ def create_inventory_tools(
             )
 
             # Generar código único
-            code_result = supabase_client.rpc("generate_reservation_code").execute()
+            code_result = await _exec(supabase_client.rpc("generate_reservation_code"))
             reservation_code = code_result.data or f"RES-{product_id[:6].upper()}"
 
             # Verificar que el código no exista
-            existing = supabase_client.table("reservations")\
-                .select("id")\
-                .eq("reservation_code", reservation_code)\
-                .execute()
+            existing = await _exec(supabase_client.table("reservations")
+                .select("id")
+                .eq("reservation_code", reservation_code))
             if existing.data:
                 reservation_code = f"RES-{product_id[:4].upper()}-{warehouse_id[:4].upper()}"
 
@@ -750,9 +765,8 @@ def create_inventory_tools(
                 "notes": notes or None,
             }
 
-            result = supabase_client.table("reservations")\
-                .insert(reservation_data)\
-                .execute()
+            result = await _exec(supabase_client.table("reservations")
+                .insert(reservation_data))
 
             if not result.data:
                 return "Error al crear la reserva. Intenta nuevamente."
@@ -760,19 +774,18 @@ def create_inventory_tools(
             res = result.data[0]
 
             # Notificación al admin
-            supabase_client.table("notifications").insert({
+            await _exec(supabase_client.table("notifications").insert({
                 "company_id": company_id,
                 "type": "new_reservation",
                 "message": f"Nueva reserva #{reservation_code} - {client_name} - {product_data.get('name', '')} x{quantity}",
                 "target_role": "admin",
                 "metadata": {"reservation_id": res["id"], "code": reservation_code},
-            }).execute()
+            }))
 
             # Email al cliente (async, no bloquea la respuesta)
             if client_email:
                 try:
                     from app.services.notifications import send_reservation_email
-                    import asyncio
                     asyncio.create_task(send_reservation_email(
                         to_email=client_email,
                         client_name=client_name,
@@ -806,12 +819,11 @@ def create_inventory_tools(
         Solo se puede cancelar si está en estado 'pending' o 'confirmed'.
         """
         try:
-            result = supabase_client.table("reservations")\
-                .select("*")\
-                .eq("reservation_code", reservation_code.upper())\
-                .eq("company_id", company_id)\
-                .single()\
-                .execute()
+            result = await _exec(supabase_client.table("reservations")
+                .select("*")
+                .eq("reservation_code", reservation_code.upper())
+                .eq("company_id", company_id)
+                .single())
 
             if not result.data:
                 return f"No encontré la reserva con código {reservation_code}."
@@ -820,10 +832,9 @@ def create_inventory_tools(
             if res["status"] not in ("pending", "confirmed"):
                 return f"La reserva {reservation_code} no se puede cancelar (estado: {res['status']})."
 
-            supabase_client.table("reservations")\
-                .update({"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()})\
-                .eq("id", res["id"])\
-                .execute()
+            await _exec(supabase_client.table("reservations")
+                .update({"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()})
+                .eq("id", res["id"]))
 
             return (
                 f"✅ Reserva **{reservation_code}** cancelada exitosamente.\n"
@@ -846,11 +857,11 @@ def create_inventory_tools(
             code = reservation_code.upper().strip()
 
             # 1. Buscar primero en bookings (reservas/pedidos de restaurante)
-            bk = supabase_client.table("bookings")\
-                .select("*, restaurant_tables(name, zone), booking_items(quantity, products(name))")\
-                .eq("code", code)\
-                .eq("company_id", company_id)\
-                .maybe_single().execute()
+            bk = await _exec(supabase_client.table("bookings")
+                .select("*, restaurant_tables(name, zone), booking_items(quantity, products(name))")
+                .eq("code", code)
+                .eq("company_id", company_id)
+                .maybe_single())
             if bk and bk.data:
                 b = bk.data
                 bk_status = {
@@ -884,11 +895,11 @@ def create_inventory_tools(
                 return "\n".join(lines)
 
             # 2. Si no es booking, buscar en reservations (producto)
-            res_q = supabase_client.table("reservations")\
-                .select("*, products(name, unit), warehouses(name)")\
-                .eq("reservation_code", code)\
-                .eq("company_id", company_id)\
-                .maybe_single().execute()
+            res_q = await _exec(supabase_client.table("reservations")
+                .select("*, products(name, unit), warehouses(name)")
+                .eq("reservation_code", code)
+                .eq("company_id", company_id)
+                .maybe_single())
             if not (res_q and res_q.data):
                 return f"No encontré ninguna reserva con código {reservation_code}."
 
@@ -922,21 +933,20 @@ def create_inventory_tools(
         Útil cuando preguntan por lotes, trazabilidad o fechas de vencimiento por lote.
         """
         try:
-            result = supabase_client.table("product_batches")\
-                .select("*, warehouses(name)")\
-                .eq("product_id", product_id)\
-                .eq("company_id", company_id)\
-                .gt("quantity", 0)\
-                .order("received_at")\
-                .execute()
+            result = await _exec(supabase_client.table("product_batches")
+                .select("*, warehouses(name)")
+                .eq("product_id", product_id)
+                .eq("company_id", company_id)
+                .gt("quantity", 0)
+                .order("received_at"))
 
             if not result.data:
                 return "No hay lotes disponibles para este producto."
 
-            prod = supabase_client.table("products")\
-                .select("name, unit")\
-                .eq("id", product_id)\
-                .single().execute()
+            prod = await _exec(supabase_client.table("products")
+                .select("name, unit")
+                .eq("id", product_id)
+                .single())
             prod_name = (prod.data or {}).get("name", product_id)
 
             lines = [f"Lotes disponibles de **{prod_name}** (orden FIFO):\n"]
@@ -960,12 +970,11 @@ def create_inventory_tools(
         Úsalo cuando el cliente menciona un número de serie específico.
         """
         try:
-            result = supabase_client.table("product_serial_numbers")\
-                .select("*, products(name, unit, price), warehouses(name)")\
-                .eq("company_id", company_id)\
-                .eq("serial_number", serial_number.upper())\
-                .single()\
-                .execute()
+            result = await _exec(supabase_client.table("product_serial_numbers")
+                .select("*, products(name, unit, price), warehouses(name)")
+                .eq("company_id", company_id)
+                .eq("serial_number", serial_number.upper())
+                .single())
 
             if not result.data:
                 return f"No encontré el número de serie '{serial_number}'."
@@ -1007,33 +1016,30 @@ def create_inventory_tools(
             cutoff = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
             now_iso = datetime.now(timezone.utc).isoformat()
 
-            product_ids_res = supabase_client.table("products")\
-                .select("id")\
-                .eq("company_id", company_id)\
-                .eq("is_active", True)\
-                .execute()
+            product_ids_res = await _exec(supabase_client.table("products")
+                .select("id")
+                .eq("company_id", company_id)
+                .eq("is_active", True))
             product_ids = [p["id"] for p in (product_ids_res.data or [])]
 
             if not product_ids:
                 return "No hay productos registrados."
 
-            stock_res = supabase_client.table("product_warehouse_stock")\
-                .select("product_id, warehouse_id, quantity, nearest_expiry, warehouses(name)")\
-                .in_("product_id", product_ids)\
-                .not_.is_("nearest_expiry", "null")\
-                .lte("nearest_expiry", cutoff)\
-                .gte("nearest_expiry", now_iso)\
-                .order("nearest_expiry")\
-                .execute()
+            stock_res = await _exec(supabase_client.table("product_warehouse_stock")
+                .select("product_id, warehouse_id, quantity, nearest_expiry, warehouses(name)")
+                .in_("product_id", product_ids)
+                .not_.is_("nearest_expiry", "null")
+                .lte("nearest_expiry", cutoff)
+                .gte("nearest_expiry", now_iso)
+                .order("nearest_expiry"))
 
             if not stock_res.data:
                 return f"No hay productos que venzan en los próximos {days} días. ✅"
 
             pid_set = list({r["product_id"] for r in stock_res.data})
-            products_res = supabase_client.table("products")\
-                .select("id, name")\
-                .in_("id", pid_set)\
-                .execute()
+            products_res = await _exec(supabase_client.table("products")
+                .select("id, name")
+                .in_("id", pid_set))
             name_map = {p["id"]: p["name"] for p in (products_res.data or [])}
 
             lines = [f"Productos que vencen en los próximos {days} días:\n"]
@@ -1070,12 +1076,12 @@ def create_inventory_tools(
         try:
             query_embedding = await generate_embedding(query, instruction=_COMPANY_INFO_QUERY_INSTRUCTION)
 
-            result = supabase_client.rpc("search_company_knowledge", {
+            result = await _exec(supabase_client.rpc("search_company_knowledge", {
                 "query_embedding": query_embedding,
                 "company_id_filter": company_id,
                 "match_threshold": 0.35,
                 "match_count": 5,
-            }).execute()
+            }))
 
             chunks = result.data or []
             if not chunks:
@@ -1169,12 +1175,12 @@ def create_inventory_tools(
                 return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
             code = _gen()
             for _ in range(5):
-                ex = supabase_client.table("bookings").select("id").eq("code", code).execute()
+                ex = await _exec(supabase_client.table("bookings").select("id").eq("code", code))
                 if not ex.data:
                     break
                 code = _gen()
 
-            booking = supabase_client.table("bookings").insert({
+            booking = await _exec(supabase_client.table("bookings").insert({
                 "company_id":   company_id,
                 "code":         code,
                 "service_type": service_type,
@@ -1186,7 +1192,7 @@ def create_inventory_tools(
                 "client_email": client_email,
                 "status":       "pending",
                 "notes":        notes,
-            }).execute()
+            }))
             if not booking.data:
                 return "No pude crear la reserva. Intenta de nuevo."
             booking_id = booking.data[0]["id"]
@@ -1210,11 +1216,11 @@ def create_inventory_tools(
                     qty = int(qn.group(1)) if qn else 1
                     qty = max(1, min(qty, 50))  # cantidad razonable por platillo
                     try:
-                        dish = supabase_client.table("products")\
-                            .select("name, price")\
-                            .eq("id", ref)\
-                            .eq("company_id", company_id)\
-                            .maybe_single().execute()
+                        dish = await _exec(supabase_client.table("products")
+                            .select("name, price")
+                            .eq("id", ref)
+                            .eq("company_id", company_id)
+                            .maybe_single())
                     except Exception:
                         dish = None
                     if dish and dish.data:
@@ -1226,7 +1232,7 @@ def create_inventory_tools(
                         })
                         ordered.append(f"{qty}× {dish.data['name']}")
                 if rows:
-                    supabase_client.table("booking_items").insert(rows).execute()
+                    await _exec(supabase_client.table("booking_items").insert(rows))
 
             # Notificar al staff — con detalle útil (mesa/zona + platillos)
             tipo = "Mesa" if service_type == "dine_in" else "Para recoger"
@@ -1238,13 +1244,13 @@ def create_inventory_tools(
             if ordered:
                 partes.append("· " + ", ".join(ordered))
             partes.append(f"(Código: {code})")
-            supabase_client.table("notifications").insert({
+            await _exec(supabase_client.table("notifications").insert({
                 "company_id": company_id,
                 "type": "new_reservation",
                 "message": " ".join(partes),
                 "target_role": "all",
                 "metadata": {"booking_id": booking_id, "code": code},
-            }).execute()
+            }))
 
             resumen = f"✅ ¡Reserva creada! Código: **{code}**."
             if service_type == "dine_in" and party_size:

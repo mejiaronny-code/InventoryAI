@@ -5,7 +5,14 @@
       "name": "frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
-      "port": 5173
+      "port": 5173,
+      "autoPort": true
+    },
+    {
+      "name": "backend-verify",
+      "runtimeExecutable": "backend/venv/Scripts/python.exe",
+      "runtimeArgs": ["-c", "import os,sys; os.chdir('backend'); sys.argv=['uvicorn','app.main:app','--port','8010']; import uvicorn; uvicorn.main()"],
+      "port": 8010
     }
   ]
 }

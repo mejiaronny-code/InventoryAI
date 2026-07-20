@@ -347,6 +347,8 @@ function EditStockModal({ open, onClose, item, onSaved }) {
 function VariantStockModal({ open, onClose, product, warehouses }) {
   const [warehouseId, setWarehouseId] = useState('')
   const [variantStock, setVariantStock] = useState([])
+  const [originalStock, setOriginalStock] = useState([])
+  const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
 
@@ -392,10 +394,23 @@ function VariantStockModal({ open, onClose, product, warehouses }) {
     if (!open || !product?.id || !warehouseId) return
     setLoading(true)
     productsAPI.getVariantStock(product.id)
-      .then(r => setVariantStock(r.data || []))
+      .then(r => {
+        setVariantStock(r.data || [])
+        setOriginalStock(r.data || [])
+        setReason('')
+      })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [open, product?.id, warehouseId])
+
+  const getOriginalQty = (combination) => {
+    const key = JSON.stringify(combination)
+    const found = originalStock.find(vs =>
+      vs.warehouse_id === warehouseId &&
+      JSON.stringify(vs.combination) === key
+    )
+    return found?.quantity ?? 0
+  }
 
   const getQty = (combination) => {
     const key = JSON.stringify(combination)
@@ -421,31 +436,44 @@ function VariantStockModal({ open, onClose, product, warehouses }) {
   }
 
   const handleSave = async () => {
+    const items = variantStock
+      .filter(vs => vs.warehouse_id === warehouseId)
+      .map(vs => ({
+        warehouse_id: vs.warehouse_id,
+        combination: vs.combination,
+        quantity: parseInt(vs.quantity) || 0,
+      }))
+    // Fill missing combinations with 0
+    for (const combo of combinations) {
+      const key = JSON.stringify(combo)
+      if (!items.find(it => JSON.stringify(it.combination) === key)) {
+        items.push({ warehouse_id: warehouseId, combination: combo, quantity: 0 })
+      }
+    }
+
+    // Trazabilidad ante robo/faltante: si alguna combinación BAJA de
+    // cantidad, exigir motivo — igual que el ajuste manual de stock general.
+    const hasDecrease = items.some(it => it.quantity < getOriginalQty(it.combination))
+    if (hasDecrease && !reason.trim()) {
+      toast.error('Indica el motivo de la baja (ej. venta, daño, extravío)')
+      return
+    }
+
     setSaving(true)
     try {
-      const items = variantStock
-        .filter(vs => vs.warehouse_id === warehouseId)
-        .map(vs => ({
-          warehouse_id: vs.warehouse_id,
-          combination: vs.combination,
-          quantity: parseInt(vs.quantity) || 0,
-        }))
-      // Fill missing combinations with 0
-      for (const combo of combinations) {
-        const key = JSON.stringify(combo)
-        if (!items.find(it => JSON.stringify(it.combination) === key)) {
-          items.push({ warehouse_id: warehouseId, combination: combo, quantity: 0 })
-        }
-      }
-      await productsAPI.upsertVariantStock(product.id, items)
+      await productsAPI.upsertVariantStock(product.id, items, reason.trim() || undefined)
       toast.success('Stock de variantes guardado')
       onClose()
-    } catch {
-      toast.error('Error al guardar')
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Error al guardar')
     } finally {
       setSaving(false)
     }
   }
+
+  const hasAnyDecrease = variantStock
+    .filter(vs => vs.warehouse_id === warehouseId)
+    .some(vs => (parseInt(vs.quantity) || 0) < getOriginalQty(vs.combination))
 
   if (!open || !product) return null
 
@@ -544,6 +572,21 @@ function VariantStockModal({ open, onClose, product, warehouses }) {
                   </div>
                 )
               })}
+            </div>
+          )}
+
+          {hasAnyDecrease && (
+            <div>
+              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                Motivo de la baja *
+              </label>
+              <input
+                type="text"
+                value={reason}
+                onChange={e => setReason(e.target.value)}
+                placeholder="Ej. venta, daño, extravío..."
+                className="input"
+              />
             </div>
           )}
 

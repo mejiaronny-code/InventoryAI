@@ -59,6 +59,20 @@ def set_recipe(dish_id: str, data: RecipeUpsert, user: dict = Depends(require_ad
     if not (dish and dish.data):
         raise HTTPException(404, "Platillo no encontrado")
 
+    # Verificar que TODOS los insumos pertenezcan a la empresa — si no, un
+    # admin podría (sin querer o no) descontar stock de OTRA empresa cada vez
+    # que se registre una venta de este platillo (vía register-sale abajo).
+    ingredient_ids = list({str(item.ingredient_id) for item in data.items})
+    if ingredient_ids:
+        owned = supabase.table("products")\
+            .select("id")\
+            .in_("id", ingredient_ids)\
+            .eq("company_id", company_id)\
+            .execute()
+        owned_ids = {r["id"] for r in (owned.data or [])}
+        if owned_ids != set(ingredient_ids):
+            raise HTTPException(404, "Uno o más insumos no pertenecen a tu empresa")
+
     # Borrar receta actual y reinsertar
     supabase.table("recipes").delete()\
         .eq("dish_id", dish_id)\

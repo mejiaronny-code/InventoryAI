@@ -257,6 +257,13 @@ async def get_stock(product_id: str, company_slug: str = Query(...)):
     company = await _resolve_company(company_slug)
     company_id = company["id"]
 
+    owns_product = await asyncio.to_thread(
+        lambda: supabase.table("products")
+            .select("id").eq("id", product_id).eq("company_id", company_id).maybe_single().execute()
+    )
+    if not (owns_product and owns_product.data):
+        raise HTTPException(status_code=404, detail="Producto no encontrado.")
+
     stock_res = await asyncio.to_thread(
         lambda: supabase.table("product_warehouse_stock")
             .select("quantity, warehouse_id, store_location, warehouses(name)")

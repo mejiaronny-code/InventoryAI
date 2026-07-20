@@ -272,6 +272,13 @@ class VariantStockUpsert(BaseModel):
     combination: dict   # e.g. {"Color": "Rojo", "Talla": "M"}
     quantity: int = Field(ge=0)
 
+class VariantStockUpsertRequest(BaseModel):
+    items: List[VariantStockUpsert]
+    # Obligatorio SOLO si alguna combinación baja de cantidad (se valida en el
+    # router, que es quien conoce el stock actual en BD) — trazabilidad ante
+    # robo/faltante, igual que StockMovementCreate exige notes en "salida".
+    notes: Optional[str] = None
+
 class VariantStockOut(BaseModel):
     id: UUID
     product_id: UUID
