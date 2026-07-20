@@ -16,23 +16,8 @@ import {
 import { QRCodeCanvas } from 'qrcode.react'
 import ProductImage from '../../components/shared/ProductImage'
 import BarcodeScannerModal from '../../components/shared/BarcodeScannerModal'
+import { Modal } from '../../components/ui'
 import clsx from 'clsx'
-
-function Modal({ open, onClose, title, children }) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <h3 className="text-lg font-bold text-ink-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  )
-}
 
 function TagInput({ tags, onChange }) {
   const [input, setInput] = useState('')
@@ -675,8 +660,8 @@ function ProductForm({ product, categories, warehouses, ingredients = [], onSave
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="grid grid-cols-2 gap-3">
-        <div className="col-span-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="sm:col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Nombre *</label>
           <input value={form.name} onChange={e => handleChange('name', e.target.value)} className="input" required />
         </div>
@@ -720,7 +705,7 @@ function ProductForm({ product, categories, warehouses, ingredients = [], onSave
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">SKU</label>
           <input value={form.sku} onChange={e => handleChange('sku', e.target.value)} className="input font-mono" />
         </div>
-        <div className="col-span-2">
+        <div className="sm:col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Código de barras</label>
           <div className="flex gap-2">
             <input
@@ -739,20 +724,20 @@ function ProductForm({ product, categories, warehouses, ingredients = [], onSave
             </button>
           </div>
         </div>
-        <div className="col-span-2">
+        <div className="sm:col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Categoría</label>
           <select value={form.category_id} onChange={e => handleChange('category_id', e.target.value)} className="input">
             <option value="">Sin categoría</option>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
-        <div className="col-span-2">
+        <div className="sm:col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
             Descripción <span className="text-brand-500">(afecta búsqueda semántica)</span>
           </label>
           <textarea value={form.description} onChange={e => handleChange('description', e.target.value)} rows={2} className="input resize-none" />
         </div>
-        <div className="col-span-2">
+        <div className="sm:col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
             {hasFeature('menu_mode') && form.product_type === 'dish' ? 'Ideal para' : 'Casos de uso'} <span className="text-brand-500">(afecta búsqueda semántica)</span>
           </label>
@@ -768,7 +753,7 @@ function ProductForm({ product, categories, warehouses, ingredients = [], onSave
             }
           />
         </div>
-        <div className="col-span-2">
+        <div className="sm:col-span-2">
           <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
             Tiempo de reserva (horas) <span className="text-ink-400 font-normal normal-case">· opcional, sobreescribe el de la categoría</span>
           </label>
@@ -842,18 +827,22 @@ function ProductForm({ product, categories, warehouses, ingredients = [], onSave
 
               <div className="flex items-center gap-4 flex-wrap">
                 <label className="flex items-center gap-2.5 cursor-pointer">
-                  <div
+                  <button
+                    type="button"
                     onClick={() => handleChange('is_available', !form.is_available)}
                     className={clsx(
                       'w-9 h-5 rounded-full transition-colors shrink-0 relative cursor-pointer',
                       form.is_available ? 'bg-green-500' : 'bg-ink-300'
                     )}
+                    role="switch"
+                    aria-checked={form.is_available}
+                    aria-label="Disponibilidad del platillo"
                   >
                     <span className={clsx(
                       'absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform',
                       form.is_available ? 'translate-x-4' : 'translate-x-0.5'
                     )} />
-                  </div>
+                  </button>
                   <span className="text-sm font-medium text-ink-700">
                     {form.is_available ? 'Disponible hoy' : 'Agotado hoy'}
                   </span>
@@ -888,18 +877,22 @@ function ProductForm({ product, categories, warehouses, ingredients = [], onSave
 
       {/* Producto destacado */}
       <label className="flex items-center gap-3 p-3 rounded-xl border border-ink-100 hover:bg-ink-50 cursor-pointer">
-        <div
+        <button
+          type="button"
           onClick={() => handleChange('is_featured', !form.is_featured)}
           className={clsx(
             'w-9 h-5 rounded-full transition-colors shrink-0 relative cursor-pointer',
             form.is_featured ? 'bg-brand-500' : 'bg-ink-200'
           )}
+          role="switch"
+          aria-checked={form.is_featured}
+          aria-label="Producto destacado"
         >
           <span className={clsx(
             'absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform',
             form.is_featured ? 'translate-x-4' : 'translate-x-0.5'
           )} />
-        </div>
+        </button>
         <div className="flex items-center gap-1.5">
           <Star size={14} className={form.is_featured ? 'text-brand-500' : 'text-ink-400'} />
           <span className="text-sm font-medium text-ink-700">Producto destacado</span>
@@ -948,7 +941,8 @@ function ProductForm({ product, categories, warehouses, ingredients = [], onSave
               <button
                 type="button"
                 onClick={() => removeImage(i)}
-                className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute -top-2 -right-2 w-7 h-7 bg-red-500 rounded-full flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shadow-sm"
+                aria-label="Eliminar imagen"
               >
                 <X size={11} className="text-white" />
               </button>
@@ -974,7 +968,7 @@ function ProductForm({ product, categories, warehouses, ingredients = [], onSave
       {!product?.id && warehouses.length > 0 && form.product_type !== 'dish' && (
         <div className="border border-brand-100 bg-brand-50 rounded-xl p-4 space-y-3">
           <p className="text-xs font-bold text-brand-700 uppercase tracking-wide">Stock inicial (opcional)</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-ink-500 block mb-1">Almacén</label>
               <select value={stockData.warehouse_id} onChange={e => setStockData(s => ({ ...s, warehouse_id: e.target.value }))} className="input text-sm">
@@ -1014,17 +1008,8 @@ function StockDetailModal({ open, onClose, product, warehouses }) {
   if (!open || !product) return null
   const rows = product.stock_by_warehouse || []
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box max-w-sm">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <div>
-            <h3 className="text-base font-bold text-ink-900">Stock por almacén</h3>
-            <p className="text-xs text-ink-400 mt-0.5">{product.name}</p>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <div className="p-6">
+    <Modal open={open} onClose={onClose} title="Stock por almacén" size="sm">
+        <p className="text-xs text-ink-400 -mt-2 mb-4">{product.name}</p>
           {rows.length === 0 ? (
             <div className="text-center py-8 text-ink-400">
               <Warehouse size={32} className="mx-auto mb-2 opacity-40" />
@@ -1052,9 +1037,7 @@ function StockDetailModal({ open, onClose, product, warehouses }) {
               </div>
             </div>
           )}
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -1194,16 +1177,16 @@ export default function ProductsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <h1 className="page-title">{menuMode ? 'Menú' : 'Productos'}</h1>
         {isAdmin && (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
             {menuMode && hasFeature('recipes') && (
-              <button onClick={() => setSaleModalOpen(true)} className="btn-ghost border border-ink-200">
+              <button onClick={() => setSaleModalOpen(true)} className="btn-secondary flex-1 sm:flex-none justify-center">
                 <ShoppingCart size={16} /> Registrar venta
               </button>
             )}
-            <button onClick={() => setModal('create')} className="btn-primary">
+            <button onClick={() => setModal('create')} className="btn-primary flex-1 sm:flex-none justify-center">
               <Plus size={16} /> {menuMode ? 'Nuevo platillo/insumo' : 'Nuevo producto'}
             </button>
           </div>
@@ -1222,7 +1205,7 @@ export default function ProductsPage() {
               key={v}
               onClick={() => setTypeFilter(v)}
               className={clsx(
-                'px-3 py-1.5 rounded-lg text-sm font-medium border transition-all',
+                'min-h-11 px-3 py-2 rounded-lg text-sm font-medium border transition-all',
                 typeFilter === v ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300'
               )}
             >
@@ -1243,7 +1226,7 @@ export default function ProductsPage() {
             className="input pl-10"
           />
           {search && (
-            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700">
+            <button onClick={() => setSearch('')} className="absolute right-1 top-1/2 -translate-y-1/2 w-10 h-10 inline-flex items-center justify-center rounded-lg text-ink-400 hover:text-ink-700 hover:bg-ink-50" aria-label="Limpiar búsqueda">
               <X size={14} />
             </button>
           )}
@@ -1257,7 +1240,7 @@ export default function ProductsPage() {
 
       {/* Table */}
       <div className="table-container">
-        <table className="table">
+        <table className="table min-w-[760px]">
           <thead>
             <tr>
               <th>Producto</th>
@@ -1358,6 +1341,7 @@ export default function ProductsPage() {
         open={!!modal}
         onClose={() => setModal(null)}
         title={modal === 'create' ? (menuMode ? 'Nuevo platillo/insumo' : 'Nuevo producto') : `Editar: ${modal?.name}`}
+        size="lg"
       >
         <ProductForm
           product={modal === 'create' ? null : modal}
@@ -1373,7 +1357,7 @@ export default function ProductsPage() {
       </Modal>
 
       {/* Modal registrar venta (descuenta insumos) */}
-      <Modal open={saleModalOpen} onClose={() => setSaleModalOpen(false)} title="Registrar venta del día">
+      <Modal open={saleModalOpen} onClose={() => setSaleModalOpen(false)} title="Registrar venta del día" size="lg">
         <RegisterSaleModal
           dishes={products.filter(p => p.product_type === 'dish')}
           onClose={() => setSaleModalOpen(false)}

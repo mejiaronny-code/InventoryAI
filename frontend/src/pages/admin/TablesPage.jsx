@@ -5,23 +5,8 @@
 import { useState, useEffect } from 'react'
 import { tablesAPI } from '../../services/api'
 import toast from 'react-hot-toast'
-import { Plus, Pencil, Trash2, Armchair, MapPin, X, Loader2, Users } from 'lucide-react'
-
-function Modal({ open, onClose, title, children }) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <h3 className="text-lg font-bold text-ink-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  )
-}
+import { Plus, Pencil, Trash2, Armchair, MapPin, Loader2, Users } from 'lucide-react'
+import { Modal } from '../../components/ui'
 
 export default function TablesPage() {
   const [tables, setTables] = useState([])
@@ -68,7 +53,7 @@ export default function TablesPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="page-title">Mesas y zonas</h1>
         <button onClick={openCreate} className="btn-primary"><Plus size={16} /> Nueva mesa</button>
       </div>
@@ -90,7 +75,7 @@ export default function TablesPage() {
             <p className="text-xs font-bold text-ink-500 uppercase tracking-wide mb-2 flex items-center gap-1">
               <MapPin size={12} /> {zone}
             </p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-1 min-[430px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
               {list.map(t => (
                 <div key={t.id} className="card p-4">
                   <div className="flex items-start justify-between mb-2">
@@ -98,8 +83,8 @@ export default function TablesPage() {
                       <Armchair size={16} className="text-white" />
                     </div>
                     <div className="flex gap-1">
-                      <button onClick={() => openEdit(t)} className="btn-ghost p-1.5"><Pencil size={12} /></button>
-                      <button onClick={() => setConfirmDelete({ id: t.id, name: t.name })} className="btn-ghost p-1.5 text-red-400 hover:bg-red-50"><Trash2 size={12} /></button>
+                      <button onClick={() => openEdit(t)} className="btn-ghost w-10 h-10 p-0 justify-center" aria-label={`Editar ${t.name}`}><Pencil size={13} /></button>
+                      <button onClick={() => setConfirmDelete({ id: t.id, name: t.name })} className="btn-ghost w-10 h-10 p-0 justify-center text-red-400 hover:bg-red-50" aria-label={`Eliminar ${t.name}`}><Trash2 size={13} /></button>
                     </div>
                   </div>
                   <h3 className="font-bold text-ink-900 text-sm">{t.name}</h3>
@@ -129,7 +114,7 @@ export default function TablesPage() {
             <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Nombre *</label>
             <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="input" placeholder="Mesa 1, Terraza A…" required />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Capacidad</label>
               <input type="number" min="1" value={form.capacity} onChange={e => setForm(f => ({ ...f, capacity: e.target.value }))} className="input" />

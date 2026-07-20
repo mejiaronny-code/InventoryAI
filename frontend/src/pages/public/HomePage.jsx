@@ -28,16 +28,16 @@ export default function HomePage() {
       {/* Hero */}
       <div className="relative bg-ink-950 overflow-hidden">
         <div className="absolute inset-0 bg-pattern opacity-30" />
-        <div className="relative max-w-4xl mx-auto px-6 py-24 text-center">
+        <div className="relative max-w-4xl mx-auto px-4 sm:px-6 py-16 sm:py-24 text-center">
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-500/10 border border-brand-500/20 mb-6">
             <Zap size={14} className="text-brand-400" />
             <span className="text-brand-400 text-xs font-semibold tracking-wide uppercase">InventoryAI</span>
           </div>
-          <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-4 tracking-tight">
+          <h1 className="text-3xl min-[380px]:text-4xl md:text-6xl font-extrabold text-white mb-4 tracking-tight">
             Tu inventario,<br />
             <span className="text-gradient">inteligente.</span>
           </h1>
-          <p className="text-ink-400 text-lg max-w-xl mx-auto mb-10">
+          <p className="text-ink-400 text-base sm:text-lg max-w-xl mx-auto mb-8 sm:mb-10">
             Busca productos con lenguaje natural. Haz reservas en segundos.<br />
             Potenciado por IA.
           </p>
@@ -56,7 +56,7 @@ export default function HomePage() {
       </div>
 
       {/* Companies grid */}
-      <div className="max-w-5xl mx-auto px-6 py-16">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-12 sm:py-16">
         <p className="text-ink-500 text-sm mb-8 font-medium">
           {filtered.length} empresa{filtered.length !== 1 ? 's' : ''} disponible{filtered.length !== 1 ? 's' : ''}
         </p>

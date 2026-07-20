@@ -18,7 +18,7 @@ function StatCard({ icon: Icon, label, value, accent }) {
         <Icon size={17} className={accent ? 'text-white' : 'text-brand-400'} />
       </div>
       <p className="text-xs text-ink-500 font-medium">{label}</p>
-      <p className={`text-2xl font-extrabold mt-0.5 ${accent ? 'text-brand-600' : 'text-ink-900'}`}>{value}</p>
+      <p className={`text-2xl font-extrabold mt-0.5 break-words ${accent ? 'text-brand-600' : 'text-ink-900'}`}>{value}</p>
     </div>
   )
 }
@@ -91,19 +91,21 @@ export default function SuperAdminMetricsPage() {
             <div className="p-5 border-b border-ink-100">
               <h2 className="section-title">Reservas por empresa</h2>
             </div>
-            <div className="p-5">
+            <div className="p-5 overflow-x-auto">
               {data.res_by_company_chart.length === 0 ? (
                 <p className="text-center text-ink-400 text-sm py-10">Sin reservas este mes</p>
               ) : (
+                <div className="min-w-[520px]">
                 <ResponsiveContainer width="100%" height={260}>
                   <BarChart data={data.res_by_company_chart} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
                     <XAxis dataKey="empresa" tick={{ fontSize: 11, fill: '#71717a' }} />
                     <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#71717a' }} />
                     <Tooltip content={<CustomTooltip suffix=" reservas" />} />
-                    <Bar dataKey="reservas" fill="#f97316" radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="reservas" fill="var(--brand-primary)" radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
+                </div>
               )}
             </div>
           </div>
@@ -113,10 +115,11 @@ export default function SuperAdminMetricsPage() {
             <div className="p-5 border-b border-ink-100">
               <h2 className="section-title">Costo IA por día (USD)</h2>
             </div>
-            <div className="p-5">
+            <div className="p-5 overflow-x-auto">
               {data.ai_by_day_chart.length === 0 ? (
                 <p className="text-center text-ink-400 text-sm py-10">Sin uso de IA este mes</p>
               ) : (
+                <div className="min-w-[520px]">
                 <ResponsiveContainer width="100%" height={260}>
                   <LineChart data={data.ai_by_day_chart} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
@@ -130,13 +133,14 @@ export default function SuperAdminMetricsPage() {
                     <Line
                       type="monotone"
                       dataKey="cost"
-                      stroke="#f97316"
+                      stroke="var(--brand-primary)"
                       strokeWidth={2}
-                      dot={{ fill: '#f97316', r: 3 }}
+                      dot={{ fill: 'var(--brand-primary)', r: 3 }}
                       activeDot={{ r: 5 }}
                     />
                   </LineChart>
                 </ResponsiveContainer>
+                </div>
               )}
             </div>
           </div>

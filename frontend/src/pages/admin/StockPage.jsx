@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import ProductImage from '../../components/shared/ProductImage'
 import BarcodeScannerModal from '../../components/shared/BarcodeScannerModal'
+import { Modal } from '../../components/ui'
 import { format, differenceInDays, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
@@ -107,22 +108,6 @@ const typeConfig = {
   ajuste:        { color: 'badge-gray',   icon: BarChart3,  label: 'Ajuste'        },
 }
 
-function Modal({ open, onClose, title, children }) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <h3 className="text-lg font-bold text-ink-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  )
-}
-
 function EditStockModal({ open, onClose, item, onSaved }) {
   const [newQty, setNewQty] = useState('')
   const [reason, setReason] = useState('')
@@ -202,17 +187,9 @@ function EditStockModal({ open, onClose, item, onSaved }) {
   const diffColor = diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-ink-400'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box max-w-sm">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <div>
-            <h3 className="text-base font-bold text-ink-900">Editar stock</h3>
-            <p className="text-xs text-ink-400 mt-0.5">{item.product_name} · {item.warehouse_name}</p>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <form onSubmit={handleSave} className="p-6 space-y-4">
+    <Modal open={open} onClose={onClose} title="Editar stock" size="sm">
+        <p className="text-xs text-ink-400 -mt-2 mb-4">{item.product_name} · {item.warehouse_name}</p>
+        <form onSubmit={handleSave} className="space-y-4">
           {/* Cantidad */}
           <div className="flex items-center gap-4 p-3 rounded-xl bg-ink-50 border border-ink-100">
             <div className="text-center flex-1">
@@ -305,7 +282,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
               </button>
             )}
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {[
               { label: 'Pasillo', value: aisle, set: setAisle, placeholder: 'P-5' },
               { label: 'Estante', value: shelf, set: setShelf, placeholder: 'E-B' },
@@ -338,8 +315,7 @@ function EditStockModal({ open, onClose, item, onSaved }) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -482,20 +458,9 @@ function VariantStockModal({ open, onClose, product, warehouses }) {
   const type2 = options[1]
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-5 border-b border-ink-100">
-          <div>
-            <h3 className="text-base font-bold text-ink-900 flex items-center gap-2">
-              <Layers size={16} className="text-brand-500" /> Stock por variante
-            </h3>
-            <p className="text-xs text-ink-400 mt-0.5">{product.name}</p>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-
-        <div className="p-5 space-y-4">
+    <Modal open={open} onClose={onClose} title="Stock por variante" size="xl">
+        <div className="space-y-4">
+          <p className="text-xs text-ink-400 -mt-2">{product.name}</p>
           {/* Selector de almacén */}
           <div>
             <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Almacén</label>
@@ -597,8 +562,7 @@ function VariantStockModal({ open, onClose, product, warehouses }) {
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -783,24 +747,24 @@ export default function StockPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <h1 className="page-title">Stock</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <button
             onClick={() => setScannerOpen(true)}
-            className="btn-secondary"
+            className="btn-secondary flex-1 sm:flex-none justify-center"
             title="Escanear código de barras o QR"
           >
             <ScanLine size={16} /> Escanear
           </button>
-          <button onClick={() => setModal(true)} className="btn-primary">
+          <button onClick={() => setModal(true)} className="btn-primary flex-1 sm:flex-none justify-center">
             <Plus size={16} /> Registrar movimiento
           </button>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-ink-100 p-1 rounded-xl w-fit flex-wrap">
+      <div className="flex gap-1 bg-ink-100 p-1 rounded-xl w-full sm:w-fit overflow-x-auto sm:flex-wrap">
         {[
           { key: 'current',   label: 'Inventario actual' },
           { key: 'movements', label: 'Historial' },
@@ -811,7 +775,7 @@ export default function StockPage() {
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={clsx(
-              'px-4 py-1.5 rounded-lg text-sm font-semibold transition-all',
+              'min-h-11 px-4 py-2 rounded-lg text-sm font-semibold transition-all shrink-0',
               activeTab === tab.key
                 ? 'bg-white text-ink-900 shadow-sm'
                 : 'text-ink-500 hover:text-ink-700'
@@ -835,7 +799,7 @@ export default function StockPage() {
               className="input pl-9 text-sm"
             />
             {stockSearch && (
-              <button onClick={() => setStockSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700">
+              <button onClick={() => setStockSearch('')} className="absolute right-1 top-1/2 -translate-y-1/2 w-10 h-10 inline-flex items-center justify-center rounded-lg text-ink-400 hover:text-ink-700 hover:bg-ink-50" aria-label="Limpiar búsqueda">
                 <X size={13} />
               </button>
             )}
@@ -950,7 +914,7 @@ export default function StockPage() {
       {/* Tab: Historial de movimientos */}
       {activeTab === 'movements' && (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[200px]">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
               <input
@@ -960,20 +924,20 @@ export default function StockPage() {
                 className="input pl-9 text-sm w-full"
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 min-w-0">
               <label className="text-xs text-ink-400 shrink-0">Desde</label>
               <input
                 type="date" value={movementDateFrom}
                 onChange={e => setMovementDateFrom(e.target.value)}
-                className="input text-sm"
+                className="input text-sm min-w-0"
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 min-w-0">
               <label className="text-xs text-ink-400 shrink-0">Hasta</label>
               <input
                 type="date" value={movementDateTo}
                 onChange={e => setMovementDateTo(e.target.value)}
-                className="input text-sm"
+                className="input text-sm min-w-0"
               />
             </div>
             {(movementSearch || movementDateFrom || movementDateTo) && (

@@ -128,7 +128,7 @@ export default function PickingPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 print:hidden">
-          <button onClick={load} className="btn-secondary" title="Actualizar">
+          <button onClick={load} className="btn-secondary min-h-11 min-w-11" title="Actualizar" aria-label="Actualizar lista de picking">
             <RefreshCw size={14} />
           </button>
           <button onClick={handlePrint} className="btn-secondary">
@@ -153,14 +153,14 @@ export default function PickingPage() {
       </div>
 
       {/* Filtros */}
-      <div className="flex flex-wrap gap-3 items-center print:hidden">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:items-center print:hidden">
         {/* Almacén */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
           <Filter size={14} className="text-ink-400" />
           <select
             value={warehouseFilter}
             onChange={e => setWarehouseFilter(e.target.value)}
-            className="input text-sm w-44"
+            className="input text-sm min-h-11 flex-1 sm:w-44"
           >
             <option value="">Todos los almacenes</option>
             {warehouses.map(w => (
@@ -170,7 +170,7 @@ export default function PickingPage() {
         </div>
 
         {/* Estado */}
-        <div className="flex gap-1 bg-ink-100 p-1 rounded-xl">
+        <div className="flex gap-1 bg-ink-100 p-1 rounded-xl overflow-x-auto">
           {[
             { key: 'all',       label: 'Todos'      },
             { key: 'pending',   label: 'Pendientes' },
@@ -180,7 +180,7 @@ export default function PickingPage() {
               key={s.key}
               onClick={() => setStatusFilter(s.key)}
               className={clsx(
-                'px-3 py-1 rounded-lg text-xs font-semibold transition-all',
+                'min-h-10 px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-all',
                 statusFilter === s.key ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500 hover:text-ink-700'
               )}
             >
@@ -202,12 +202,12 @@ export default function PickingPage() {
 
         {/* Acciones masivas */}
         {items.length > 0 && (
-          <div className="flex gap-2 ml-auto">
-            <button onClick={markAllPicked} className="btn-secondary text-xs">
+          <div className="flex flex-col min-[430px]:flex-row gap-2 w-full sm:w-auto sm:ml-auto">
+            <button onClick={markAllPicked} className="btn-secondary min-h-11 text-xs flex-1">
               <CheckCheck size={13} /> Marcar todos
             </button>
             {pickedCount > 0 && (
-              <button onClick={clearPicks} className="btn-ghost text-xs text-ink-400">
+              <button onClick={clearPicks} className="btn-ghost min-h-11 text-xs text-ink-400 flex-1">
                 <X size={13} /> Limpiar
               </button>
             )}
@@ -312,7 +312,7 @@ function PickingRow({ item, isPicked, isCompleting, onToggle, onConfirm, onCompl
 
   return (
     <div className={clsx(
-      'flex items-start gap-3 px-4 py-3 transition-colors',
+      'grid grid-cols-[auto_auto_minmax(0,1fr)] sm:grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-3 px-4 py-3 transition-colors',
       isPicked && 'bg-green-50',
       isExpired && !isPicked && 'bg-red-50',
       isUrgent && !isExpired && !isPicked && 'bg-orange-50',
@@ -321,10 +321,11 @@ function PickingRow({ item, isPicked, isCompleting, onToggle, onConfirm, onCompl
       <button
         onClick={onToggle}
         className={clsx(
-          'mt-0.5 shrink-0 transition-colors print:hidden',
+          'w-11 h-11 -m-2 mt-[-0.375rem] flex items-center justify-center shrink-0 transition-colors print:hidden',
           isPicked ? 'text-green-500' : 'text-ink-300 hover:text-ink-500'
         )}
         title={isPicked ? 'Desmarcar' : 'Marcar como recogido'}
+        aria-label={isPicked ? `Desmarcar ${item.product_name}` : `Marcar ${item.product_name} como recogido`}
       >
         {isPicked
           ? <CheckCircle2 size={20} />
@@ -340,7 +341,7 @@ function PickingRow({ item, isPicked, isCompleting, onToggle, onConfirm, onCompl
       />
 
       {/* Info principal */}
-      <div className={clsx('flex-1 min-w-0', isPicked && 'opacity-60')}>
+      <div className={clsx('min-w-0', isPicked && 'opacity-60')}>
         <div className="flex flex-wrap items-start gap-2">
           <p className={clsx('font-semibold text-ink-900 text-sm', isPicked && 'line-through')}>
             {item.product_name}
@@ -417,11 +418,11 @@ function PickingRow({ item, isPicked, isCompleting, onToggle, onConfirm, onCompl
       </div>
 
       {/* Acciones */}
-      <div className="flex flex-col gap-1 shrink-0 print:hidden">
+      <div className="col-span-3 sm:col-span-1 flex flex-row sm:flex-col gap-2 sm:gap-1 shrink-0 print:hidden">
         {item.reservation_status === 'pending' && (
           <button
             onClick={onConfirm}
-            className="btn-secondary text-xs px-2 py-1 text-green-700 border-green-200 hover:bg-green-50"
+            className="btn-secondary min-h-11 sm:min-h-8 text-xs px-3 py-1 text-green-700 border-green-200 hover:bg-green-50 flex-1 sm:flex-none"
             title="Confirmar recogida"
           >
             Confirmar
@@ -431,7 +432,7 @@ function PickingRow({ item, isPicked, isCompleting, onToggle, onConfirm, onCompl
           <button
             onClick={onComplete}
             disabled={!!isCompleting}
-            className="btn-primary text-xs px-2 py-1"
+            className="btn-primary min-h-11 sm:min-h-8 text-xs px-3 py-1 flex-1 sm:flex-none"
             title="Entregar al cliente y descontar stock"
           >
             {isCompleting

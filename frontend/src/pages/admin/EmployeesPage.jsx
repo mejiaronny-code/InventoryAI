@@ -4,25 +4,10 @@
 import { useState, useEffect } from 'react'
 import { authAPI } from '../../services/api'
 import toast from 'react-hot-toast'
-import { Plus, Trash2, Users, X, Loader2, Shield, User, ToggleLeft, ToggleRight } from 'lucide-react'
+import { Plus, Trash2, Loader2, Shield, User, ToggleLeft, ToggleRight } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-
-function Modal({ open, onClose, title, children }) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box max-w-sm">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <h3 className="text-lg font-bold text-ink-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  )
-}
+import { Modal } from '../../components/ui'
 
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState([])
@@ -74,7 +59,7 @@ export default function EmployeesPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="page-title">Empleados</h1>
         <button onClick={() => setModal(true)} className="btn-primary"><Plus size={16} /> Nuevo empleado</button>
       </div>
@@ -98,7 +83,8 @@ export default function EmployeesPage() {
                   onClick={() => handleToggleActive(e)}
                   disabled={toggling === e.id}
                   title={e.is_active ? 'Desactivar' : 'Activar'}
-                  className={`btn-ghost p-1.5 ${e.is_active ? 'text-green-500 hover:bg-green-50' : 'text-ink-400 hover:bg-ink-100'}`}
+                  className={`btn-ghost w-10 h-10 p-0 justify-center ${e.is_active ? 'text-green-500 hover:bg-green-50' : 'text-ink-400 hover:bg-ink-100'}`}
+                  aria-label={e.is_active ? `Desactivar ${e.full_name || e.email}` : `Activar ${e.full_name || e.email}`}
                 >
                   {toggling === e.id
                     ? <Loader2 size={15} className="animate-spin" />
@@ -109,7 +95,8 @@ export default function EmployeesPage() {
                 <button
                   onClick={() => setConfirmDelete({ id: e.id, name: e.full_name || e.email })}
                   title="Eliminar permanentemente"
-                  className="btn-ghost p-1.5 text-red-400 hover:bg-red-50"
+                  className="btn-ghost w-10 h-10 p-0 justify-center text-red-400 hover:bg-red-50"
+                  aria-label={`Eliminar ${e.full_name || e.email}`}
                 >
                   <Trash2 size={14} />
                 </button>
@@ -117,7 +104,7 @@ export default function EmployeesPage() {
             </div>
             <div>
               <p className="font-bold text-ink-900">{e.full_name || '—'}</p>
-              {e.email && <p className="text-xs text-ink-500 mt-0.5">{e.email}</p>}
+              {e.email && <p className="text-xs text-ink-500 mt-0.5 break-all">{e.email}</p>}
               <p className="text-xs text-ink-400 mt-0.5">
                 {format(new Date(e.created_at), "d MMM yyyy", { locale: es })}
               </p>

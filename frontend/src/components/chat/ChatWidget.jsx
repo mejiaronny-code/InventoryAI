@@ -384,11 +384,13 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
           'flex items-center justify-center transition-all duration-300',
           open ? 'bg-ink-800 rotate-0' : 'bg-brand-500 hover:bg-brand-600 hover:scale-110'
         )}
-        aria-label="Abrir chat"
+        aria-label={open ? 'Cerrar chat' : 'Abrir chat'}
+        aria-expanded={open}
+        aria-controls="inventoryai-chat-panel"
       >
         {open
           ? <X size={22} className="text-white" />
-          : <MessageCircle size={24} className="text-white" />
+          : <MessageCircle size={24} style={{ color: 'var(--brand-contrast)' }} />
         }
         {!open && (
           <span className="absolute -top-1 -right-1 w-4 h-4 bg-green-400 rounded-full border-2 border-white animate-pulse-soft" />
@@ -409,10 +411,19 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
         open
           ? 'opacity-100 scale-100 pointer-events-auto'
           : 'opacity-0 scale-90 pointer-events-none'
-      )}>
+      )}
+        id="inventoryai-chat-panel"
+        role="dialog"
+        aria-label="Asistente IA"
+        aria-hidden={!open}
+        inert={open ? undefined : ''}
+      >
         {/* Header — redondea sus esquinas superiores igual que la tarjeta, para
             que el rojo llene la curva y no se asome el blanco del fondo. */}
-        <div className="bg-gradient-to-r from-brand-500 to-brand-600 px-4 py-3.5 flex items-center gap-3 shrink-0 rounded-t-2xl">
+        <div
+          className="bg-gradient-to-r from-brand-500 to-brand-600 px-4 py-3.5 flex items-center gap-3 shrink-0 rounded-t-2xl"
+          style={{ color: 'var(--brand-contrast)' }}
+        >
           <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
             {companyLogo
               ? <img src={companyLogo} alt="logo" className="w-full h-full object-cover" />
@@ -420,14 +431,18 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
             }
           </div>
           <div className="flex-1">
-            <p className="font-bold text-white text-sm">Asistente IA</p>
+            <p className="font-bold text-current text-sm">Asistente IA</p>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 bg-green-300 rounded-full animate-pulse" />
-              <p className="text-xs text-white/80">En línea</p>
+              <p className="text-xs text-current opacity-80">En línea</p>
             </div>
           </div>
-          <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg hover:bg-white/20 transition-colors">
-            <X size={16} className="text-white" />
+          <button
+            onClick={() => setOpen(false)}
+            className="w-11 h-11 -my-2 -mr-2 rounded-xl hover:bg-white/20 transition-colors inline-flex items-center justify-center"
+            aria-label="Cerrar chat"
+          >
+            <X size={16} className="text-current" />
           </button>
         </div>
 
@@ -506,7 +521,8 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
             </div>
             <button
               onClick={() => { setPreviewImage(null); setImageFile(null) }}
-              className="p-1 rounded-lg hover:bg-ink-100"
+              className="w-10 h-10 rounded-lg hover:bg-ink-100 inline-flex items-center justify-center"
+              aria-label="Quitar imagen adjunta"
             >
               <X size={14} className="text-ink-500" />
             </button>
@@ -526,15 +542,17 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
               </p>
               <button
                 onClick={cancelRecording}
-                className="p-2 rounded-lg text-ink-400 hover:text-ink-600 hover:bg-white transition-colors"
+                className="w-11 h-11 rounded-lg text-ink-400 hover:text-ink-600 hover:bg-white transition-colors inline-flex items-center justify-center"
                 title="Cancelar"
+                aria-label="Cancelar grabación"
               >
                 <X size={16} />
               </button>
               <button
                 onClick={stopRecording}
-                className="p-2 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors shadow-sm"
+                className="w-11 h-11 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors shadow-sm inline-flex items-center justify-center"
                 title="Enviar nota de voz"
+                aria-label="Detener y transcribir nota de voz"
               >
                 <Square size={16} fill="currentColor" />
               </button>
@@ -544,9 +562,10 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
               {/* Image upload button */}
               <button
                 onClick={() => fileRef.current?.click()}
-                className="p-2.5 rounded-xl text-ink-400 hover:text-brand-500 hover:bg-brand-50 transition-colors shrink-0"
+                className="w-11 h-11 rounded-xl text-ink-400 hover:text-brand-500 hover:bg-brand-50 transition-colors shrink-0 inline-flex items-center justify-center"
                 title="Buscar por imagen"
                 disabled={loading}
+                aria-label="Adjuntar imagen"
               >
                 <ImagePlus size={18} />
               </button>
@@ -576,8 +595,9 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
                   onClick={handleSendText}
                   disabled={loading || transcribing}
                   title="Revisa el texto transcrito antes de enviar"
+                  aria-label="Enviar mensaje"
                   className={clsx(
-                    'p-2.5 rounded-xl shrink-0 transition-all',
+                    'w-11 h-11 rounded-xl shrink-0 transition-all inline-flex items-center justify-center',
                     (loading || transcribing)
                       ? 'bg-ink-100 text-ink-400 cursor-not-allowed'
                       : 'bg-brand-500 text-white hover:bg-brand-600 shadow-sm'
@@ -593,8 +613,9 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
                   onClick={handleMicClick}
                   disabled={loading || transcribing}
                   title="Grabar nota de voz"
+                  aria-label="Grabar nota de voz"
                   className={clsx(
-                    'p-2.5 rounded-xl shrink-0 transition-all',
+                    'w-11 h-11 rounded-xl shrink-0 transition-all inline-flex items-center justify-center',
                     (loading || transcribing)
                       ? 'bg-ink-100 text-ink-400 cursor-not-allowed'
                       : 'bg-brand-500 text-white hover:bg-brand-600 shadow-sm'

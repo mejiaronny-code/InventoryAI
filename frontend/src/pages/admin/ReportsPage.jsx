@@ -435,13 +435,13 @@ export default function ReportsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-ink-100 p-1 rounded-xl w-fit flex-wrap">
+      <div className="flex gap-1 bg-ink-100 p-1 rounded-xl w-full sm:w-fit overflow-x-auto sm:flex-wrap">
         {tabs.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
             className={clsx(
-              'flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-semibold transition-all',
+              'flex items-center gap-1.5 min-h-11 px-4 py-2 rounded-lg text-sm font-semibold transition-all shrink-0',
               activeTab === key ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500 hover:text-ink-700'
             )}
           >
@@ -453,13 +453,13 @@ export default function ReportsPage() {
       {/* ── Aging Report ─────────────────────────────────────────────── */}
       {activeTab === 'aging' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-ink-500">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <p className="text-sm text-ink-500 max-w-2xl">
               Productos ordenados por días sin movimiento de stock.
               Identifica inventario muerto o de baja rotación.
             </p>
-            <div className="flex gap-2">
-              <button onClick={loadAging} className="btn-secondary"><RefreshCw size={13} /></button>
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+              <button onClick={loadAging} className="btn-secondary w-11 px-0 justify-center" aria-label="Actualizar aging report"><RefreshCw size={13} /></button>
               <button onClick={exportAging} className="btn-secondary" disabled={!agingData.length}>
                 <FileSpreadsheet size={13} /> CSV
               </button>
@@ -470,13 +470,13 @@ export default function ReportsPage() {
           </div>
 
           {/* Bucket summary cards */}
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
             {BUCKETS.map(b => (
               <button
                 key={b.key}
                 onClick={() => setAgingBucket(agingBucket === b.key ? 'all' : b.key)}
                 className={clsx(
-                  'p-3 rounded-xl border-2 text-center transition-all',
+                  'min-h-20 p-3 rounded-xl border-2 text-center transition-all',
                   b.bg,
                   agingBucket === b.key && 'ring-2 ring-brand-400 ring-offset-1'
                 )}
@@ -552,13 +552,13 @@ export default function ReportsPage() {
       {/* ── Valuación ─────────────────────────────────────────────────── */}
       {activeTab === 'valuation' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-ink-500">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <p className="text-sm text-ink-500 max-w-2xl">
               Valor total del inventario basado en precio de costo por producto.
               Agrega el costo en cada producto para habilitar el cálculo.
             </p>
-            <div className="flex gap-2">
-              <button onClick={loadValuation} className="btn-secondary"><RefreshCw size={13} /></button>
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+              <button onClick={loadValuation} className="btn-secondary w-11 px-0 justify-center" aria-label="Actualizar valuación"><RefreshCw size={13} /></button>
               <button onClick={exportValuation} className="btn-secondary" disabled={!valuationData}>
                 <FileSpreadsheet size={13} /> CSV
               </button>
@@ -677,25 +677,25 @@ export default function ReportsPage() {
             const Icon = item.icon
             const isLoading = pdfLoading === item.key
             return (
-              <div key={item.title} className="card p-4 flex items-center gap-4">
+              <div key={item.title} className="card p-4 flex flex-col sm:flex-row sm:items-center gap-4">
                 <div className="w-10 h-10 rounded-xl bg-brand-50 border border-brand-100 flex items-center justify-center shrink-0">
                   <Icon size={18} className="text-brand-600" />
                 </div>
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <p className="font-semibold text-ink-900 text-sm">{item.title}</p>
                   <p className="text-xs text-ink-400 mt-0.5">{item.desc}</p>
                 </div>
-                <div className="flex gap-2 shrink-0">
+                <div className="flex gap-2 w-full sm:w-auto shrink-0">
                   <button
                     onClick={item.csvAction}
-                    className="flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded-lg transition-colors"
+                    className="min-h-11 flex-1 sm:flex-none justify-center flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-2 rounded-lg transition-colors"
                   >
                     <FileSpreadsheet size={12} /> CSV
                   </button>
                   <button
                     onClick={item.pdfAction}
                     disabled={isLoading}
-                    className="flex items-center gap-1 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                    className="min-h-11 flex-1 sm:flex-none justify-center flex items-center gap-1 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
                   >
                     {isLoading ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />} PDF
                   </button>
@@ -709,12 +709,12 @@ export default function ReportsPage() {
       {/* ── Importar ──────────────────────────────────────────────────── */}
       {activeTab === 'import' && (
         <div className="space-y-4 max-w-2xl">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <p className="text-sm text-ink-500">
               Importa productos en lote desde un archivo CSV.
               Si un producto ya existe (mismo SKU) se actualiza.
             </p>
-            <button onClick={downloadTemplate} className="btn-secondary text-sm">
+            <button onClick={downloadTemplate} className="btn-secondary text-sm w-full sm:w-auto justify-center">
               <Download size={13} /> Plantilla CSV
             </button>
           </div>
@@ -743,7 +743,7 @@ export default function ReportsPage() {
           {/* Preview */}
           {importRows.length > 0 && !importResult && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="font-semibold text-ink-800 text-sm">
                   Vista previa — {importRows.length} producto(s)
                 </p>
@@ -798,7 +798,7 @@ export default function ReportsPage() {
                 <CheckCircle2 size={20} className="text-green-500" />
                 <p className="font-bold text-ink-900">Importación completada</p>
               </div>
-              <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
                 <div className="p-3 bg-green-50 rounded-xl">
                   <p className="text-2xl font-extrabold text-green-600">{importResult.created}</p>
                   <p className="text-xs text-ink-400">Creados</p>

@@ -4,23 +4,8 @@
 import { useState, useEffect } from 'react'
 import { warehousesAPI } from '../../services/api'
 import toast from 'react-hot-toast'
-import { Plus, Pencil, Trash2, Warehouse, MapPin, X, Loader2 } from 'lucide-react'
-
-function Modal({ open, onClose, title, children }) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <h3 className="text-lg font-bold text-ink-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  )
-}
+import { Plus, Pencil, Trash2, Warehouse, MapPin, Loader2 } from 'lucide-react'
+import { Modal } from '../../components/ui'
 
 export default function WarehousesPage() {
   const [warehouses, setWarehouses] = useState([])
@@ -53,7 +38,7 @@ export default function WarehousesPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="page-title">Almacenes</h1>
         <button onClick={openCreate} className="btn-primary"><Plus size={16} /> Nuevo almacén</button>
       </div>
@@ -66,8 +51,8 @@ export default function WarehousesPage() {
                 <Warehouse size={18} className="text-white" />
               </div>
               <div className="flex gap-1">
-                <button onClick={() => openEdit(w)} className="btn-ghost p-1.5"><Pencil size={13} /></button>
-                <button onClick={() => setConfirmDelete({ id: w.id, name: w.name })} className="btn-ghost p-1.5 text-red-400 hover:bg-red-50"><Trash2 size={13} /></button>
+                <button onClick={() => openEdit(w)} className="btn-ghost w-10 h-10 p-0 justify-center" aria-label={`Editar ${w.name}`}><Pencil size={14} /></button>
+                <button onClick={() => setConfirmDelete({ id: w.id, name: w.name })} className="btn-ghost w-10 h-10 p-0 justify-center text-red-400 hover:bg-red-50" aria-label={`Desactivar ${w.name}`}><Trash2 size={14} /></button>
               </div>
             </div>
             <h3 className="font-bold text-ink-900 mb-1">{w.name}</h3>

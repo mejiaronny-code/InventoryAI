@@ -87,9 +87,9 @@ export default function NotificationsPage() {
           <h1 className="page-title">Notificaciones</h1>
           {unread > 0 && <p className="text-sm text-ink-500 mt-0.5">{unread} sin leer</p>}
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
           {unread > 0 && (
-            <button onClick={markAll} className="btn-secondary text-sm">
+            <button onClick={markAll} className="btn-secondary text-sm flex-1 sm:flex-none justify-center">
               <CheckCheck size={15} /> Marcar todas leídas
             </button>
           )}
@@ -97,7 +97,7 @@ export default function NotificationsPage() {
             <button
               onClick={deleteRead}
               disabled={deletingRead}
-              className="btn-danger text-sm"
+              className="btn-danger text-sm flex-1 sm:flex-none justify-center"
             >
               <Trash2 size={15} />
               {deletingRead ? 'Eliminando...' : `Eliminar leídas (${readCount})`}
@@ -124,6 +124,15 @@ export default function NotificationsPage() {
               <div
                 key={n.id}
                 onClick={() => !n.read && markRead(n.id)}
+                onKeyDown={(event) => {
+                  if (event.target === event.currentTarget && !n.read && (event.key === 'Enter' || event.key === ' ')) {
+                    event.preventDefault()
+                    markRead(n.id)
+                  }
+                }}
+                role={!n.read ? 'button' : undefined}
+                tabIndex={!n.read ? 0 : undefined}
+                aria-label={!n.read ? `Marcar como leída: ${n.message}` : undefined}
                 className={clsx(
                   'card p-4 flex items-start gap-4 transition-all group',
                   !n.read && 'border-brand-200 bg-brand-50/30 hover:bg-brand-50 cursor-pointer',
@@ -145,8 +154,9 @@ export default function NotificationsPage() {
                   {!n.read && <div className="w-2 h-2 rounded-full bg-brand-500 mt-1" />}
                   <button
                     onClick={(e) => deleteOne(e, n.id)}
-                    className="p-1.5 rounded-lg text-ink-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+                    className="w-10 h-10 rounded-lg text-ink-300 hover:text-red-500 hover:bg-red-50 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-all inline-flex items-center justify-center"
                     title="Eliminar"
+                    aria-label="Eliminar notificación"
                   >
                     <X size={14} />
                   </button>

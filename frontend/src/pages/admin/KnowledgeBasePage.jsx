@@ -10,11 +10,12 @@ import { knowledgeAPI } from '../../services/api'
 import toast from 'react-hot-toast'
 import {
   BookOpen, Upload, Trash2, FileText, RefreshCw,
-  Loader2, X, CheckCircle2, AlertTriangle, Clock, File
+  Loader2, CheckCircle2, AlertTriangle, Clock, File
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
+import { Modal } from '../../components/ui'
 
 const STATUS_CFG = {
   processing: { label: 'Procesando', color: 'badge-orange', icon: Clock },
@@ -27,22 +28,6 @@ const FILE_TYPE_LABEL = {
   docx: 'Word',
   md: 'Markdown',
   txt: 'Texto',
-}
-
-function Modal({ open, onClose, title, children }) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box max-w-md">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <h3 className="text-lg font-bold text-ink-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  )
 }
 
 export default function KnowledgeBasePage() {
@@ -119,16 +104,16 @@ export default function KnowledgeBasePage() {
             <BookOpen size={22} className="text-brand-500" />
             Base de conocimiento
           </h1>
-          <p className="text-sm text-ink-400 mt-0.5">
+          <p className="text-sm text-ink-400 mt-0.5 max-w-3xl">
             Sube documentos con información institucional (horarios, políticas, sucursales, FAQs)
             para que el chat IA responda preguntas que no son sobre el catálogo
           </p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={load} className="btn-secondary"><RefreshCw size={14} /></button>
+        <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+          <button onClick={load} className="btn-secondary w-11 px-0 justify-center" aria-label="Actualizar documentos"><RefreshCw size={14} /></button>
           <button
             onClick={() => { if (atLimit) { toast.error(`Alcanzaste el límite de ${limitInfo.limit} documentos`); return } setModal(true) }}
-            className="btn-primary"
+            className="btn-primary flex-1 sm:flex-none justify-center"
             disabled={atLimit}
           >
             <Upload size={14} /> Subir documento
@@ -165,7 +150,7 @@ export default function KnowledgeBasePage() {
 
       {/* Lista de documentos */}
       <div className="table-container">
-        <table className="table">
+        <table className="table min-w-[760px]">
           <thead>
             <tr>
               <th>Documento</th>
@@ -221,8 +206,9 @@ export default function KnowledgeBasePage() {
                   <td>
                     <button
                       onClick={() => handleDelete(doc)}
-                      className="btn-ghost p-1.5 text-red-400 hover:text-red-600"
+                      className="btn-ghost w-10 h-10 p-0 justify-center text-red-400 hover:text-red-600"
                       title="Eliminar"
+                      aria-label={`Eliminar ${doc.title}`}
                     >
                       <Trash2 size={13} />
                     </button>
@@ -254,7 +240,7 @@ export default function KnowledgeBasePage() {
               type="file"
               accept=".pdf,.docx,.md,.txt"
               onChange={e => setFile(e.target.files?.[0] || null)}
-              className="input"
+              className="input p-2 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-50 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-brand-600 hover:file:bg-brand-100"
               required
             />
             <p className="text-[11px] text-ink-400 mt-1.5">PDF, Word (.docx), Markdown (.md) o texto (.txt) — máx. 15 MB</p>

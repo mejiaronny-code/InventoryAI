@@ -115,7 +115,7 @@ export default function ImportPage() {
     <div className="space-y-5 animate-fade-in max-w-4xl">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="page-title">Importar productos</h1>
-        <button onClick={downloadTemplate} className="btn-ghost text-xs">
+        <button onClick={downloadTemplate} className="btn-ghost min-h-11 text-xs w-full sm:w-auto">
           <Download size={14} /> Descargar plantilla CSV
         </button>
       </div>
@@ -136,7 +136,7 @@ export default function ImportPage() {
       {!preview && (
         <div
           className={clsx(
-            'border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all',
+            'border-2 border-dashed rounded-2xl px-4 py-10 sm:p-12 text-center cursor-pointer transition-all',
             dragOver
               ? 'border-brand-400 bg-brand-50'
               : 'border-ink-200 hover:border-brand-300 hover:bg-ink-50'
@@ -145,6 +145,15 @@ export default function ImportPage() {
           onDragOver={e => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
+          role="button"
+          tabIndex={0}
+          aria-label="Seleccionar archivo CSV para importar"
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              fileRef.current?.click()
+            }
+          }}
         >
           <Upload size={36} className={clsx('mx-auto mb-3', dragOver ? 'text-brand-500' : 'text-ink-300')} />
           <p className="font-semibold text-ink-700">Arrastra tu archivo CSV aquí</p>
@@ -162,20 +171,20 @@ export default function ImportPage() {
       {/* Vista previa */}
       {preview && !result && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
               <FileText size={16} className="text-brand-500" />
-              <span className="text-sm font-medium text-ink-700">{fileName}</span>
+              <span className="text-sm font-medium text-ink-700 break-all">{fileName}</span>
               <span className="badge badge-green">{preview.length} productos</span>
             </div>
-            <button onClick={handleReset} className="btn-ghost text-xs text-ink-400">
+            <button onClick={handleReset} className="btn-ghost min-h-11 text-xs text-ink-400 w-full sm:w-auto">
               <Trash2 size={13} /> Cambiar archivo
             </button>
           </div>
 
           {/* Tabla preview */}
           <div className="table-container max-h-72 overflow-y-auto">
-            <table className="table text-xs">
+            <table className="table text-xs min-w-[680px]">
               <thead>
                 <tr>
                   <th>#</th>
@@ -209,7 +218,7 @@ export default function ImportPage() {
           <button
             onClick={handleImport}
             disabled={importing}
-            className="btn-primary w-full justify-center"
+            className="btn-primary min-h-11 w-full justify-center"
           >
             {importing
               ? <><Loader2 size={16} className="animate-spin" /> Importando...</>
@@ -223,7 +232,7 @@ export default function ImportPage() {
       {result && (
         <div className="space-y-4">
           {/* Resumen */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 min-[430px]:grid-cols-3 gap-3">
             <div className="card p-4 text-center border-green-100 bg-green-50">
               <CheckCircle size={22} className="text-green-500 mx-auto mb-1" />
               <p className="text-2xl font-extrabold text-green-700">{result.created}</p>
@@ -255,7 +264,7 @@ export default function ImportPage() {
             </div>
           )}
 
-          <button onClick={handleReset} className="btn-ghost w-full justify-center">
+          <button onClick={handleReset} className="btn-ghost min-h-11 w-full justify-center">
             <Upload size={14} /> Importar otro archivo
           </button>
         </div>

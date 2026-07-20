@@ -114,22 +114,22 @@ export default function ReconciliationPage() {
       </div>
 
       {/* Stepper */}
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-2 text-sm overflow-x-auto overscroll-x-contain pb-2 -mb-2" aria-label="Progreso del conteo">
         {[
           { key: 'select', label: '1. Almacén'    },
           { key: 'count',  label: '2. Conteo'     },
           { key: 'review', label: '3. Revisión'   },
           { key: 'done',   label: '4. Completado' },
         ].map((s, i, arr) => (
-          <div key={s.key} className="flex items-center gap-2">
+          <div key={s.key} className="flex items-center gap-2 shrink-0">
             <span className={clsx(
-              'px-3 py-1 rounded-full font-semibold text-xs transition-all',
+              'px-3 py-2 rounded-full font-semibold text-xs transition-all whitespace-nowrap',
               step === s.key
                 ? 'bg-brand-500 text-white'
                 : ['done'].includes(step) || arr.findIndex(x => x.key === step) > i
                   ? 'bg-green-100 text-green-700'
                   : 'bg-ink-100 text-ink-400'
-            )}>
+            )} aria-current={step === s.key ? 'step' : undefined}>
               {s.label}
             </span>
             {i < arr.length - 1 && <ChevronRight size={14} className="text-ink-300 shrink-0" />}
@@ -184,7 +184,7 @@ export default function ReconciliationPage() {
       {/* Paso 2: Ingresar conteos físicos */}
       {step === 'count' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-bold text-ink-800">
               Conteo físico — <span className="text-brand-600">{whName}</span>
             </h2>
@@ -204,7 +204,7 @@ export default function ReconciliationPage() {
                 const diff = isNaN(physical) ? null : physical - row.system_qty
                 return (
                   <div key={row.product_id} className={clsx(
-                    'flex items-center gap-3 px-4 py-3',
+                    'grid grid-cols-[auto_minmax(0,1fr)] sm:grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3',
                     diff !== null && diff !== 0 && 'bg-yellow-50'
                   )}>
                     <ProductImage src={row.product_image} className="w-9 h-9 rounded-lg shrink-0" iconSize={13} />
@@ -221,7 +221,7 @@ export default function ReconciliationPage() {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="col-span-2 sm:col-span-1 flex items-center justify-end gap-2">
                       <input
                         type="number"
                         min="0"
@@ -250,8 +250,8 @@ export default function ReconciliationPage() {
           </div>
 
           <div className="flex gap-3">
-            <button onClick={reset} className="btn-secondary">Cancelar</button>
-            <button onClick={handleReview} className="btn-primary">
+            <button onClick={reset} className="btn-secondary flex-1 sm:flex-none justify-center">Cancelar</button>
+            <button onClick={handleReview} className="btn-primary flex-1 sm:flex-none justify-center">
               Ver discrepancias <ChevronRight size={14} />
             </button>
           </div>
@@ -261,7 +261,7 @@ export default function ReconciliationPage() {
       {/* Paso 3: Revisión de discrepancias */}
       {step === 'review' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-bold text-ink-800">Resumen de discrepancias</h2>
             <button onClick={() => setStep('count')} className="btn-ghost text-xs">
               ← Volver a contar
@@ -277,14 +277,14 @@ export default function ReconciliationPage() {
             </div>
           ) : (
             <>
-              <div className="card overflow-hidden">
+              <div className="card overflow-x-auto overscroll-x-contain">
                 <div className="px-4 py-2 bg-yellow-50 border-b border-yellow-100 flex items-center gap-2">
                   <AlertTriangle size={14} className="text-yellow-600" />
                   <span className="text-sm font-semibold text-yellow-700">
                     {discrepancies.length} discrepancia(s) encontrada(s)
                   </span>
                 </div>
-                <table className="table">
+                <table className="table min-w-[560px]">
                   <thead>
                     <tr>
                       <th>Producto</th>
@@ -329,8 +329,8 @@ export default function ReconciliationPage() {
               </div>
 
               <div className="flex gap-3">
-                <button onClick={() => setStep('count')} className="btn-secondary">Volver</button>
-                <button onClick={handleApply} disabled={applying} className="btn-primary">
+                <button onClick={() => setStep('count')} className="btn-secondary flex-1 sm:flex-none justify-center">Volver</button>
+                <button onClick={handleApply} disabled={applying} className="btn-primary flex-1 sm:flex-none justify-center">
                   {applying
                     ? <><Loader2 size={14} className="animate-spin" /> Aplicando...</>
                     : `Aplicar ${discrepancies.length} ajuste(s)`

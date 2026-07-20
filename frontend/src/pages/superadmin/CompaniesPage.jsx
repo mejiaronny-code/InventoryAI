@@ -16,7 +16,7 @@ function Modal({ open, onClose, title, children }) {
       <div className="modal-box">
         <div className="flex items-center justify-between p-6 border-b border-ink-100">
           <h3 className="text-lg font-bold text-ink-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
+          <button onClick={onClose} className="w-11 h-11 -my-2 -mr-2 rounded-xl hover:bg-ink-100 inline-flex items-center justify-center" aria-label="Cerrar diálogo"><X size={18} /></button>
         </div>
         <div className="p-6">{children}</div>
       </div>
@@ -381,7 +381,7 @@ function UsersModal({ company, onClose }) {
               ) : (
                 <div className="space-y-2">
                   {users.map(u => (
-                    <div key={u.id} className="flex items-center gap-3 p-3 rounded-xl bg-ink-50 border border-ink-100">
+                    <div key={u.id} className="grid grid-cols-[auto_minmax(0,1fr)] sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 p-3 rounded-xl bg-ink-50 border border-ink-100">
                       <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center shrink-0">
                         <span className="text-brand-600 font-bold text-sm">{(u.full_name || u.email || '?')[0].toUpperCase()}</span>
                       </div>
@@ -392,14 +392,15 @@ function UsersModal({ company, onClose }) {
                       <select
                         value={u.role}
                         onChange={e => handleRoleChange(u.id, e.target.value)}
-                        className="text-xs border border-ink-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:border-brand-400"
+                        className="col-span-1 sm:col-span-1 min-h-10 text-xs border border-ink-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:border-brand-400"
+                        aria-label={`Rol de ${u.full_name || u.email}`}
                       >
                         <option value="admin">Admin</option>
                         <option value="employee">Empleado</option>
                       </select>
                       <button
                         onClick={() => handleRemove(u.id)}
-                        className="text-xs text-red-500 hover:text-red-700 font-semibold px-2 py-1 rounded-lg hover:bg-red-50 shrink-0"
+                        className="min-h-10 text-xs text-red-500 hover:text-red-700 font-semibold px-3 py-1 rounded-lg hover:bg-red-50 shrink-0"
                       >
                         Quitar
                       </button>
@@ -407,7 +408,7 @@ function UsersModal({ company, onClose }) {
                   ))}
                 </div>
               )}
-              <div className="flex gap-2 pt-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
                 <button onClick={() => setView('assign')} className="btn-secondary flex-1 justify-center text-xs">
                   <Search size={14} /> Agregar existente
                 </button>
@@ -612,13 +613,13 @@ export default function SuperAdminCompaniesPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="page-title">Empresas</h1>
         <button onClick={() => setModal(true)} className="btn-primary"><Plus size={16} /> Nueva empresa</button>
       </div>
 
       <div className="table-container">
-        <table className="table">
+        <table className="table min-w-[1080px]">
           <thead>
             <tr>
               <th>Empresa</th>
@@ -632,6 +633,13 @@ export default function SuperAdminCompaniesPage() {
           <tbody>
             {loading ? (
               [...Array(4)].map((_, i) => <tr key={i}><td colSpan={6}><div className="h-8 bg-ink-100 rounded animate-pulse" /></td></tr>)
+            ) : companies.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="text-center py-14 text-ink-400">
+                  <Building2 size={34} className="mx-auto mb-2 opacity-30" />
+                  <p>No hay empresas registradas</p>
+                </td>
+              </tr>
             ) : companies.map(c => {
               const sub = c.subscriptions || {}
               return (
@@ -660,11 +668,12 @@ export default function SuperAdminCompaniesPage() {
                     </span>
                   </td>
                   <td>
-                    <div className="flex gap-2 items-center">
+                    <div className="flex gap-2 items-center whitespace-nowrap">
                       <select
                         defaultValue={sub.status}
                         onChange={e => handleSubUpdate(c.id, sub.plan || 'trial', e.target.value)}
-                        className="text-xs border border-ink-200 rounded-lg px-2 py-1.5 text-ink-700 bg-white focus:outline-none focus:border-brand-400"
+                        className="min-h-10 text-xs border border-ink-200 rounded-lg px-2 py-1.5 text-ink-700 bg-white focus:outline-none focus:border-brand-400"
+                        aria-label={`Estado de suscripción de ${c.name}`}
                       >
                         <option value="active">Activo</option>
                         <option value="trial">Trial</option>
@@ -673,21 +682,21 @@ export default function SuperAdminCompaniesPage() {
                       </select>
                       <button
                         onClick={() => setBusinessTarget(c)}
-                        className="btn-secondary text-xs px-3 py-1.5"
+                        className="btn-secondary min-h-10 text-xs px-3 py-1.5"
                         title="Tipo de negocio"
                       >
                         <Building2 size={13} /> Sector
                       </button>
                       <button
                         onClick={() => setUsersTarget(c)}
-                        className="btn-secondary text-xs px-3 py-1.5"
+                        className="btn-secondary min-h-10 text-xs px-3 py-1.5"
                       >
                         <Users size={13} /> Usuarios
                       </button>
                       {c.features?.public_catalog !== false && (
                         <button
                           onClick={() => setEmbedTarget(c)}
-                          className="btn-secondary text-xs px-3 py-1.5"
+                          className="btn-secondary min-h-10 text-xs px-3 py-1.5"
                           title="Código para incrustar el chat en su web"
                         >
                           <Code size={13} /> Código chat
@@ -695,7 +704,7 @@ export default function SuperAdminCompaniesPage() {
                       )}
                       <button
                         onClick={() => setDeleteTarget(c)}
-                        className="btn-danger text-xs px-3 py-1.5"
+                        className="btn-danger min-h-10 text-xs px-3 py-1.5"
                       >
                         Eliminar
                       </button>

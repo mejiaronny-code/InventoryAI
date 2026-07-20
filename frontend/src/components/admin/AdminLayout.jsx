@@ -174,6 +174,20 @@ export default function AdminLayout() {
   // Realtime: dispara una revisión inmediata (instantáneo cuando funciona)
   useRealtimeNotifications(user?.company_id, () => checkNotifications())
 
+  useEffect(() => {
+    if (!sidebarOpen) return undefined
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') setSidebarOpen(false)
+    }
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('keydown', handleEscape)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [sidebarOpen])
+
   const handleLogout = () => { logout(); navigate('/admin/login') }
 
   const filteredNav = navItems.filter(item => {
@@ -265,7 +279,7 @@ export default function AdminLayout() {
 
   return (
     <CompanyFeaturesProvider features={companyFeatures} businessType={companyBusinessType} currency={companyCurrency}>
-    <div className="flex h-screen bg-ink-50">
+    <div className="flex h-[100dvh] bg-ink-50">
       <ThemeProvider settings={companySettings} />
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex flex-col w-60 bg-white border-r border-ink-100 shrink-0">
@@ -275,11 +289,12 @@ export default function AdminLayout() {
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setSidebarOpen(false)} />
-          <aside className="relative w-64 h-full bg-white shadow-xl">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+          <aside id="admin-mobile-navigation" className="relative w-[min(18rem,85vw)] h-full bg-white shadow-xl" aria-label="Navegación del panel">
             <button
               onClick={() => setSidebarOpen(false)}
-              className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-ink-100"
+              className="absolute top-3 right-3 z-10 w-11 h-11 rounded-xl hover:bg-ink-100 inline-flex items-center justify-center"
+              aria-label="Cerrar navegación"
             >
               <X size={18} />
             </button>
@@ -292,7 +307,13 @@ export default function AdminLayout() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Mobile topbar */}
         <header className="lg:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-ink-100">
-          <button onClick={() => setSidebarOpen(true)} className="p-2 rounded-lg hover:bg-ink-100">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="w-11 h-11 -ml-2 rounded-xl hover:bg-ink-100 inline-flex items-center justify-center"
+            aria-label="Abrir navegación"
+            aria-expanded={sidebarOpen}
+            aria-controls="admin-mobile-navigation"
+          >
             <Menu size={20} />
           </button>
           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -308,7 +329,7 @@ export default function AdminLayout() {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-7">
           <Outlet />
         </main>
       </div>
@@ -317,7 +338,7 @@ export default function AdminLayout() {
       {companySlug && (
         <>
           {/* Badge "Vista previa" posicionado encima del FAB del ChatWidget */}
-          <div className="fixed bottom-[5.25rem] right-3 z-50 pointer-events-none">
+          <div className="fixed bottom-[5.25rem] right-3 z-50 pointer-events-none hidden sm:block">
             <span className="text-[10px] font-bold text-brand-600 bg-brand-50 border border-brand-200 px-2 py-0.5 rounded-full shadow-sm">
               Vista previa
             </span>

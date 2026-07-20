@@ -14,28 +14,13 @@ import {
 import clsx from 'clsx'
 import { format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
+import { Modal } from '../../components/ui'
 
 const STATUS_CONFIG = {
   in_stock:  { label: 'En stock',   badge: 'badge-green',  icon: CheckCircle2 },
   reserved:  { label: 'Reservado',  badge: 'badge-yellow', icon: Clock        },
   sold:      { label: 'Vendido',    badge: 'badge-orange', icon: PackageCheck },
   retired:   { label: 'Retirado',   badge: 'badge-gray',   icon: Archive      },
-}
-
-function Modal({ open, onClose, title, children }) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box max-w-md max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <h3 className="text-lg font-bold text-ink-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  )
 }
 
 export default function SerialsPage() {
@@ -151,7 +136,7 @@ export default function SerialsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="page-title">Números de serie</h1>
         {isAdmin && (
           <button onClick={() => setModal(true)} className="btn-primary">
@@ -171,7 +156,7 @@ export default function SerialsPage() {
             placeholder="SN-ABC-12345..."
             className="input flex-1 font-mono"
           />
-          <button onClick={handleSearch} disabled={searching} className="btn-primary px-4">
+          <button onClick={handleSearch} disabled={searching} className="btn-primary w-11 px-0 justify-center" aria-label="Buscar número de serie">
             {searching ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
           </button>
         </div>
@@ -190,21 +175,21 @@ export default function SerialsPage() {
       </div>
 
       {/* Filtros */}
-      <div className="flex flex-wrap gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_10rem] gap-3">
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Buscar serie..."
-            className="input pl-9 w-48 font-mono text-sm"
+            className="input pl-9 w-full font-mono text-sm"
           />
         </div>
-        <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} className="input w-48 text-sm">
+        <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} className="input w-full text-sm">
           <option value="">Todos los productos</option>
           {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="input w-40 text-sm">
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="input w-full text-sm">
           <option value="">Todos los estados</option>
           {Object.entries(STATUS_CONFIG).map(([k, v]) => (
             <option key={k} value={k}>{v.label}</option>
@@ -259,11 +244,11 @@ export default function SerialsPage() {
                   {isAdmin && (
                     <td>
                       <div className="flex items-center gap-1">
-                        <button onClick={() => setEditSerial(s)} className="btn-ghost p-2 text-ink-500" title="Cambiar estado">
+                        <button onClick={() => setEditSerial(s)} className="btn-ghost w-10 h-10 p-0 justify-center text-ink-500" title="Cambiar estado" aria-label={`Cambiar estado de ${s.serial_number}`}>
                           <Pencil size={13} />
                         </button>
                         {s.status === 'in_stock' && (
-                          <button onClick={() => handleDelete(s.id)} className="btn-ghost p-2 text-red-500 hover:bg-red-50" title="Eliminar">
+                          <button onClick={() => handleDelete(s.id)} className="btn-ghost w-10 h-10 p-0 justify-center text-red-500 hover:bg-red-50" title="Eliminar" aria-label={`Eliminar ${s.serial_number}`}>
                             <X size={13} />
                           </button>
                         )}

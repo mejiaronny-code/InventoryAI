@@ -159,15 +159,15 @@ export default function ReservationsPage() {
             {liveIndicator ? 'Nueva reserva' : 'En vivo'}
           </span>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={handleExpireAll} className="btn-ghost text-xs">
+        <div className="flex gap-2 flex-wrap w-full sm:w-auto">
+          <button onClick={handleExpireAll} className="btn-ghost min-h-11 text-xs flex-1 sm:flex-none">
             <Clock size={14} /> Expirar vencidas
           </button>
           {reservations.some(r => ['cancelled', 'expired', 'completed'].includes(r.status)) && (
             <button
               onClick={handleDeleteCancelled}
               disabled={deletingCancelled}
-              className="btn-danger text-xs"
+              className="btn-danger min-h-11 text-xs flex-1 sm:flex-none"
             >
               {deletingCancelled
                 ? <Loader2 size={14} className="animate-spin" />
@@ -176,30 +176,30 @@ export default function ReservationsPage() {
               Limpiar historial
             </button>
           )}
-          <button onClick={load} className="btn-ghost">
+          <button onClick={load} className="btn-ghost min-h-11 min-w-11" aria-label="Actualizar reservas">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
 
       {/* Search */}
-      <div className="relative max-w-sm">
+      <div className="relative w-full sm:max-w-sm">
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Código, cliente, email, producto..."
-          className="input pl-9 text-sm"
+          className="input min-h-11 pl-9 text-sm"
         />
       </div>
 
       {/* Status filter */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1">
         {[['', 'Todas'], ...Object.entries(statusConfig).map(([k, v]) => [k, v.label])].map(([val, label]) => (
           <button
             key={val}
             onClick={() => setStatusFilter(val)}
-            className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
+            className={clsx('badge min-h-11 shrink-0 cursor-pointer px-4 py-1.5 text-xs transition-all',
               statusFilter === val ? 'badge-orange' : 'badge-gray'
             )}
           >
@@ -209,7 +209,7 @@ export default function ReservationsPage() {
       </div>
 
       <div className="table-container">
-        <table className="table">
+        <table className="table min-w-[820px]">
           <thead>
             <tr>
               <th>Código</th>
@@ -241,7 +241,7 @@ export default function ReservationsPage() {
                   <td><span className="font-mono text-xs font-bold text-brand-600">{r.reservation_code}</span></td>
                   <td>
                     <p className="font-medium text-ink-900 text-sm">{r.client_name}</p>
-                    <p className="text-xs text-ink-400">{r.client_email}</p>
+                    <p className="text-xs text-ink-400 break-all">{r.client_email}</p>
                   </td>
                   <td className="text-sm text-ink-700">
                     <p>{r.products?.name || '—'}</p>
@@ -267,8 +267,9 @@ export default function ReservationsPage() {
                           <button
                             onClick={() => handleStatus(r.id, 'confirmed')}
                             disabled={isAnyUpdating(r.id)}
-                            className="btn-ghost p-1.5 text-green-600 hover:bg-green-50"
+                            className="btn-ghost min-h-10 min-w-10 p-1.5 text-green-600 hover:bg-green-50"
                             title="Confirmar"
+                            aria-label={`Confirmar reserva ${r.reservation_code}`}
                           >
                             {isUpdating(r.id, 'confirmed')
                               ? <Loader2 size={15} className="animate-spin" />
@@ -278,8 +279,9 @@ export default function ReservationsPage() {
                           <button
                             onClick={() => handleStatus(r.id, 'cancelled')}
                             disabled={isAnyUpdating(r.id)}
-                            className="btn-ghost p-1.5 text-red-500 hover:bg-red-50"
+                            className="btn-ghost min-h-10 min-w-10 p-1.5 text-red-500 hover:bg-red-50"
                             title="Cancelar"
+                            aria-label={`Cancelar reserva ${r.reservation_code}`}
                           >
                             {isUpdating(r.id, 'cancelled')
                               ? <Loader2 size={15} className="animate-spin" />
@@ -292,8 +294,9 @@ export default function ReservationsPage() {
                         <button
                           onClick={() => handleStatus(r.id, 'completed')}
                           disabled={isAnyUpdating(r.id)}
-                          className="btn-ghost p-1.5 text-brand-500 hover:bg-brand-50"
+                          className="btn-ghost min-h-10 min-w-10 p-1.5 text-brand-500 hover:bg-brand-50"
                           title="Marcar entregado"
+                          aria-label={`Marcar reserva ${r.reservation_code} como entregada`}
                         >
                           {isUpdating(r.id, 'completed')
                             ? <Loader2 size={15} className="animate-spin" />

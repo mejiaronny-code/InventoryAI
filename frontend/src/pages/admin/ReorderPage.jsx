@@ -13,28 +13,13 @@ import {
 import { format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
+import { Modal } from '../../components/ui'
 
 const STATUS_CFG = {
   pending:   { label: 'Pendiente',  color: 'badge-orange', icon: AlertTriangle },
   ordered:   { label: 'Pedido',     color: 'badge-gray',   icon: Truck         },
   received:  { label: 'Recibido',   color: 'badge-green',  icon: CheckCircle2  },
   cancelled: { label: 'Cancelado',  color: 'badge-gray',   icon: X             },
-}
-
-function Modal({ open, onClose, title, children }) {
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="modal-box max-w-md">
-        <div className="flex items-center justify-between p-6 border-b border-ink-100">
-          <h3 className="text-lg font-bold text-ink-900">{title}</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  )
 }
 
 export default function ReorderPage() {
@@ -138,7 +123,7 @@ export default function ReorderPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={load} className="btn-secondary"><RefreshCw size={14} /></button>
+          <button onClick={load} className="btn-secondary w-11 px-0 justify-center" aria-label="Actualizar solicitudes"><RefreshCw size={14} /></button>
           <button onClick={() => setModal(true)} className="btn-primary">
             <Plus size={14} /> Nueva solicitud
           </button>
@@ -167,13 +152,13 @@ export default function ReorderPage() {
       </div>
 
       {/* Filtros */}
-      <div className="flex gap-1 bg-ink-100 p-1 rounded-xl w-fit">
+      <div className="flex gap-1 bg-ink-100 p-1 rounded-xl w-full sm:w-fit overflow-x-auto">
         {[{ key: 'all', label: 'Todas' }, ...Object.entries(STATUS_CFG).map(([k, v]) => ({ key: k, label: v.label }))].map(s => (
           <button
             key={s.key}
             onClick={() => setStatusFilter(s.key)}
             className={clsx(
-              'px-3 py-1.5 rounded-lg text-xs font-semibold transition-all',
+              'min-h-11 px-3 py-2 rounded-lg text-xs font-semibold transition-all shrink-0',
               statusFilter === s.key ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500 hover:text-ink-700'
             )}
           >
@@ -184,7 +169,7 @@ export default function ReorderPage() {
 
       {/* Tabla */}
       <div className="table-container">
-        <table className="table">
+        <table className="table min-w-[980px]">
           <thead>
             <tr>
               <th>Producto</th>
@@ -255,7 +240,7 @@ export default function ReorderPage() {
                       {r.status === 'pending' && (
                         <button
                           onClick={() => handleStatus(r.id, 'ordered')}
-                          className="btn-ghost text-xs px-2 py-1 text-blue-600 hover:bg-blue-50"
+                          className="btn-ghost min-h-10 text-xs px-2 py-1 text-blue-600 hover:bg-blue-50"
                           title="Marcar como pedido"
                         >
                           <Truck size={12} /> Pedido
@@ -264,7 +249,7 @@ export default function ReorderPage() {
                       {r.status === 'ordered' && (
                         <button
                           onClick={() => handleStatus(r.id, 'received')}
-                          className="btn-ghost text-xs px-2 py-1 text-green-600 hover:bg-green-50"
+                          className="btn-ghost min-h-10 text-xs px-2 py-1 text-green-600 hover:bg-green-50"
                           title="Marcar como recibido"
                         >
                           <CheckCircle2 size={12} /> Recibido
@@ -273,7 +258,7 @@ export default function ReorderPage() {
                       {['pending', 'ordered'].includes(r.status) && (
                         <button
                           onClick={() => handleStatus(r.id, 'cancelled')}
-                          className="btn-ghost p-1.5 text-ink-400 hover:text-red-500"
+                          className="btn-ghost w-10 h-10 p-0 justify-center text-ink-400 hover:text-red-500"
                           title="Cancelar"
                         >
                           <X size={13} />
@@ -281,14 +266,14 @@ export default function ReorderPage() {
                       )}
                       <button
                         onClick={() => openEdit(r)}
-                        className="btn-ghost p-1.5 text-ink-400 hover:text-brand-600"
+                        className="btn-ghost w-10 h-10 p-0 justify-center text-ink-400 hover:text-brand-600"
                         title="Editar cantidad a pedir"
                       >
                         <Pencil size={13} />
                       </button>
                       <button
                         onClick={() => handleDelete(r.id)}
-                        className="btn-ghost p-1.5 text-red-400 hover:text-red-600"
+                        className="btn-ghost w-10 h-10 p-0 justify-center text-red-400 hover:text-red-600"
                         title="Eliminar"
                       >
                         <Trash2 size={13} />

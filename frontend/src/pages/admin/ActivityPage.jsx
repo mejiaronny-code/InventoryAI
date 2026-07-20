@@ -81,13 +81,13 @@ export default function ActivityPage() {
     <div className="space-y-5 animate-fade-in max-w-3xl">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="page-title">Actividad</h1>
-        <button onClick={load} className="btn-ghost">
+        <button onClick={load} className="btn-ghost min-h-11 min-w-11" aria-label="Actualizar actividad">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>
 
       {/* Filtros */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
         <Filter size={14} className="text-ink-400" />
         {[
           { key: 'all',   label: 'Todo' },
@@ -98,7 +98,7 @@ export default function ActivityPage() {
             key={key}
             onClick={() => setFilter(key)}
             className={clsx(
-              'badge cursor-pointer px-3 py-1.5 text-xs transition-all',
+              'badge min-h-11 shrink-0 cursor-pointer px-4 py-1.5 text-xs transition-all',
               filter === key ? 'badge-orange' : 'badge-gray'
             )}
           >
@@ -106,7 +106,7 @@ export default function ActivityPage() {
           </button>
         ))}
         {activities.length > 0 && (
-          <span className="text-xs text-ink-400 ml-auto">{filtered.length} registros</span>
+          <span className="text-xs text-ink-400 ml-auto whitespace-nowrap">{filtered.length} registros</span>
         )}
       </div>
 
@@ -147,7 +147,7 @@ export default function ActivityPage() {
                   return (
                     <div
                       key={item.id}
-                      className="flex items-start gap-3 p-3 rounded-xl hover:bg-ink-50 transition-colors group"
+                      className="flex items-start gap-3 p-3 sm:p-4 rounded-xl hover:bg-ink-50 transition-colors group"
                     >
                       {/* Icono */}
                       <div className={clsx('w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5', cfg.color)}>
@@ -160,7 +160,7 @@ export default function ActivityPage() {
                         {item.notes && (
                           <p className="text-xs text-ink-400 mt-0.5 truncate">{item.notes}</p>
                         )}
-                        <div className="flex items-center gap-2 mt-1">
+                        <div className="flex flex-wrap items-center gap-2 mt-1">
                           <span className={clsx('badge text-xs', categoryColor[item.category])}>
                             {categoryLabel[item.category]}
                           </span>

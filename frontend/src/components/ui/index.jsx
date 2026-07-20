@@ -4,28 +4,96 @@
  */
 import { X, AlertTriangle, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
 import clsx from 'clsx'
+import { useEffect, useId, useRef } from 'react'
 
 /* ── Modal genérico ───────────────────────────────────────── */
 export function Modal({ open, onClose, title, size = 'md', children }) {
+  const panelRef = useRef(null)
+  const onCloseRef = useRef(onClose)
+  const titleId = useId()
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    if (!open) return undefined
+
+    const previousActiveElement = document.activeElement
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const focusTimer = window.setTimeout(() => {
+      const firstFocusable = panelRef.current?.querySelector(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]'
+      )
+      ;(firstFocusable || panelRef.current)?.focus()
+    }, 0)
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+
+      if (event.key !== 'Tab' || !panelRef.current) return
+      const focusable = [...panelRef.current.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+      )]
+      if (focusable.length === 0) {
+        event.preventDefault()
+        panelRef.current.focus()
+        return
+      }
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.clearTimeout(focusTimer)
+      document.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = previousOverflow
+      previousActiveElement?.focus?.()
+    }
+  }, [open])
+
   if (!open) return null
   const sizeClass = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-2xl' }[size]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <div className={clsx(
         'relative bg-white rounded-2xl shadow-2xl w-full max-h-[90vh] overflow-y-auto animate-slide-up',
         sizeClass
-      )}>
+      )}
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        aria-label={title ? undefined : 'Diálogo'}
+        tabIndex={-1}
+      >
         {title && (
-          <div className="flex items-center justify-between px-6 py-4 border-b border-ink-100">
-            <h3 className="text-base font-bold text-ink-900">{title}</h3>
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-ink-100 text-ink-500">
+          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-ink-100 bg-white">
+            <h3 id={titleId} className="text-base font-bold text-ink-900">{title}</h3>
+            <button
+              onClick={onClose}
+              className="w-10 h-10 -my-2 -mr-2 rounded-lg hover:bg-ink-100 text-ink-500 inline-flex items-center justify-center"
+              aria-label="Cerrar diálogo"
+            >
               <X size={17} />
             </button>
           </div>
         )}
-        <div className="p-6">{children}</div>
+        <div className="p-4 sm:p-6">{children}</div>
       </div>
     </div>
   )
@@ -47,7 +115,7 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, message, danger
           <p className="font-bold text-ink-900">{title}</p>
           {message && <p className="text-sm text-ink-500 mt-1">{message}</p>}
         </div>
-        <div className="flex gap-3 w-full">
+        <div className="grid grid-cols-2 gap-3 w-full">
           <button onClick={onClose} className="btn-secondary flex-1 justify-center">Cancelar</button>
           <button
             onClick={() => { onConfirm(); onClose() }}
@@ -74,7 +142,7 @@ export function Spinner({ size = 20, className = '' }) {
 /* ── Page loader ──────────────────────────────────────────── */
 export function PageLoader() {
   return (
-    <div className="flex items-center justify-center h-48 gap-3 text-ink-400">
+    <div className="flex items-center justify-center min-h-48 gap-3 text-ink-400" role="status" aria-live="polite">
       <Spinner size={22} />
       <span className="text-sm">Cargando...</span>
     </div>
@@ -84,7 +152,7 @@ export function PageLoader() {
 /* ── Empty state ──────────────────────────────────────────── */
 export function EmptyState({ icon: Icon, title, description, action }) {
   return (
-    <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
+    <div className="flex flex-col items-center justify-center py-12 sm:py-20 px-4 text-center gap-3">
       {Icon && <Icon size={44} className="text-ink-200" />}
       <p className="font-semibold text-ink-600">{title}</p>
       {description && <p className="text-sm text-ink-400 max-w-xs">{description}</p>}
@@ -101,7 +169,8 @@ export function Pagination({ page, totalPages, onPage }) {
       <button
         onClick={() => onPage(page - 1)}
         disabled={page <= 1}
-        className="btn-ghost p-2 disabled:opacity-40"
+        className="btn-ghost w-11 h-11 p-0 justify-center disabled:opacity-40"
+        aria-label="Página anterior"
       >
         <ChevronLeft size={16} />
       </button>
@@ -111,7 +180,8 @@ export function Pagination({ page, totalPages, onPage }) {
       <button
         onClick={() => onPage(page + 1)}
         disabled={page >= totalPages}
-        className="btn-ghost p-2 disabled:opacity-40"
+        className="btn-ghost w-11 h-11 p-0 justify-center disabled:opacity-40"
+        aria-label="Página siguiente"
       >
         <ChevronRight size={16} />
       </button>

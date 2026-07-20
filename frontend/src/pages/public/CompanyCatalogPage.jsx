@@ -47,17 +47,21 @@ function ImageCarousel({ images, alt, height = 'h-44' }) {
       <img src={imgs[idx]} alt={alt} className="w-full h-full object-contain p-2 transition-opacity duration-200" />
       {imgs.length > 1 && (
         <>
-          <button onClick={prev} className="absolute left-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={prev} className="absolute left-1 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-black/50 text-white flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" aria-label="Imagen anterior">
             <ChevronLeft size={15} />
           </button>
-          <button onClick={next} className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={next} className="absolute right-1 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-black/50 text-white flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" aria-label="Imagen siguiente">
             <ChevronRight size={15} />
           </button>
           <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5">
             {imgs.map((_, i) => (
               <button key={i} onClick={(e) => { e.stopPropagation(); setIdx(i) }}
-                className={clsx('w-1.5 h-1.5 rounded-full transition-all', i === idx ? 'bg-white scale-125' : 'bg-white/50')}
-              />
+                className="w-6 h-6 rounded-full inline-flex items-center justify-center"
+                aria-label={`Ver imagen ${i + 1}`}
+                aria-current={i === idx}
+              >
+                <span className={clsx('w-1.5 h-1.5 rounded-full transition-all', i === idx ? 'bg-white scale-125' : 'bg-white/50')} />
+              </button>
             ))}
           </div>
         </>
@@ -172,15 +176,20 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
   // Cerrar con Escape
   useEffect(() => {
     const handler = (e) => { if (e.key === 'Escape') onClose() }
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
     window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    return () => {
+      window.removeEventListener('keydown', handler)
+      document.body.style.overflow = previousOverflow
+    }
   }, [onClose])
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
 
-      <div className="relative w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[95vh] sm:max-h-[90vh] overflow-hidden">
+      <div className="relative w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[95dvh] sm:max-h-[90dvh] overflow-hidden" role="dialog" aria-modal="true" aria-label={`Detalle de ${product.name}`}>
 
         {/* Handle móvil */}
         <div className="sm:hidden flex justify-center pt-3 pb-1 shrink-0">
@@ -189,7 +198,8 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
 
         {/* Botón cerrar */}
         <button onClick={onClose}
-          className="absolute top-4 right-4 z-10 w-8 h-8 rounded-full bg-black/10 hover:bg-black/20 flex items-center justify-center transition-colors">
+          className="absolute top-3 right-3 z-10 w-11 h-11 rounded-full bg-black/10 hover:bg-black/20 flex items-center justify-center transition-colors"
+          aria-label="Cerrar detalle">
           <X size={16} />
         </button>
 
@@ -672,6 +682,19 @@ function BookingModal({ companySlug, dishes, formatPrice, allowDineIn = true, al
     }).catch(() => {})
   }, [companySlug])
 
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('keydown', handleEscape)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [onClose])
+
   const addDish = (dishId) => {
     if (!dishId) return
     setPreorder(prev => {
@@ -715,11 +738,11 @@ function BookingModal({ companySlug, dishes, formatPrice, allowDineIn = true, al
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[92vh] overflow-y-auto">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div className="relative bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[92dvh] overflow-y-auto" role="dialog" aria-modal="true" aria-label="Reservar">
         <div className="sticky top-0 bg-white flex items-center justify-between p-5 border-b border-ink-100">
           <h3 className="text-lg font-bold text-ink-900">Reservar</h3>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-ink-100"><X size={18} /></button>
+          <button onClick={onClose} className="w-11 h-11 -my-2 -mr-2 rounded-xl hover:bg-ink-100 inline-flex items-center justify-center" aria-label="Cerrar reserva"><X size={18} /></button>
         </div>
 
         {code ? (
@@ -749,7 +772,7 @@ function BookingModal({ companySlug, dishes, formatPrice, allowDineIn = true, al
             )}
 
             {/* Fecha y hora */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Fecha</label>
                 <input type="date" value={form.reserved_date} onChange={e => setForm(f => ({ ...f, reserved_date: e.target.value }))} className="input" />
@@ -762,7 +785,7 @@ function BookingModal({ companySlug, dishes, formatPrice, allowDineIn = true, al
 
             {/* Personas + zona (solo comer aquí) */}
             {serviceType === 'dine_in' && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Personas</label>
                   <input type="number" min="1" value={form.party_size} onChange={e => setForm(f => ({ ...f, party_size: e.target.value }))} className="input" />
@@ -792,9 +815,9 @@ function BookingModal({ companySlug, dishes, formatPrice, allowDineIn = true, al
               <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Nombre *</label>
               <input value={form.client_name} onChange={e => setForm(f => ({ ...f, client_name: e.target.value }))} className="input" placeholder="Tu nombre" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <input value={form.client_phone} onChange={e => setForm(f => ({ ...f, client_phone: e.target.value }))} className="input" placeholder="Teléfono *" />
-              <input value={form.client_email} onChange={e => setForm(f => ({ ...f, client_email: e.target.value }))} className="input" placeholder="Email" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input value={form.client_phone} onChange={e => setForm(f => ({ ...f, client_phone: e.target.value }))} className="input" placeholder="Teléfono *" aria-label="Teléfono de contacto" />
+              <input value={form.client_email} onChange={e => setForm(f => ({ ...f, client_email: e.target.value }))} className="input" placeholder="Email" aria-label="Email de contacto" />
             </div>
             <p className="text-[11px] text-ink-400 -mt-2">Pon al menos un teléfono o email de contacto.</p>
 
@@ -810,9 +833,9 @@ function BookingModal({ companySlug, dishes, formatPrice, allowDineIn = true, al
                       <span className="text-sm text-ink-700 flex-1">{dish?.name}</span>
                       <span className="text-xs text-ink-400">{formatPrice ? formatPrice(dish?.price) : dish?.price}</span>
                       <div className="flex items-center gap-1.5">
-                        <button onClick={() => setQty(p.dish_id, p.quantity - 1)} className="w-6 h-6 rounded-lg bg-ink-100 flex items-center justify-center"><Minus size={12} /></button>
+                        <button onClick={() => setQty(p.dish_id, p.quantity - 1)} className="w-11 h-11 rounded-lg bg-ink-100 flex items-center justify-center" aria-label={`Reducir cantidad de ${dish?.name}`}><Minus size={12} /></button>
                         <span className="text-sm font-semibold w-5 text-center">{p.quantity}</span>
-                        <button onClick={() => setQty(p.dish_id, p.quantity + 1)} className="w-6 h-6 rounded-lg bg-ink-100 flex items-center justify-center"><Plus size={12} /></button>
+                        <button onClick={() => setQty(p.dish_id, p.quantity + 1)} className="w-11 h-11 rounded-lg bg-ink-100 flex items-center justify-center" aria-label={`Aumentar cantidad de ${dish?.name}`}><Plus size={12} /></button>
                       </div>
                     </div>
                   )
@@ -842,6 +865,15 @@ function ProductCard({ product, variants = [], formatPrice, showStock, onOpen })
     <div
       className="card-hover p-4 flex flex-col gap-3 cursor-pointer"
       onClick={() => onOpen(product)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpen(product)
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Ver detalle de ${product.name}`}
     >
       <ImageCarousel images={imgs} alt={product.name} height="h-36" />
 
@@ -976,7 +1008,7 @@ export default function CompanyCatalogPage() {
       {/* Header */}
       <header className="bg-white border-b border-ink-100 sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-2.5 sm:py-4 flex items-center gap-2 sm:gap-4">
-          <button onClick={() => navigate('/')} className="btn-ghost p-2 shrink-0">
+          <button onClick={() => navigate('/')} className="btn-ghost w-11 h-11 p-0 justify-center shrink-0" aria-label="Volver al inicio">
             <ChevronLeft size={18} />
           </button>
           {company?.logo_url ? (
@@ -995,7 +1027,7 @@ export default function CompanyCatalogPage() {
           {(company?.features?.table_reservations || company?.features?.pickup_orders) && (
             <button
               onClick={() => setBookingOpen(true)}
-              className="flex items-center gap-1.5 text-xs font-semibold text-white bg-brand-500 px-3 py-1.5 rounded-full hover:bg-brand-600 transition-colors shrink-0"
+              className="min-h-11 flex items-center gap-1.5 text-xs font-semibold text-white bg-brand-500 px-3 py-2 rounded-full hover:bg-brand-600 transition-colors shrink-0"
             >
               <CalendarClock size={13} />
               {company?.features?.table_reservations ? 'Reservar' : 'Ordenar'}
@@ -1004,7 +1036,7 @@ export default function CompanyCatalogPage() {
           <button
             onClick={() => navigate(`/${companySlug}/mis-reservas`)}
             title="Mis reservas"
-            className="flex items-center gap-1.5 text-xs text-brand-600 bg-brand-50 px-3 py-1.5 rounded-full border border-brand-100 hover:bg-brand-100 transition-colors shrink-0"
+            className="min-h-11 flex items-center gap-1.5 text-xs text-brand-600 bg-brand-50 px-3 py-2 rounded-full border border-brand-100 hover:bg-brand-100 transition-colors shrink-0"
           >
             <ShoppingBag size={13} />
             <span className="hidden sm:inline">Mis reservas</span>
@@ -1028,7 +1060,7 @@ export default function CompanyCatalogPage() {
             <div className="flex gap-2 flex-wrap">
               <button
                 onClick={() => setSelectedCat(null)}
-                className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
+                className={clsx('badge cursor-pointer min-h-11 px-3 py-2 text-xs transition-all',
                   !selectedCat ? 'bg-brand-500 text-white border-brand-500' : 'badge-gray hover:bg-brand-50 hover:text-brand-600 hover:border-brand-200')}
               >
                 Todos
@@ -1036,7 +1068,7 @@ export default function CompanyCatalogPage() {
               {categories.map(cat => (
                 <button key={cat.id}
                   onClick={() => setSelectedCat(cat.id === selectedCat ? null : cat.id)}
-                  className={clsx('badge cursor-pointer px-3 py-1.5 text-xs transition-all',
+                  className={clsx('badge cursor-pointer min-h-11 px-3 py-2 text-xs transition-all',
                     selectedCat === cat.id ? 'bg-brand-500 text-white border-brand-500' : 'badge-gray hover:bg-brand-50 hover:text-brand-600 hover:border-brand-200')}
                 >
                   {cat.name}
@@ -1050,7 +1082,7 @@ export default function CompanyCatalogPage() {
               {allTags.map(tag => (
                 <button key={tag}
                   onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
-                  className={clsx('inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all cursor-pointer',
+                  className={clsx('inline-flex items-center gap-1 min-h-11 px-2.5 py-2 rounded-lg text-xs font-medium border transition-all cursor-pointer',
                     selectedTag === tag
                       ? 'bg-brand-500 text-white border-brand-500'
                       : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300 hover:text-brand-600'
@@ -1065,7 +1097,7 @@ export default function CompanyCatalogPage() {
 
         {/* Grid de productos */}
         {loading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
             {[...Array(8)].map((_, i) => (
               <div key={i} className="card p-5 animate-pulse">
                 <div className="h-36 bg-ink-100 rounded-xl mb-3" />
@@ -1081,7 +1113,7 @@ export default function CompanyCatalogPage() {
             <p className="text-ink-400 text-sm mt-1">Prueba con el chat IA para encontrar lo que buscas 💬</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
             {filtered.map(p => (
               <ProductCard
                 key={p.id}

@@ -27,7 +27,7 @@ function StatCard({ icon: Icon, label, value, sub, accent = false }) {
     <div className={clsx('stat-card', accent && 'border-brand-200 bg-gradient-to-br from-brand-50 to-white')}>
       <div className={clsx(
         'w-10 h-10 rounded-xl flex items-center justify-center mb-3',
-        accent ? 'bg-brand-500 text-white shadow-glow' : 'bg-ink-100 text-ink-500'
+        accent ? 'bg-brand-500 text-[var(--brand-contrast)] shadow-glow' : 'bg-ink-100 text-ink-500'
       )}>
         <Icon size={20} />
       </div>
@@ -70,14 +70,14 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="page-title">Dashboard</h1>
           <p className="text-ink-500 text-sm mt-0.5">
-            Bienvenido, <span className="font-semibold text-ink-700">{user?.full_name || user?.email}</span>
+            Bienvenido, <span className="font-semibold text-ink-700 break-all">{user?.full_name || user?.email}</span>
           </p>
         </div>
-        <button onClick={load} className="btn-ghost" disabled={loading}>
+        <button onClick={load} className="btn-ghost min-h-11 w-full sm:w-auto" disabled={loading}>
           <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           Actualizar
         </button>
@@ -108,7 +108,7 @@ export default function DashboardPage() {
           {/* Widget: Productos por vencer */}
           {hasFeature('expiration_dates') && expiring.length > 0 && (
             <div className="card border-yellow-200 bg-yellow-50/40">
-              <div className="p-5 border-b border-yellow-100 flex items-center gap-2">
+              <div className="p-4 sm:p-5 border-b border-yellow-100 flex items-start sm:items-center gap-2">
                 <CalendarX2 size={17} className="text-yellow-500" />
                 <h2 className="section-title text-yellow-700">Productos por vencer (próximos 30 días)</h2>
               </div>
@@ -118,7 +118,7 @@ export default function DashboardPage() {
                   const urgent = daysLeft <= 3
                   const warn = daysLeft <= 7
                   return (
-                    <div key={i} className="px-5 py-3 flex items-center gap-3">
+                    <div key={i} className="px-4 sm:px-5 py-3 grid grid-cols-[auto_minmax(0,1fr)] sm:grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
                       <div className={clsx(
                         'w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0',
                         urgent ? 'bg-red-100 text-red-600' : warn ? 'bg-yellow-100 text-yellow-600' : 'bg-green-100 text-green-600'
@@ -129,7 +129,7 @@ export default function DashboardPage() {
                         <p className="font-semibold text-ink-900 text-sm truncate">{item.product_name}</p>
                         <p className="text-xs text-ink-400">{item.warehouse_name} · {item.quantity} {item.unit}</p>
                       </div>
-                      <span className="text-xs text-ink-500 shrink-0">
+                      <span className="col-start-2 sm:col-start-auto text-xs text-ink-500 sm:text-right">
                         {format(parseISO(item.nearest_expiry), 'd MMM yyyy', { locale: es })}
                       </span>
                     </div>
@@ -143,14 +143,14 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Recent reservations */}
             <div className="card">
-              <div className="p-5 border-b border-ink-100 flex items-center justify-between">
+              <div className="p-4 sm:p-5 border-b border-ink-100 flex items-center justify-between gap-3">
                 <h2 className="section-title flex items-center gap-2">
                   <CalendarCheck size={17} className="text-brand-500" />
                   Reservas recientes
                 </h2>
                 <a
                   href={(hasFeature('table_reservations') || hasFeature('pickup_orders')) ? '/admin/bookings' : '/admin/reservations'}
-                  className="text-xs text-brand-500 font-semibold hover:text-brand-600 flex items-center gap-1"
+                  className="min-h-11 -my-2 px-2 text-xs text-brand-500 font-semibold hover:text-brand-600 flex items-center gap-1 shrink-0"
                 >
                   Ver todas <ArrowRight size={12} />
                 </a>
@@ -159,7 +159,7 @@ export default function DashboardPage() {
                 {data.recent_reservations.length === 0 ? (
                   <p className="text-center text-ink-400 text-sm py-8">Sin reservas</p>
                 ) : data.recent_reservations.map(r => (
-                  <div key={r.reservation_code || r.id} className="px-5 py-3.5 flex items-center gap-3">
+                  <div key={r.reservation_code || r.id} className="px-4 sm:px-5 py-3.5 flex items-center gap-3">
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-ink-900 text-sm truncate">
                         {r.client_name}
@@ -178,12 +178,12 @@ export default function DashboardPage() {
 
             {/* Notifications */}
             <div className="card">
-              <div className="p-5 border-b border-ink-100 flex items-center justify-between">
+              <div className="p-4 sm:p-5 border-b border-ink-100 flex items-center justify-between gap-3">
                 <h2 className="section-title flex items-center gap-2">
                   <Bell size={17} className="text-brand-500" />
                   Notificaciones
                 </h2>
-                <a href="/admin/notifications" className="text-xs text-brand-500 font-semibold hover:text-brand-600 flex items-center gap-1">
+                <a href="/admin/notifications" className="min-h-11 -my-2 px-2 text-xs text-brand-500 font-semibold hover:text-brand-600 flex items-center gap-1 shrink-0">
                   Ver todas <ArrowRight size={12} />
                 </a>
               </div>
@@ -191,7 +191,7 @@ export default function DashboardPage() {
                 {data.recent_notifications.length === 0 ? (
                   <p className="text-center text-ink-400 text-sm py-8">Sin notificaciones</p>
                 ) : data.recent_notifications.map(n => (
-                  <div key={n.id} className="px-5 py-3.5">
+                  <div key={n.id} className="px-4 sm:px-5 py-3.5">
                     <p className="text-sm text-ink-800">{n.message}</p>
                     <p className="text-xs text-ink-400 mt-0.5">
                       {format(new Date(n.created_at), "d MMM · HH:mm", { locale: es })}

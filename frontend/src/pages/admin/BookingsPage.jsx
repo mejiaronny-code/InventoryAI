@@ -100,14 +100,14 @@ export default function BookingsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="page-title">Reservas</h1>
-        <div className="flex gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center w-full sm:w-auto">
           {[{ v: 'upcoming', l: 'Próximas' }, { v: 'all', l: 'Todas' }].map(({ v, l }) => (
             <button
               key={v}
               onClick={() => setFilter(v)}
-              className={clsx('px-3 py-1.5 rounded-lg text-sm font-medium border transition-all',
+              className={clsx('min-h-11 px-3 py-2 rounded-lg text-sm font-medium border transition-all flex-1 sm:flex-none',
                 filter === v ? 'bg-brand-500 text-white border-brand-500' : 'bg-white text-ink-600 border-ink-200 hover:border-brand-300')}
             >
               {l}
@@ -117,7 +117,7 @@ export default function BookingsPage() {
             <button
               onClick={cleanup}
               title="Eliminar reservas completadas, canceladas y no-show"
-              className="px-3 py-1.5 rounded-lg text-sm font-medium border border-ink-200 text-ink-500 hover:border-red-300 hover:text-red-600 transition-all flex items-center gap-1.5"
+              className="min-h-11 px-3 py-2 rounded-lg text-sm font-medium border border-ink-200 text-ink-500 hover:border-red-300 hover:text-red-600 transition-all flex items-center justify-center gap-1.5 w-full sm:w-auto"
             >
               <Trash2 size={14} /> Limpiar terminadas
             </button>
@@ -154,7 +154,7 @@ export default function BookingsPage() {
                   return (
                     <div key={b.id} className="card p-4">
                       <div className="flex items-start justify-between gap-3 flex-wrap">
-                        <div className="flex items-start gap-3">
+                        <div className="flex items-start gap-3 min-w-0 flex-1">
                           <div className="text-center shrink-0">
                             <p className="text-lg font-extrabold text-brand-600 leading-none">
                               {format(parseISO(b.reserved_at), 'HH:mm')}
@@ -165,7 +165,7 @@ export default function BookingsPage() {
                                 : <><Utensils size={9} /> Mesa</>}
                             </p>
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <p className="font-bold text-ink-900 text-sm">{b.client_name}</p>
                             <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-500 mt-0.5">
                               {b.service_type === 'dine_in' && b.party_size && (
@@ -178,7 +178,7 @@ export default function BookingsPage() {
                                 <span className="flex items-center gap-1"><Phone size={11} /> {b.client_phone}</span>
                               )}
                               {b.client_email && (
-                                <span className="flex items-center gap-1"><Mail size={11} /> {b.client_email}</span>
+                                <span className="flex items-center gap-1 break-all"><Mail size={11} className="shrink-0" /> {b.client_email}</span>
                               )}
                             </div>
                             <p className="text-[10px] text-ink-400 font-mono mt-1">Código: {b.code}</p>
@@ -194,15 +194,15 @@ export default function BookingsPage() {
                             {b.notes && <p className="text-xs text-ink-400 mt-1 italic">"{b.notes}"</p>}
                           </div>
                         </div>
-                        <div className="flex flex-col items-end gap-2">
+                        <div className="flex flex-col items-stretch sm:items-end gap-2 w-full sm:w-auto">
                           <span className={clsx('badge text-xs', st.cls)}>{st.label}</span>
-                          <div className="flex gap-1.5">
+                          <div className="flex flex-wrap gap-1.5">
                             {nextActions(b).map(a => (
                               <button
                                 key={a.to}
                                 onClick={() => changeStatus(b, a.to)}
                                 disabled={busy === b.id}
-                                className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50"
+                                className="min-h-10 px-3 py-1 rounded-lg text-xs font-semibold bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50 flex-1 sm:flex-none"
                               >
                                 {busy === b.id ? <Loader2 size={12} className="animate-spin" /> : a.label}
                               </button>
@@ -212,7 +212,8 @@ export default function BookingsPage() {
                                 onClick={() => changeStatus(b, 'cancelled')}
                                 disabled={busy === b.id}
                                 title="Cancelar"
-                                className="px-2 py-1 rounded-lg text-xs font-semibold bg-ink-100 text-ink-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                                className="w-10 h-10 rounded-lg text-xs font-semibold bg-ink-100 text-ink-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 inline-flex items-center justify-center"
+                                aria-label="Cancelar reserva"
                               >
                                 <X size={12} />
                               </button>
