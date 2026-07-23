@@ -700,6 +700,26 @@ def create_inventory_tools(
         if not client_email or "@" not in client_email:
             return "Error: Se requiere un correo electrónico válido del cliente. Pídelo antes de continuar."
         try:
+            # Guard de aislamiento multi-tenant: product_id/warehouse_id vienen del
+            # modelo (herramienta expuesta al chat) y podrían apuntar a otra empresa.
+            # Sin esto, un UUID ajeno permitiría crear una reserva cruzando tenants o
+            # leer disponibilidad de stock de otra empresa.
+            product_company_q = await _exec(supabase_client.table("products")
+                .select("id")
+                .eq("id", product_id)
+                .eq("company_id", company_id)
+                .maybe_single())
+            if not (product_company_q and product_company_q.data):
+                return "Error: Producto no encontrado."
+
+            warehouse_company_q = await _exec(supabase_client.table("warehouses")
+                .select("id")
+                .eq("id", warehouse_id)
+                .eq("company_id", company_id)
+                .maybe_single())
+            if not (warehouse_company_q and warehouse_company_q.data):
+                return "Error: Almacén no encontrado."
+
             # Verificar stock disponible, reservas activas y datos del producto
             # en paralelo — ninguna depende del resultado de otra.
             stock_q, reservas_activas, product_res = await asyncio.gather(
@@ -712,10 +732,12 @@ def create_inventory_tools(
                     .select("quantity")
                     .eq("product_id", product_id)
                     .eq("warehouse_id", warehouse_id)
+                    .eq("company_id", company_id)
                     .in_("status", ["pending", "confirmed"])),
                 _exec(supabase_client.table("products")
                     .select("reservation_time_hours, name, categories(reservation_time_hours)")
                     .eq("id", product_id)
+                    .eq("company_id", company_id)
                     .single()),
             )
 

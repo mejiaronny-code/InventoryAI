@@ -12,7 +12,7 @@ import {
   Search, Package, Tag, ChevronLeft, ChevronRight,
   ShoppingBag, Zap, X, ShoppingCart, CheckCircle2,
   Loader2, Phone, Mail, User, Hash, FileText, Minus, Plus, MapPin,
-  CalendarClock, Utensils, Users
+  CalendarClock, Utensils, Users, RefreshCw
 } from 'lucide-react'
 import clsx from 'clsx'
 import { CURRENCIES } from '../../context/CompanyFeaturesContext'
@@ -28,6 +28,27 @@ function buildFormatPrice(currencyCode) {
       maximumFractionDigits: decimals,
     })}`
   }
+}
+
+const PUBLIC_PRODUCTS_PAGE_SIZE = 200 // máximo permitido por el backend (products.py: le=200)
+const PUBLIC_PRODUCTS_MAX_PAGES = 50  // tope de seguridad: 10,000 productos
+
+/**
+ * Trae TODO el catálogo público paginando en el backend (limit/offset),
+ * porque el catálogo filtra búsqueda/categoría/tag en memoria sobre el
+ * array completo — una sola página se quedaría corta a partir del
+ * producto #201 (o #51 antes de este fix).
+ */
+async function fetchAllPublicProducts(companySlug) {
+  const all = []
+  let offset = 0
+  for (let page = 0; page < PUBLIC_PRODUCTS_MAX_PAGES; page++) {
+    const res = await productsAPI.listPublic(companySlug, { limit: PUBLIC_PRODUCTS_PAGE_SIZE, offset })
+    all.push(...res.data)
+    if (res.data.length < PUBLIC_PRODUCTS_PAGE_SIZE) break
+    offset += PUBLIC_PRODUCTS_PAGE_SIZE
+  }
+  return all
 }
 
 /* ── Carrusel de imágenes ─────────────────────────────────────────── */
@@ -940,6 +961,7 @@ export default function CompanyCatalogPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const [catalogDisabled, setCatalogDisabled] = useState(false)
   const [detailProduct, setDetailProduct] = useState(null)
   const [bookingOpen, setBookingOpen] = useState(false)
@@ -947,15 +969,24 @@ export default function CompanyCatalogPage() {
   const formatPrice = buildFormatPrice(company?.settings?.currency || 'USD')
   const showStock = company?.settings?.show_stock ?? true
 
-  useEffect(() => {
+  const loadCatalog = () => {
+    setLoading(true)
+    setLoadError(false)
+    // El catálogo filtra (búsqueda/categoría/tag) en memoria sobre este array,
+    // así que hace falta TODO el catálogo, no solo la primera página — antes
+    // se pedía sin limit/offset (tope fijo de 50 del backend) y un producto
+    // #51 en adelante desaparecía sin aviso, junto con sus tags/variantes.
     Promise.all([
-      productsAPI.listPublic(companySlug, {}),
+      fetchAllPublicProducts(companySlug),
       categoriesAPI.listPublic(companySlug),
-    ]).then(([prodRes, catRes]) => {
-      setProducts(prodRes.data)
+    ]).then(([allProducts, catRes]) => {
+      setProducts(allProducts)
       setCategories(catRes.data)
-    }).catch(() => setNotFound(true))
-    .finally(() => setLoading(false))
+    })
+      // Antes esto se confundía con "empresa no encontrada" (404) — un fallo
+      // de red o un 500 del backend no significa que la empresa no exista.
+      .catch(() => setLoadError(true))
+      .finally(() => setLoading(false))
 
     companiesAPI.listPublic()
       .then(r => {
@@ -964,7 +995,10 @@ export default function CompanyCatalogPage() {
         if (!found) setNotFound(true)
         else if (found.features?.public_catalog === false) setCatalogDisabled(true)
       })
-  }, [companySlug])
+      .catch(() => setLoadError(true))
+  }
+
+  useEffect(() => { loadCatalog() }, [companySlug])
 
   const allTags = [...new Set(products.flatMap(p => p.tags || []))].sort()
 
@@ -983,6 +1017,17 @@ export default function CompanyCatalogPage() {
     }
     return acc
   }, {})
+
+  if (loadError && !loading) return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-ink-50 text-center px-4">
+      <Package size={56} className="text-ink-300" />
+      <h2 className="text-xl font-bold text-ink-700">No pudimos cargar el catálogo</h2>
+      <p className="text-ink-500 max-w-sm">Puede ser un problema temporal de conexión. Intenta de nuevo.</p>
+      <button onClick={loadCatalog} className="btn-primary inline-flex items-center gap-2">
+        <RefreshCw size={16} /> Reintentar
+      </button>
+    </div>
+  )
 
   if (notFound) return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-ink-50">

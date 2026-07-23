@@ -584,7 +584,7 @@ export default function StockPage() {
   const [movementSearch, setMovementSearch] = useState('')
   const [movementDateFrom, setMovementDateFrom] = useState('')
   const [movementDateTo, setMovementDateTo] = useState('')
-  const [form, setForm] = useState({ product_id: '', warehouse_id: '', type: 'entrada', quantity: 1, notes: '', expires_at: '', batch_code: '' })
+  const [form, setForm] = useState({ product_id: '', warehouse_id: '', to_warehouse_id: '', type: 'entrada', quantity: 1, notes: '', expires_at: '', batch_code: '' })
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('current')
@@ -603,7 +603,11 @@ export default function StockPage() {
     setLoading(true)
     const calls = [
       stockAPI.listMovements(),
-      productsAPI.list(),
+      // limit=200 (máximo del backend): el selector de producto del modal de
+      // movimientos necesita ver el catálogo completo, no solo los primeros
+      // 50 — si no, un producto #51+ no se podía seleccionar para registrar
+      // entradas/salidas/transferencias.
+      productsAPI.list({ limit: 200 }),
       warehousesAPI.list(),
     ]
     if (hasFeature('batch_tracking')) calls.push(batchesAPI.list({ include_empty: false }))
@@ -667,6 +671,16 @@ export default function StockPage() {
       toast.error('Indica el motivo de la salida (ej. venta, daño, extravío)')
       return
     }
+    if (form.type === 'transferencia') {
+      if (!form.to_warehouse_id) {
+        toast.error('Selecciona el almacén destino de la transferencia')
+        return
+      }
+      if (form.to_warehouse_id === form.warehouse_id) {
+        toast.error('El almacén destino debe ser distinto al origen')
+        return
+      }
+    }
     setSaving(true)
     try {
       const payload = {
@@ -674,11 +688,12 @@ export default function StockPage() {
         quantity: parseInt(form.quantity),
         expires_at: form.expires_at || null,
         batch_code: form.batch_code || null,
+        to_warehouse_id: form.type === 'transferencia' ? form.to_warehouse_id : null,
       }
       await stockAPI.createMovement(payload)
       toast.success('Movimiento registrado')
       setModal(false)
-      setForm({ product_id: '', warehouse_id: '', type: 'entrada', quantity: 1, notes: '', expires_at: '', batch_code: '' })
+      setForm({ product_id: '', warehouse_id: '', to_warehouse_id: '', type: 'entrada', quantity: 1, notes: '', expires_at: '', batch_code: '' })
       load()
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Error')
@@ -983,7 +998,12 @@ export default function StockPage() {
                       </span>
                     </td>
                     <td className="font-medium text-ink-900">{m.products?.name || m.product_id}</td>
-                    <td className="text-ink-600">{m.warehouses?.name || '—'}</td>
+                    <td className="text-ink-600">
+                      {m.warehouses?.name || '—'}
+                      {m.type === 'transferencia' && m.to_warehouse?.name && (
+                        <span className="text-ink-400"> → {m.to_warehouse.name}</span>
+                      )}
+                    </td>
                     <td>
                       <span className={clsx(
                         'font-bold text-sm',
@@ -1306,12 +1326,23 @@ export default function StockPage() {
             </div>
           </div>
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Almacén *</label>
+            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+              Almacén {form.type === 'transferencia' ? 'origen' : ''} *
+            </label>
             <select value={form.warehouse_id} onChange={e => setForm(f => ({ ...f, warehouse_id: e.target.value }))} className="input" required>
               <option value="">Seleccionar...</option>
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
           </div>
+          {form.type === 'transferencia' && (
+            <div>
+              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Almacén destino *</label>
+              <select value={form.to_warehouse_id} onChange={e => setForm(f => ({ ...f, to_warehouse_id: e.target.value }))} className="input" required>
+                <option value="">Seleccionar...</option>
+                {warehouses.filter(w => w.id !== form.warehouse_id).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
               Cantidad {form.type === 'ajuste' ? '(valor final)' : ''} *

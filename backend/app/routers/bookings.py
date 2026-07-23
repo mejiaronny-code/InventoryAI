@@ -57,6 +57,17 @@ def _check_booking_rate_limit(request: Request) -> None:
 
 def _write_booking_sync(data: BookingCreate, company_id: str) -> str:
     """Código único + insert de booking/items/notificación. Corre en threadpool."""
+    # Guard de aislamiento multi-tenant: sin esto, un table_id de otra
+    # empresa quedaría vinculado a una reserva de esta empresa.
+    if data.table_id:
+        table = supabase.table("restaurant_tables")\
+            .select("id")\
+            .eq("id", str(data.table_id))\
+            .eq("company_id", company_id)\
+            .maybe_single().execute()
+        if not (table and table.data):
+            raise HTTPException(404, "Mesa no encontrada")
+
     code = _generate_code()
     for _ in range(5):
         existing = supabase.table("bookings").select("id").eq("code", code).execute()
@@ -272,6 +283,13 @@ def update_booking(booking_id: str, data: BookingUpdate, user: dict = Depends(re
             raise HTTPException(400, "Estado inválido")
         update_data["status"] = data.status
     if data.table_id is not None:
+        table = supabase.table("restaurant_tables")\
+            .select("id")\
+            .eq("id", str(data.table_id))\
+            .eq("company_id", company_id)\
+            .maybe_single().execute()
+        if not (table and table.data):
+            raise HTTPException(404, "Mesa no encontrada")
         update_data["table_id"] = str(data.table_id)
     if data.notes is not None:
         update_data["notes"] = data.notes

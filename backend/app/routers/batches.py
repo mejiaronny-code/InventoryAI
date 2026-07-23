@@ -111,6 +111,19 @@ async def create_batch(data: BatchCreate, user: dict = Depends(require_admin)):
     if not product_res.data:
         raise HTTPException(404, "Producto no encontrado")
 
+    # Guard de aislamiento multi-tenant: sin esto, un warehouse_id de otra
+    # empresa quedaría vinculado a un lote de esta empresa.
+    warehouse_res = await asyncio.to_thread(
+        lambda: supabase.table("warehouses")
+            .select("id")
+            .eq("id", str(data.warehouse_id))
+            .eq("company_id", company_id)
+            .maybe_single()
+            .execute()
+    )
+    if not (warehouse_res and warehouse_res.data):
+        raise HTTPException(404, "Almacén no encontrado")
+
     batch_code = data.batch_code or _generate_batch_code(str(data.product_id))
 
     existing = await asyncio.to_thread(

@@ -33,6 +33,14 @@ export function useRealtimeInserts({ companyId, table, event = 'INSERT', onEvent
     if (!companyId || !table) return
 
     const supabase = getClient()
+
+    // Autenticar el canal Realtime con el JWT del usuario logueado — las
+    // policies RLS ahora exigen rol staff + company_id propio para leer
+    // reservations/bookings (ver 012_rls_hardening.sql); sin esto, Realtime
+    // se conecta como anónimo puro y no recibiría ningún evento.
+    const token = localStorage.getItem('access_token')
+    if (token) supabase.realtime.setAuth(token)
+
     const channelName = `rt_${table}_${event}_${companyId}`
 
     const channel = supabase

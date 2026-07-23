@@ -64,17 +64,34 @@ async def run_with_retry(fn, retries: int = 2):
             await asyncio.sleep(0.3 * (attempt + 1))
 
 
-def run_with_retry_sync(fn, retries: int = 2):
+_RETRYABLE = (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError)
+
+# Para mutaciones NO idempotentes (decrementos de stock, inserts de
+# movimientos/reservas): un ReadError o RemoteProtocolError puede ocurrir
+# DESPUÉS de que Postgres ya procesó y confirmó la escritura — reintentar
+# en ese caso duplicaría el efecto (doble decremento, doble fila de
+# auditoría). ConnectError en cambio significa que la conexión nunca se
+# estableció, así que la request nunca llegó al servidor: siempre es
+# seguro reintentar.
+_RETRYABLE_NON_IDEMPOTENT = (httpx.ConnectError,)
+
+
+def run_with_retry_sync(fn, retries: int = 2, idempotent: bool = True):
     """
     Gemela síncrona de `run_with_retry`, para usar DENTRO de funciones que ya
     corren en un hilo aparte (las que se invocan vía `asyncio.to_thread` desde
     un router — ej. `stock.py::_create_movement_sync`). No se puede usar
     `await`/`asyncio.sleep` ahí porque no hay event loop en ese hilo.
+
+    `idempotent=False` para mutaciones que NO se pueden reintentar a ciegas
+    (ver `_RETRYABLE_NON_IDEMPOTENT`) — usar en decrementos/inserts de un
+    solo uso, no en lecturas ni en updates que fijan un valor absoluto.
     """
+    retryable = _RETRYABLE if idempotent else _RETRYABLE_NON_IDEMPOTENT
     for attempt in range(retries + 1):
         try:
             return fn()
-        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError):
+        except retryable:
             if attempt == retries:
                 raise
             time.sleep(0.3 * (attempt + 1))

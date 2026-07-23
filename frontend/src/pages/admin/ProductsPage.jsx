@@ -1114,6 +1114,8 @@ function RegisterSaleModal({ dishes, onClose, onDone }) {
   )
 }
 
+const PRODUCTS_PAGE_SIZE = 100
+
 export default function ProductsPage() {
   const { user } = useAuth()
   const { hasFeature, formatPrice } = useCompanyFeatures()
@@ -1123,6 +1125,8 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('all') // all | dish | ingredient (solo restaurante)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [modal, setModal] = useState(null) // null | 'create' | product obj
   const [stockModal, setStockModal] = useState(null) // product obj para ver desglose
   const [confirmDelete, setConfirmDelete] = useState(null) // null | { id, name }
@@ -1130,17 +1134,31 @@ export default function ProductsPage() {
   const [saleModalOpen, setSaleModalOpen] = useState(false)
   const [companySlug, setCompanySlug] = useState('')
 
+  // Antes se pedía sin limit/offset (tope fijo de 50 del backend): a partir
+  // del producto 51 desaparecía del panel sin aviso. Ahora se pagina en
+  // páginas de PRODUCTS_PAGE_SIZE con "Cargar más".
   const load = () => {
     setLoading(true)
     Promise.all([
-      productsAPI.list({ search }),
+      productsAPI.list({ search, limit: PRODUCTS_PAGE_SIZE, offset: 0 }),
       categoriesAPI.list(),
       warehousesAPI.list(),
     ]).then(([p, c, w]) => {
       setProducts(p.data)
       setCategories(c.data)
       setWarehouses(w.data)
+      setHasMore(p.data.length === PRODUCTS_PAGE_SIZE)
     }).finally(() => setLoading(false))
+  }
+
+  const loadMore = () => {
+    setLoadingMore(true)
+    productsAPI.list({ search, limit: PRODUCTS_PAGE_SIZE, offset: products.length })
+      .then(r => {
+        setProducts(prev => [...prev, ...r.data])
+        setHasMore(r.data.length === PRODUCTS_PAGE_SIZE)
+      })
+      .finally(() => setLoadingMore(false))
   }
 
   useEffect(() => {
@@ -1335,6 +1353,14 @@ export default function ProductsPage() {
           </tbody>
         </table>
       </div>
+
+      {hasMore && !loading && (
+        <div className="flex justify-center pt-2">
+          <button onClick={loadMore} disabled={loadingMore} className="btn-secondary">
+            {loadingMore ? <Loader2 size={14} className="animate-spin" /> : `Cargar más ${menuMode ? 'platillos/insumos' : 'productos'}`}
+          </button>
+        </div>
+      )}
 
       {/* Modal editar/crear */}
       <Modal

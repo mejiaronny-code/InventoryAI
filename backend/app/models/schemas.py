@@ -302,6 +302,41 @@ class ProductWithStock(ProductOut):
     stock_by_warehouse: List[StockByWarehouse] = []
 
 
+class PublicStockByWarehouse(BaseModel):
+    """Stock por almacén expuesto al catálogo público — sin coordenadas internas."""
+    warehouse_id: str
+    quantity: int
+    nearest_expiry: Optional[datetime] = None
+
+
+class PublicProductOut(BaseModel):
+    """
+    Producto expuesto al catálogo público. NUNCA incluye cost_price (margen
+    interno) ni aisle/shelf/bin/min_stock_alert (coordenadas de almacén) —
+    ver auditoría de seguridad, esos campos solo van en ProductOut/ProductWithStock
+    (endpoints autenticados de staff).
+    """
+    id: UUID
+    company_id: UUID
+    category_id: Optional[UUID]
+    name: str
+    description: Optional[str]
+    price: float
+    unit: str
+    images: List[str]
+    tags: List[str] = []
+    is_featured: bool = False
+    product_type: str = "simple"
+    allergens: List[str] = []
+    dietary: List[str] = []
+    is_available: bool = True
+    prep_time_minutes: Optional[int] = None
+    is_active: bool
+    total_stock: int = 0
+    available_stock: int = 0
+    stock_by_warehouse: List[PublicStockByWarehouse] = []
+
+
 # ============================================================
 # BATCHES
 # ============================================================
@@ -354,7 +389,8 @@ class LocationUpdate(BaseModel):
 
 class StockMovementCreate(BaseModel):
     product_id: UUID
-    warehouse_id: UUID
+    warehouse_id: UUID          # origen (siempre); para 'transferencia' también el origen
+    to_warehouse_id: Optional[UUID] = None   # destino, obligatorio solo si type == 'transferencia'
     type: StockMovementType
     quantity: int
     notes: Optional[str] = None
@@ -370,10 +406,20 @@ class StockMovementCreate(BaseModel):
             raise ValueError("Debes indicar el motivo de la salida de stock")
         return self
 
+    @model_validator(mode="after")
+    def _require_destino_on_transferencia(self):
+        if self.type == "transferencia":
+            if not self.to_warehouse_id:
+                raise ValueError("Debes indicar el almacén destino de la transferencia")
+            if self.to_warehouse_id == self.warehouse_id:
+                raise ValueError("El almacén destino debe ser distinto al origen")
+        return self
+
 class StockMovementOut(BaseModel):
     id: UUID
     product_id: UUID
     warehouse_id: UUID
+    to_warehouse_id: Optional[UUID] = None
     type: StockMovementType
     quantity: int
     notes: Optional[str]

@@ -5,19 +5,28 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { companiesAPI } from '../../services/api'
-import { Search, Zap, ArrowRight, Building2 } from 'lucide-react'
+import { Search, Zap, ArrowRight, Building2, RefreshCw } from 'lucide-react'
 
 export default function HomePage() {
   const [companies, setCompanies] = useState([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
   const navigate = useNavigate()
 
-  useEffect(() => {
+  const load = () => {
+    setLoading(true)
+    setError(false)
     companiesAPI.listPublic()
       .then(r => setCompanies(r.data.filter(c => c.features?.public_catalog !== false)))
+      // Antes un fallo del API (red caída, 500) se tragaba en silencio y se
+      // mostraba igual que "no hay empresas" — un usuario no podía distinguir
+      // una falla temporal de que su empresa no existiera.
+      .catch(() => setError(true))
       .finally(() => setLoading(false))
-  }, [])
+  }
+
+  useEffect(() => { load() }, [])
 
   const filtered = companies.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase())
@@ -70,6 +79,14 @@ export default function HomePage() {
                 <div className="h-3 bg-ink-100 rounded w-1/2" />
               </div>
             ))}
+          </div>
+        ) : error ? (
+          <div className="text-center py-20">
+            <Building2 size={40} className="text-ink-300 mx-auto mb-3" />
+            <p className="text-ink-500 mb-4">No pudimos cargar las empresas. Intenta de nuevo.</p>
+            <button onClick={load} className="btn-secondary inline-flex items-center gap-2">
+              <RefreshCw size={14} /> Reintentar
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-20">

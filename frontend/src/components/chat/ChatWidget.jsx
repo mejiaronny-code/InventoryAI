@@ -11,7 +11,18 @@ import { MessageCircle, X, Send, Image, Loader2, Bot, User, ImagePlus, Zap, Mic,
 import clsx from 'clsx'
 
 function parseMarkdown(text) {
-  return text
+  // 0. Escapar HTML crudo ANTES de aplicar cualquier regla de markdown.
+  //    Sin esto, una respuesta del LLM (o un nombre de producto/documento
+  //    manipulado que llegue al contexto del chat) puede inyectar HTML/JS
+  //    ejecutable vía dangerouslySetInnerHTML (XSS). Las reglas de abajo usan
+  //    * [ ] ! ( ) — ninguna depende de < > &, así que escapar primero no
+  //    rompe el markdown soportado.
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+  return escaped
     // 1. Imágenes markdown BIEN formadas -> <img> (debe ir antes de las redes
     //    de seguridad para no borrarlas). [^\)\n] (no \s) porque algunos
     //    nombres de archivo subidos tienen espacios literales en la URL
@@ -21,7 +32,7 @@ function parseMarkdown(text) {
     //    (funciona con %20 pero no sin codificar) — se codifica antes de insertarlo.
     .replace(
       /!\\?\[([^\]]*)\\?\]\\?\((https?:\/\/[^\)\n]+)\)\\?/g,
-      (_match, alt, url) => `<img src="${url.replace(/ /g, '%20')}" alt="${alt}" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" onerror="this.style.display='none'" />`
+      (_match, alt, url) => `<img src="${url.replace(/ /g, '%20')}" alt="${alt.replace(/"/g, '&quot;')}" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" onerror="this.style.display='none'" />`
     )
     // 2. Red de seguridad: markdown de imagen sobrante o CORTADO a medias
     //    (la respuesta del modelo se truncó sin cerrar el paréntesis) -> fuera,

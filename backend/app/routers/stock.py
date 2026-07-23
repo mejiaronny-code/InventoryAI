@@ -42,8 +42,15 @@ def list_movements(
     warehouse_id: str = None,
     user: dict = Depends(require_staff),
 ):
+    # warehouses(name) quedó ambiguo desde que stock_movements tiene DOS FKs a
+    # warehouses (warehouse_id y to_warehouse_id, agregada por
+    # 017_transfer_stock.sql) — PostgREST exige indicar cuál usar en el embed.
     query = supabase.table("stock_movements")\
-        .select("*, products!inner(name, company_id), warehouses(name)")\
+        .select(
+            "*, products!inner(name, company_id), "
+            "warehouses!stock_movements_warehouse_id_fkey(name), "
+            "to_warehouse:warehouses!stock_movements_to_warehouse_id_fkey(name)"
+        )\
         .eq("products.company_id", user["company_id"])\
         .order("created_at", desc=True)\
         .limit(200)
@@ -105,64 +112,94 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
         **movement_dump,
         "product_id": str(data.product_id),
         "warehouse_id": str(data.warehouse_id),
+        "to_warehouse_id": str(data.to_warehouse_id) if data.to_warehouse_id else None,
         "created_by": user["id"],
     }
 
-    # Obtener stock actual (maybe_single evita error PGRST116 cuando no hay fila aún)
-    current_q = supabase.table("product_warehouse_stock")\
-        .select("quantity")\
-        .eq("product_id", str(data.product_id))\
-        .eq("warehouse_id", str(data.warehouse_id))\
-        .maybe_single()
-    current = _retry(current_q.execute)
-
-    # maybe_single() retorna None directamente (no objeto con .data) cuando no hay fila
-    current_row = current.data if current else None
-    current_qty = current_row["quantity"] if current_row else 0
-
-    if data.type == "salida":
-        # Decremento atómico en Postgres (ver migración 011_atomic_stock.sql):
-        # evita la carrera del read-modify-write cuando dos salidas del mismo
-        # producto/almacén llegan casi al mismo tiempo (sobreventa).
+    if data.type == "transferencia":
+        # Transferencia real: decrementa origen e incrementa destino en UNA
+        # transacción atómica de Postgres (ver 017_transfer_stock.sql). Antes
+        # este branch dejaba new_qty = current_qty (no-op): el movimiento se
+        # registraba pero ningún almacén cambiaba.
+        _assert_warehouse_in_company(str(data.to_warehouse_id), user["company_id"])
         try:
-            rpc_q = supabase.rpc("decrement_stock_strict", {
+            rpc_q = supabase.rpc("transfer_stock_strict", {
                 "p_product_id": str(data.product_id),
-                "p_warehouse_id": str(data.warehouse_id),
+                "p_from_warehouse_id": str(data.warehouse_id),
+                "p_to_warehouse_id": str(data.to_warehouse_id),
                 "p_qty": data.quantity,
             })
-            rpc_result = _retry(rpc_q.execute)
-            new_qty = rpc_result.data
+            # idempotent=False: un ReadError puede llegar DESPUÉS de que Postgres
+            # ya aplicó la transferencia — reintentar a ciegas la duplicaría.
+            rpc_result = _retry(rpc_q.execute, idempotent=False)
+            row = (rpc_result.data or [{}])[0]
+            new_qty = row.get("from_qty")
         except Exception as e:
             if "INSUFFICIENT_STOCK" in str(e):
-                raise HTTPException(400, "Stock insuficiente para la salida")
+                raise HTTPException(400, "Stock insuficiente para la transferencia")
+            if "SAME_WAREHOUSE" in str(e):
+                raise HTTPException(400, "El almacén destino debe ser distinto al origen")
             raise
     else:
-        # Calcular nuevo stock
-        if data.type == "entrada":
-            new_qty = current_qty + data.quantity
-        elif data.type == "ajuste":
-            new_qty = data.quantity  # ajuste directo al valor indicado
-        else:
-            new_qty = current_qty  # transferencia se maneja por separado
+        # Obtener stock actual (maybe_single evita error PGRST116 cuando no hay fila aún)
+        current_q = supabase.table("product_warehouse_stock")\
+            .select("quantity")\
+            .eq("product_id", str(data.product_id))\
+            .eq("warehouse_id", str(data.warehouse_id))\
+            .maybe_single()
+        current = _retry(current_q.execute)
 
-        # Actualizar stock
-        if current_row:
-            update_q = supabase.table("product_warehouse_stock")\
-                .update({"quantity": new_qty})\
-                .eq("product_id", str(data.product_id))\
-                .eq("warehouse_id", str(data.warehouse_id))
-            _retry(update_q.execute)
-        else:
-            insert_q = supabase.table("product_warehouse_stock").insert({
-                "product_id": str(data.product_id),
-                "warehouse_id": str(data.warehouse_id),
-                "quantity": max(new_qty, 0),
-            })
-            _retry(insert_q.execute)
+        # maybe_single() retorna None directamente (no objeto con .data) cuando no hay fila
+        current_row = current.data if current else None
+        current_qty = current_row["quantity"] if current_row else 0
 
-    # Registrar movimiento
+        if data.type == "salida":
+            # Decremento atómico en Postgres (ver migración 011_atomic_stock.sql):
+            # evita la carrera del read-modify-write cuando dos salidas del mismo
+            # producto/almacén llegan casi al mismo tiempo (sobreventa).
+            try:
+                rpc_q = supabase.rpc("decrement_stock_strict", {
+                    "p_product_id": str(data.product_id),
+                    "p_warehouse_id": str(data.warehouse_id),
+                    "p_qty": data.quantity,
+                })
+                # idempotent=False: mismo motivo que en transferencia — un
+                # decremento reintentado a ciegas puede vender stock dos veces.
+                rpc_result = _retry(rpc_q.execute, idempotent=False)
+                new_qty = rpc_result.data
+            except Exception as e:
+                if "INSUFFICIENT_STOCK" in str(e):
+                    raise HTTPException(400, "Stock insuficiente para la salida")
+                raise
+        else:
+            # Calcular nuevo stock (entrada / ajuste)
+            if data.type == "entrada":
+                new_qty = current_qty + data.quantity
+            else:
+                new_qty = data.quantity  # ajuste directo al valor indicado
+
+            # Actualizar stock. "ajuste" fija un valor absoluto (idempotente:
+            # reintentar el mismo valor es un no-op seguro); "entrada" SUMA a
+            # current_qty, así que un retry a ciegas duplicaría la suma.
+            if current_row:
+                update_q = supabase.table("product_warehouse_stock")\
+                    .update({"quantity": new_qty})\
+                    .eq("product_id", str(data.product_id))\
+                    .eq("warehouse_id", str(data.warehouse_id))
+                _retry(update_q.execute, idempotent=(data.type != "entrada"))
+            else:
+                insert_q = supabase.table("product_warehouse_stock").insert({
+                    "product_id": str(data.product_id),
+                    "warehouse_id": str(data.warehouse_id),
+                    "quantity": max(new_qty, 0),
+                })
+                _retry(insert_q.execute)
+
+    # Registrar movimiento. idempotent=False: sin unique constraint en
+    # stock_movements, un retry a ciegas tras un ReadError post-commit
+    # duplicaría la fila de auditoría (doble conteo en reportes/aging).
     movement_q = supabase.table("stock_movements").insert(movement_data)
-    result = _retry(movement_q.execute)
+    result = _retry(movement_q.execute, idempotent=False)
 
     # Crear lote automáticamente si es entrada y se proveyó batch_code (o generar uno)
     if data.type == "entrada":

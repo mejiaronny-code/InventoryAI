@@ -8,7 +8,7 @@ import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import { useRealtimeNotifications, useRealtimeTable } from '../../hooks/useRealtimeNotifications'
 import {
   Package, CalendarCheck, AlertTriangle,
-  Bell, ArrowRight, RefreshCw, CalendarX2
+  Bell, ArrowRight, RefreshCw, CalendarX2, AlertOctagon
 } from 'lucide-react'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -44,6 +44,7 @@ export default function DashboardPage() {
   const [data, setData] = useState(null)
   const [expiring, setExpiring] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -53,7 +54,11 @@ export default function DashboardPage() {
       .then(([metrics, exp]) => {
         setData(metrics.data)
         if (exp) setExpiring(exp.data || [])
+        setError(false)
       })
+      // Antes un fallo aquí dejaba `data` en null y el dashboard renderizaba
+      // en blanco bajo el header (`) : null}`), sin ningún mensaje.
+      .catch(() => setError(true))
       .finally(() => setLoading(false))
   }
 
@@ -83,7 +88,7 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {loading ? (
+      {loading && !data ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (
             <div key={i} className="stat-card animate-pulse">
@@ -92,6 +97,14 @@ export default function DashboardPage() {
               <div className="h-7 bg-ink-100 rounded w-1/2" />
             </div>
           ))}
+        </div>
+      ) : error && !data ? (
+        <div className="stat-card text-center py-12">
+          <AlertOctagon size={32} className="text-ink-300 mx-auto mb-3" />
+          <p className="text-ink-500 mb-4">No pudimos cargar el dashboard. Intenta de nuevo.</p>
+          <button onClick={load} className="btn-secondary inline-flex items-center gap-2">
+            <RefreshCw size={14} /> Reintentar
+          </button>
         </div>
       ) : data ? (
         <>

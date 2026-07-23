@@ -60,6 +60,16 @@ def create_serial(data: dict, user: dict = Depends(require_admin)):
     if not prod.data:
         raise HTTPException(404, "Producto no encontrado")
 
+    # Guard de aislamiento multi-tenant: sin esto, un warehouse_id de otra
+    # empresa quedaría vinculado a una serie de esta empresa.
+    wh = supabase.table("warehouses")\
+        .select("id")\
+        .eq("id", warehouse_id)\
+        .eq("company_id", company_id)\
+        .maybe_single().execute()
+    if not (wh and wh.data):
+        raise HTTPException(404, "Almacén no encontrado")
+
     rows = [
         {
             "company_id": company_id,
@@ -114,6 +124,14 @@ def update_serial(serial_id: str, data: dict, user: dict = Depends(require_admin
     allowed = {k: v for k, v in data.items() if k in ("status", "notes", "warehouse_id")}
     if "status" in allowed and allowed["status"] not in VALID_STATUSES:
         raise HTTPException(400, f"Estado inválido. Válidos: {VALID_STATUSES}")
+    if "warehouse_id" in allowed:
+        wh = supabase.table("warehouses")\
+            .select("id")\
+            .eq("id", allowed["warehouse_id"])\
+            .eq("company_id", company_id)\
+            .maybe_single().execute()
+        if not (wh and wh.data):
+            raise HTTPException(404, "Almacén no encontrado")
 
     result = supabase.table("product_serial_numbers")\
         .update(allowed)\

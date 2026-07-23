@@ -23,7 +23,7 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
     month_start = now.replace(day=1, hour=0, minute=0, second=0).isoformat()
     cutoff_30d = (now + timedelta(days=30)).isoformat()
 
-    # ── Ronda 1: obtener IDs de productos (necesario para las demás queries) ──
+    # ── Ronda 1: total de productos (solo el count, no descarga filas) ──
     products_res = await asyncio.to_thread(
         lambda: supabase.table("products")
             .select("id", count="exact")
@@ -32,9 +32,8 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
             .execute()
     )
     total_products = products_res.count or 0
-    product_ids = [p["id"] for p in (products_res.data or [])]
 
-    if not product_ids:
+    if total_products == 0:
         return {
             "total_products": 0, "total_stock": 0, "active_reservations": 0,
             "low_stock_products": 0, "expiring_soon": 0, "monthly_ai_cost": 0.0,
@@ -42,6 +41,11 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
         }
 
     # ── Ronda 2: todas las queries restantes en paralelo ──
+    # stock_res y ai_res usan RPCs con SUM/COUNT en Postgres (ver
+    # 018_dashboard_aggregates.sql) en vez de descargar todas las filas de
+    # product_warehouse_stock/ai_usage_log y sumarlas en Python — con
+    # suficiente volumen, PostgREST trunca la respuesta en silencio y la
+    # métrica salía mal sin ningún error visible.
     (
         stock_res,
         active_res,
@@ -53,10 +57,10 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
         monthly_bk,
         recent_bk,
     ) = await asyncio.gather(
-        asyncio.to_thread(lambda: supabase.table("product_warehouse_stock")
-            .select("quantity, min_stock_alert, nearest_expiry")
-            .in_("product_id", product_ids)
-            .execute()),
+        asyncio.to_thread(lambda: supabase.rpc("company_stock_metrics", {
+            "p_company_id": company_id,
+            "p_expiry_cutoff": cutoff_30d,
+        }).execute()),
         asyncio.to_thread(lambda: supabase.table("reservations")
             .select("id", count="exact")
             .eq("company_id", company_id)
@@ -67,11 +71,10 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
             .eq("company_id", company_id)
             .gte("created_at", month_start)
             .execute()),
-        asyncio.to_thread(lambda: supabase.table("ai_usage_log")
-            .select("cost_usd")
-            .eq("company_id", company_id)
-            .gte("created_at", month_start)
-            .execute()),
+        asyncio.to_thread(lambda: supabase.rpc("company_ai_cost_sum", {
+            "p_company_id": company_id,
+            "p_since": month_start,
+        }).execute()),
         asyncio.to_thread(lambda: supabase.table("reservations")
             .select("id, reservation_code, client_name, status, created_at, products(name)")
             .eq("company_id", company_id)
@@ -104,17 +107,14 @@ async def get_dashboard_metrics(user: dict = Depends(require_staff)):
             .execute()),
     )
 
-    # ── Calcular métricas ──
-    stock_data = stock_res.data or []
-    total_stock = sum(s["quantity"] for s in stock_data)
-    low_stock = sum(1 for s in stock_data if s["quantity"] <= (s.get("min_stock_alert") or 5))
-    expiring_soon = sum(
-        1 for s in stock_data
-        if s.get("nearest_expiry") and s["nearest_expiry"] <= cutoff_30d
-    )
+    # ── Leer métricas agregadas por Postgres ──
+    stock_row = (stock_res.data or [{}])[0]
+    total_stock = stock_row.get("total_stock") or 0
+    low_stock = stock_row.get("low_stock_count") or 0
+    expiring_soon = stock_row.get("expiring_soon_count") or 0
     # Costo real de DeepInfra × margen → lo que se le muestra a la empresa.
     # El costo crudo (cost_usd) se conserva intacto para las métricas del super admin.
-    monthly_ai_cost_raw = sum(float(u.get("cost_usd", 0)) for u in (ai_res.data or []))
+    monthly_ai_cost_raw = float(ai_res.data or 0)
     monthly_ai_cost = monthly_ai_cost_raw * settings.ai_cost_multiplier
 
     # Normalizar bookings de restaurante al mismo formato que las reservas
@@ -164,10 +164,24 @@ async def get_activity(
     if not company_id:
         raise HTTPException(status_code=403, detail="Esta cuenta no tiene empresa asignada")
 
-    # Queries en paralelo
-    product_ids_res, notifs_res = await asyncio.gather(
-        asyncio.to_thread(lambda: supabase.table("products")
-            .select("id").eq("company_id", company_id).execute()),
+    # Queries en paralelo. El filtro de stock_movements va vía join embebido
+    # (products!inner) en vez de descargar TODOS los product_id de la empresa
+    # y luego filtrar con .in_() — con muchos productos, esa lista podía
+    # truncarse silenciosamente por el límite de fila de PostgREST y algunos
+    # movimientos desaparecían de la actividad sin ningún aviso.
+    movements_res, notifs_res = await asyncio.gather(
+        # warehouses(name) requiere indicar la FK: stock_movements tiene DOS
+        # relaciones con warehouses (warehouse_id y to_warehouse_id, agregada
+        # por 017_transfer_stock.sql) y PostgREST no puede desambiguar solo.
+        asyncio.to_thread(lambda: supabase.table("stock_movements")
+            .select(
+                "id, type, quantity, notes, created_at, created_by, products!inner(name, company_id), "
+                "warehouses!stock_movements_warehouse_id_fkey(name)"
+            )
+            .eq("products.company_id", company_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()),
         asyncio.to_thread(lambda: supabase.table("notifications")
             .select("id, type, message, created_at")
             .eq("company_id", company_id)
@@ -176,19 +190,9 @@ async def get_activity(
             .execute()),
     )
 
-    product_ids = [p["id"] for p in (product_ids_res.data or [])]
     activities = []
-
-    if product_ids:
-        movements_res = await asyncio.to_thread(
-            lambda: supabase.table("stock_movements")
-                .select("id, type, quantity, notes, created_at, created_by, products(name), warehouses(name)")
-                .in_("product_id", product_ids)
-                .order("created_at", desc=True)
-                .limit(limit)
-                .execute()
-        )
-        movements = movements_res.data or []
+    movements = movements_res.data or []
+    if movements:
 
         # created_by referencia auth.users, no user_profiles directamente —
         # no se puede pedir como embed de Postgrest. Se resuelve el nombre
@@ -251,40 +255,27 @@ def get_superadmin_metrics(
         month_start = now.replace(day=1, hour=0, minute=0, second=0)
     month_start_iso = month_start.isoformat()
 
-    # AI cost por empresa y por día
-    ai_logs = supabase.table("ai_usage_log")\
-        .select("company_id, cost_usd, created_at")\
-        .gte("created_at", month_start_iso)\
-        .execute()
+    # AI cost por empresa y por día, y reservas por empresa — agregado en
+    # Postgres (ver 018_dashboard_aggregates.sql) en vez de descargar TODOS
+    # los registros de uso de IA / reservas de TODAS las empresas del mes y
+    # sumarlos en Python. Con suficiente volumen esa descarga se truncaba en
+    # silencio por el límite de fila de PostgREST y las métricas de
+    # plataforma salían mal sin ningún error visible.
+    ai_by_company_res = supabase.rpc("ai_cost_by_company", {"p_since": month_start_iso}).execute()
+    ai_by_day_res = supabase.rpc("ai_cost_by_day", {"p_since": month_start_iso}).execute()
+    res_by_company_res = supabase.rpc("reservations_count_by_company", {"p_since": month_start_iso}).execute()
 
-    cost_by_company: dict = {}
-    cost_by_day: dict = {}
-    for log in (ai_logs.data or []):
-        cid = log["company_id"]
-        cost = float(log.get("cost_usd", 0))
-        cost_by_company[cid] = cost_by_company.get(cid, 0) + cost
-        day = log["created_at"][:10]
-        cost_by_day[day] = cost_by_day.get(day, 0) + cost
-
-    # Reservas por empresa este mes
-    reservations = supabase.table("reservations")\
-        .select("company_id")\
-        .gte("created_at", month_start_iso)\
-        .execute()
-
-    res_by_company: dict = {}
-    for r in (reservations.data or []):
-        cid = r["company_id"]
-        res_by_company[cid] = res_by_company.get(cid, 0) + 1
+    cost_by_company = {row["company_id"]: float(row["total_cost"]) for row in (ai_by_company_res.data or [])}
+    res_by_company = {row["company_id"]: row["total_count"] for row in (res_by_company_res.data or [])}
 
     total_reservations = sum(res_by_company.values())
     most_active_id = max(res_by_company, key=res_by_company.get) if res_by_company else None
     most_active = next((c["name"] for c in all_companies if c["id"] == most_active_id), "—")
 
-    # Serializar cost_by_day como lista ordenada para el gráfico
+    # El RPC ya devuelve los días ordenados
     ai_by_day_chart = [
-        {"date": d, "cost": round(v, 5)}
-        for d, v in sorted(cost_by_day.items())
+        {"date": str(row["day"]), "cost": round(float(row["total_cost"]), 5)}
+        for row in (ai_by_day_res.data or [])
     ]
 
     # Reservas por empresa para el gráfico (usar nombre corto)

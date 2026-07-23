@@ -16,7 +16,7 @@ from app.core.auth import require_admin, require_staff, get_current_user
 from app.core.supabase_client import supabase, run_with_retry
 from app.core.config import settings
 from app.core.company_features import get_active_company, require_public_catalog
-from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, StockByWarehouse, VariantStockUpsert, VariantStockUpsertRequest, VariantStockOut
+from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, PublicProductOut, StockByWarehouse, VariantStockUpsert, VariantStockUpsertRequest, VariantStockOut
 from app.embeddings.embedding_service import (
     generate_product_embedding,
     should_regenerate_embedding,
@@ -25,7 +25,14 @@ from app.embeddings.embedding_service import (
 router = APIRouter(prefix="/products", tags=["products"])
 
 
-@router.get("/public/{company_slug}", response_model=List[ProductWithStock])
+_PUBLIC_PRODUCT_COLUMNS = (
+    "id, company_id, category_id, name, description, price, unit, images, tags, "
+    "is_featured, product_type, allergens, dietary, is_available, prep_time_minutes, "
+    "is_active, product_warehouse_stock(quantity, warehouse_id, nearest_expiry)"
+)
+
+
+@router.get("/public/{company_slug}", response_model=List[PublicProductOut])
 async def list_public_products(
     company_slug: str,
     category_id: Optional[str] = None,
@@ -33,14 +40,18 @@ async def list_public_products(
     limit: int = Query(50, le=200),
     offset: int = 0,
 ):
-    """Lista pública del catálogo de productos por slug de empresa."""
+    """
+    Lista pública del catálogo de productos por slug de empresa.
+    Solo columnas públicas — NUNCA cost_price ni aisle/shelf/bin (ver
+    PublicProductOut en schemas.py).
+    """
     company = await get_active_company(company_slug)
     require_public_catalog(company)
 
     company_id = company["id"]
 
     query = supabase.table("products")\
-        .select("*, product_warehouse_stock(quantity, warehouse_id, aisle, shelf, bin, nearest_expiry)")\
+        .select(_PUBLIC_PRODUCT_COLUMNS)\
         .eq("company_id", company_id)\
         .eq("is_active", True)\
         .neq("product_type", "ingredient")  # los insumos son internos, nunca públicos
@@ -86,7 +97,12 @@ def list_products(
     if category_id:
         query = query.eq("category_id", category_id)
     if search:
-        query = query.ilike("name", f"%{search}%")
+        # El placeholder del buscador en el admin promete nombre/SKU/descripción
+        # — antes solo se filtraba por nombre. Se escapa la coma (separador de
+        # condiciones de PostgREST or()) para que un término con coma no rompa
+        # el filtro.
+        term = search.replace(",", "")
+        query = query.or_(f"name.ilike.%{term}%,sku.ilike.%{term}%,description.ilike.%{term}%")
 
     result = query.range(offset, offset + limit - 1).execute()
 

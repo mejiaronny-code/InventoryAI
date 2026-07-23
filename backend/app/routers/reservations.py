@@ -45,6 +45,31 @@ def _check_by_email_rate_limit(request: Request) -> None:
         bucket[hour] = bucket.get(hour, 0) + 1
 
 
+# ── Anti-abuso: creación pública de reservas ──────────────────────────
+# Mismo patrón que _check_booking_rate_limit en bookings.py. Sin esto,
+# cualquiera podía crear reservas ilimitadas desde el catálogo público
+# (agotar disponibilidad, saturar notificaciones/emails, inflar la BD).
+_MAX_RESERVATIONS_PER_IP_HOUR = 10
+_ip_reservations: dict[str, dict[str, int]] = defaultdict(dict)
+_reservations_lock = threading.Lock()
+
+
+def _check_reservation_rate_limit(request: Request) -> None:
+    """Lanza 429 si una IP crea demasiadas reservas por hora."""
+    ip = _client_ip(request)
+    hour = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
+    with _reservations_lock:
+        bucket = _ip_reservations[ip]
+        for h in [h for h in bucket if h != hour]:
+            del bucket[h]
+        if bucket.get(hour, 0) >= _MAX_RESERVATIONS_PER_IP_HOUR:
+            raise HTTPException(
+                status_code=429,
+                detail="Demasiadas reservas en poco tiempo. Intenta más tarde.",
+            )
+        bucket[hour] = bucket.get(hour, 0) + 1
+
+
 def _generate_code(length: int = 8) -> str:
     """Genera un código de reserva alfanumérico en mayúsculas."""
     alphabet = string.ascii_uppercase + string.digits
@@ -52,8 +77,10 @@ def _generate_code(length: int = 8) -> str:
 
 
 @router.post("/public/{company_slug}")
-async def create_public_reservation(company_slug: str, data: ReservationCreate):
+async def create_public_reservation(company_slug: str, data: ReservationCreate, request: Request):
     """Reserva pública creada por el cliente desde el catálogo."""
+    _check_reservation_rate_limit(request)
+
     # 1. Verificar empresa
     company = await get_active_company(company_slug, "id, name, features")
     require_public_catalog(company)
