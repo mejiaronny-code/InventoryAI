@@ -54,3 +54,8 @@ $$;
 -- (warehouse_id sigue siendo el ORIGEN, igual que en entrada/salida/ajuste).
 alter table public.stock_movements
   add column if not exists to_warehouse_id uuid references public.warehouses(id);
+
+revoke execute on function public.transfer_stock_strict(uuid, uuid, uuid, numeric)
+  from public, anon, authenticated;
+grant execute on function public.transfer_stock_strict(uuid, uuid, uuid, numeric)
+  to service_role;

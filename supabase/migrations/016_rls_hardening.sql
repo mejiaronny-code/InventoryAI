@@ -90,6 +90,7 @@ create policy "Staff manages booking_items"
 -- company_documents / company_document_chunks (base de conocimiento IA)
 -- -----------------------------------------------
 drop policy if exists "company_documents_isolation" on public.company_documents;
+drop policy if exists "Staff manages documents" on public.company_documents;
 create policy "Staff manages documents"
   on public.company_documents for all
   using (
@@ -98,6 +99,7 @@ create policy "Staff manages documents"
   );
 
 drop policy if exists "company_document_chunks_isolation" on public.company_document_chunks;
+drop policy if exists "Staff manages document chunks" on public.company_document_chunks;
 create policy "Staff manages document chunks"
   on public.company_document_chunks for all
   using (
@@ -110,3 +112,71 @@ create policy "Staff manages document chunks"
 -- -----------------------------------------------
 drop policy if exists "Public inserts usage" on public.ai_usage_log;
 -- El log de uso IA lo escribe el backend (service_role); no necesita INSERT público.
+
+-- -----------------------------------------------
+-- El catálogo público usa FastAPI, no PostgREST directo.
+-- Cerrar también estas policies evita filtrar cost_price, settings internos,
+-- productos/categorías de tenants que deshabilitaron su catálogo y ubicaciones
+-- de almacén al reutilizar accidentalmente la anon key.
+-- -----------------------------------------------
+drop policy if exists "Public can read companies" on public.companies;
+drop policy if exists "Public reads warehouses" on public.warehouses;
+drop policy if exists "Public reads categories" on public.categories;
+drop policy if exists "Public reads active products" on public.products;
+
+-- -----------------------------------------------
+-- Privilegios de tabla: defensa estructural.
+--
+-- RLS decide QUÉ filas puede leer un rol, pero no evita que una policy de
+-- UPDATE demasiado amplia permita cambiar columnas sensibles (por ejemplo
+-- role/company_id/settings). El frontend solo necesita SELECT directo para
+-- tres canales Realtime; todo lo demás pasa por FastAPI/service_role.
+-- -----------------------------------------------
+do $$
+declare
+  table_row record;
+begin
+  for table_row in
+    select tablename from pg_tables where schemaname = 'public'
+  loop
+    execute format(
+      'revoke all privileges on table public.%I from anon, authenticated',
+      table_row.tablename
+    );
+  end loop;
+end
+$$;
+
+alter default privileges in schema public
+  revoke all privileges on tables from anon, authenticated;
+
+grant all privileges on all tables in schema public to service_role;
+grant select on public.notifications, public.reservations, public.bookings
+  to authenticated;
+
+-- Los RPC de mutación son implementación interna del backend. Aunque RLS
+-- también los limita, no deben formar parte de la superficie pública.
+revoke execute on function public.decrement_stock_strict(uuid, uuid, numeric)
+  from public, anon, authenticated;
+revoke execute on function public.decrement_stock_clamped(uuid, uuid, numeric)
+  from public, anon, authenticated;
+
+-- expire_reservations existe con firmas distintas según si 015 ya se corrió
+-- (uuid) o no (sin argumentos) — se revoca/otorga la que exista en cada caso.
+do $$
+begin
+  if to_regprocedure('public.expire_reservations(uuid)') is not null then
+    revoke execute on function public.expire_reservations(uuid) from public, anon, authenticated;
+    grant execute on function public.expire_reservations(uuid) to service_role;
+  end if;
+  if to_regprocedure('public.expire_reservations()') is not null then
+    revoke execute on function public.expire_reservations() from public, anon, authenticated;
+    grant execute on function public.expire_reservations() to service_role;
+  end if;
+end
+$$;
+
+grant execute on function public.decrement_stock_strict(uuid, uuid, numeric)
+  to service_role;
+grant execute on function public.decrement_stock_clamped(uuid, uuid, numeric)
+  to service_role;

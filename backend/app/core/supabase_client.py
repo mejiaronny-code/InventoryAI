@@ -45,8 +45,11 @@ def get_supabase_auth() -> Client:
 supabase: Client = get_supabase()
 supabase_auth: Client = get_supabase_auth()
 
+_RETRYABLE = (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError)
+_RETRYABLE_NON_IDEMPOTENT = (httpx.ConnectError,)
 
-async def run_with_retry(fn, retries: int = 2):
+
+async def run_with_retry(fn, retries: int = 2, idempotent: bool = True):
     """
     Ejecuta una llamada a Supabase (ej. `lambda: query.execute()`) y reintenta
     si la conexión HTTP/2 se corta a medio camino (`RemoteProtocolError` y
@@ -55,16 +58,14 @@ async def run_with_retry(fn, retries: int = 2):
     Centralizado aquí para que cualquier router lo reutilice (antes vivía
     duplicado solo en `routers/reorder.py`).
     """
+    retryable = _RETRYABLE if idempotent else _RETRYABLE_NON_IDEMPOTENT
     for attempt in range(retries + 1):
         try:
             return await asyncio.to_thread(fn)
-        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as e:
+        except retryable:
             if attempt == retries:
                 raise
             await asyncio.sleep(0.3 * (attempt + 1))
-
-
-_RETRYABLE = (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError)
 
 # Para mutaciones NO idempotentes (decrementos de stock, inserts de
 # movimientos/reservas): un ReadError o RemoteProtocolError puede ocurrir
@@ -73,9 +74,6 @@ _RETRYABLE = (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError)
 # auditoría). ConnectError en cambio significa que la conexión nunca se
 # estableció, así que la request nunca llegó al servidor: siempre es
 # seguro reintentar.
-_RETRYABLE_NON_IDEMPOTENT = (httpx.ConnectError,)
-
-
 def run_with_retry_sync(fn, retries: int = 2, idempotent: bool = True):
     """
     Gemela síncrona de `run_with_retry`, para usar DENTRO de funciones que ya

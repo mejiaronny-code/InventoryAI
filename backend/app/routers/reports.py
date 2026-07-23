@@ -181,6 +181,27 @@ async def import_products(payload: dict, user: dict = Depends(require_admin)):
         raise HTTPException(400, "Máximo 500 productos por importación")
 
     created, updated, errors = 0, 0, []
+    embedding_semaphore = asyncio.Semaphore(4)
+
+    async def build_embedding(row: dict):
+        name = str(row.get("name") or "").strip()
+        if not name:
+            return None
+        description = str(row.get("description") or "")
+        async with embedding_semaphore:
+            try:
+                return await generate_embedding(
+                    f"{name} {description}".strip(),
+                    is_query=False,
+                )
+            except Exception:
+                return None
+
+    # Las solicitudes al proveedor externo se solapan con concurrencia acotada;
+    # las escrituras quedan secuenciales para preservar la semántica por SKU.
+    embedding_tasks = [
+        asyncio.create_task(build_embedding(row)) for row in rows
+    ]
 
     for i, row in enumerate(rows):
         try:
@@ -209,13 +230,9 @@ async def import_products(payload: dict, user: dict = Depends(require_admin)):
                 "variant_attributes": {},
             }
 
-            # Generar embedding
-            embedding_text = f"{name} {product_data['description']}"
-            try:
-                embedding = await generate_embedding(embedding_text)
+            embedding = await embedding_tasks[i]
+            if embedding:
                 product_data["embedding"] = embedding
-            except Exception:
-                pass
 
             # Verificar si existe por SKU
             if product_data["sku"]:
@@ -234,11 +251,15 @@ async def import_products(payload: dict, user: dict = Depends(require_admin)):
                     continue
 
             insert_query = supabase.table("products").insert(product_data)
-            await _run_with_retry(lambda q=insert_query: q.execute())
+            await _run_with_retry(lambda q=insert_query: q.execute(), idempotent=False)
             created += 1
 
         except Exception as e:
             errors.append({"row": i + 1, "error": str(e)[:100]})
+
+    # Recupera cualquier tarea que no se haya esperado por una validación
+    # temprana de fila, evitando warnings de tareas pendientes.
+    await asyncio.gather(*embedding_tasks, return_exceptions=True)
 
     return {
         "created": created,

@@ -3,7 +3,7 @@ app/models/schemas.py
 Modelos Pydantic para validación de request/response
 """
 from pydantic import BaseModel, EmailStr, Field, model_validator
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Literal
 from uuid import UUID
 from datetime import datetime
 from enum import Enum
@@ -129,10 +129,10 @@ class CompanyDocumentOut(BaseModel):
 # ============================================================
 
 class CategoryCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
     description: Optional[str] = None
-    reservation_time_hours: int = 24
-    max_reservation_qty: Optional[int] = None  # None = sin límite
+    reservation_time_hours: int = Field(default=24, gt=0)
+    max_reservation_qty: Optional[int] = Field(default=None, gt=0)  # None = sin límite
 
 class CategoryUpdate(BaseModel):
     name: Optional[str] = None
@@ -155,7 +155,7 @@ class CategoryOut(BaseModel):
 # ============================================================
 
 class WarehouseCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
     location: Optional[str] = None
     description: Optional[str] = None
 
@@ -180,13 +180,13 @@ class WarehouseOut(BaseModel):
 # ============================================================
 
 class ProductCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = None
     use_cases: Optional[str] = None
     sku: Optional[str] = None
     barcode: Optional[str] = None
-    price: float = 0
-    cost_price: Optional[float] = None
+    price: float = Field(default=0, ge=0)
+    cost_price: Optional[float] = Field(default=None, ge=0)
     unit: str = "unidad"
     category_id: Optional[UUID] = None
     images: List[str] = []
@@ -199,11 +199,11 @@ class ProductCreate(BaseModel):
     variant_attributes: dict = {}
     product_options: List[dict] = []
     # Sector restaurantes
-    product_type: str = "simple"          # 'simple' | 'dish' | 'ingredient'
+    product_type: Literal["simple", "dish", "ingredient"] = "simple"
     allergens: List[str] = []
     dietary: List[str] = []
     is_available: bool = True             # "agotado hoy" (distinto de is_active)
-    prep_time_minutes: Optional[int] = None
+    prep_time_minutes: Optional[int] = Field(default=None, ge=0)
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
@@ -211,8 +211,8 @@ class ProductUpdate(BaseModel):
     use_cases: Optional[str] = None
     sku: Optional[str] = None
     barcode: Optional[str] = None
-    price: Optional[float] = None
-    cost_price: Optional[float] = None
+    price: Optional[float] = Field(default=None, ge=0)
+    cost_price: Optional[float] = Field(default=None, ge=0)
     unit: Optional[str] = None
     category_id: Optional[UUID] = None
     images: Optional[List[str]] = None
@@ -225,11 +225,11 @@ class ProductUpdate(BaseModel):
     variant_attributes: Optional[dict] = None
     product_options: Optional[List[dict]] = None
     # Sector restaurantes
-    product_type: Optional[str] = None
+    product_type: Optional[Literal["simple", "dish", "ingredient"]] = None
     allergens: Optional[List[str]] = None
     dietary: Optional[List[str]] = None
     is_available: Optional[bool] = None
-    prep_time_minutes: Optional[int] = None
+    prep_time_minutes: Optional[int] = Field(default=None, ge=0)
 
 class ProductOut(BaseModel):
     id: UUID
@@ -327,6 +327,9 @@ class PublicProductOut(BaseModel):
     tags: List[str] = []
     is_featured: bool = False
     product_type: str = "simple"
+    parent_product_id: Optional[UUID] = None
+    variant_attributes: dict = {}
+    product_options: List[dict] = []
     allergens: List[str] = []
     dietary: List[str] = []
     is_available: bool = True
@@ -375,8 +378,9 @@ class BatchUpdate(BaseModel):
 
 class StockUpdate(BaseModel):
     warehouse_id: UUID
-    quantity: int
-    min_stock_alert: int = 5
+    quantity: int = Field(ge=0)
+    min_stock_alert: int = Field(default=5, ge=0)
+    notes: Optional[str] = None
 
 class LocationUpdate(BaseModel):
     product_id: str
@@ -385,14 +389,14 @@ class LocationUpdate(BaseModel):
     shelf: Optional[str] = None
     bin:   Optional[str] = None
     store_location: Optional[str] = None
-    min_stock_alert: Optional[int] = None
+    min_stock_alert: Optional[int] = Field(default=None, ge=0)
 
 class StockMovementCreate(BaseModel):
     product_id: UUID
     warehouse_id: UUID          # origen (siempre); para 'transferencia' también el origen
     to_warehouse_id: Optional[UUID] = None   # destino, obligatorio solo si type == 'transferencia'
     type: StockMovementType
-    quantity: int
+    quantity: int = Field(ge=0)
     notes: Optional[str] = None
     expires_at: Optional[datetime] = None
     batch_code: Optional[str] = None  # si la empresa usa batch_tracking
@@ -404,6 +408,8 @@ class StockMovementCreate(BaseModel):
         # número. Las entradas/ajustes no lo exigen.
         if self.type == "salida" and not (self.notes and self.notes.strip()):
             raise ValueError("Debes indicar el motivo de la salida de stock")
+        if self.type != "ajuste" and self.quantity <= 0:
+            raise ValueError("La cantidad debe ser mayor que cero")
         return self
 
     @model_validator(mode="after")
@@ -437,14 +443,14 @@ class RecipeItem(BaseModel):
     unit: Optional[str] = None      # etiqueta informativa (g, ml, pza)
 
 class RecipeUpsert(BaseModel):
-    items: List[RecipeItem] = []
+    items: List[RecipeItem] = Field(default_factory=list, max_length=100)
 
 class SaleItem(BaseModel):
     dish_id: UUID
     quantity: int = Field(gt=0)
 
 class RegisterSale(BaseModel):
-    items: List[SaleItem]
+    items: List[SaleItem] = Field(min_length=1, max_length=100)
     warehouse_id: Optional[UUID] = None  # opcional: de qué almacén descontar insumos
 
 
@@ -453,13 +459,13 @@ class RegisterSale(BaseModel):
 # ============================================================
 
 class TableCreate(BaseModel):
-    name: str
-    capacity: int = 2
+    name: str = Field(min_length=1, max_length=120)
+    capacity: int = Field(default=2, gt=0, le=500)
     zone: Optional[str] = None
 
 class TableUpdate(BaseModel):
     name: Optional[str] = None
-    capacity: Optional[int] = None
+    capacity: Optional[int] = Field(default=None, gt=0, le=500)
     zone: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -469,16 +475,16 @@ class BookingItemCreate(BaseModel):
     modifiers: dict = {}
 
 class BookingCreate(BaseModel):
-    service_type: str = "dine_in"           # 'dine_in' | 'pickup'
-    party_size: Optional[int] = None
+    service_type: Literal["dine_in", "pickup"] = "dine_in"
+    party_size: Optional[int] = Field(default=None, gt=0)
     reserved_at: datetime
     zone: Optional[str] = None
     table_id: Optional[UUID] = None
-    client_name: str
+    client_name: str = Field(min_length=1, max_length=160)
     client_email: Optional[EmailStr] = None
     client_phone: Optional[str] = None
     notes: Optional[str] = None
-    items: List[BookingItemCreate] = []     # pre-orden opcional
+    items: List[BookingItemCreate] = Field(default_factory=list)
     website: Optional[str] = None           # honeypot anti-bot (debe venir vacío)
 
 class BookingUpdate(BaseModel):

@@ -13,6 +13,17 @@ from app.core.supabase_client import supabase
 router = APIRouter(prefix="/putaway", tags=["putaway"])
 
 
+async def _assert_owned_reference(table: str, resource_id: str | None, company_id: str, label: str):
+    if not resource_id:
+        return
+    result = await asyncio.to_thread(
+        lambda: supabase.table(table).select("id")
+            .eq("id", resource_id).eq("company_id", company_id).maybe_single().execute()
+    )
+    if not (result and result.data):
+        raise HTTPException(404, f"{label} no encontrado")
+
+
 @router.get("/")
 async def list_rules(user: dict = Depends(require_staff)):
     """Lista todas las reglas de putaway de la empresa."""
@@ -36,6 +47,11 @@ async def create_rule(data: dict, user: dict = Depends(require_admin)):
         raise HTTPException(400, "Debe especificar category_id o product_id")
     if not data.get("warehouse_id"):
         raise HTTPException(400, "warehouse_id es requerido")
+    await asyncio.gather(
+        _assert_owned_reference("warehouses", data["warehouse_id"], company_id, "Almacén"),
+        _assert_owned_reference("categories", data.get("category_id"), company_id, "Categoría"),
+        _assert_owned_reference("products", data.get("product_id"), company_id, "Producto"),
+    )
 
     row = {
         "company_id":   company_id,
@@ -68,6 +84,11 @@ async def update_rule(rule_id: str, data: dict, user: dict = Depends(require_adm
 
     allowed = {k: v for k, v in data.items() if k in
                ("warehouse_id", "category_id", "product_id", "aisle", "shelf", "bin", "priority", "notes")}
+    await asyncio.gather(
+        _assert_owned_reference("warehouses", allowed.get("warehouse_id"), company_id, "Almacén"),
+        _assert_owned_reference("categories", allowed.get("category_id"), company_id, "Categoría"),
+        _assert_owned_reference("products", allowed.get("product_id"), company_id, "Producto"),
+    )
     await asyncio.to_thread(
         lambda: supabase.table("putaway_rules").update(allowed).eq("id", rule_id).execute()
     )
@@ -101,6 +122,10 @@ async def suggest_location(
     Prioridad: regla específica de producto > regla de categoría.
     """
     company_id = user["company_id"]
+    await asyncio.gather(
+        _assert_owned_reference("products", product_id, company_id, "Producto"),
+        _assert_owned_reference("warehouses", warehouse_id, company_id, "Almacén"),
+    )
 
     # Obtener categoría del producto
     prod = await asyncio.to_thread(

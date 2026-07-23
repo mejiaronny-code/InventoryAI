@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react'
 import { categoriesAPI } from '../../services/api'
 import toast from 'react-hot-toast'
 import { Plus, Pencil, Trash2, Tag, Loader2, Clock3, Package } from 'lucide-react'
-import { Modal } from '../../components/ui'
+import { EmptyState, ErrorState, Modal, PageLoader } from '../../components/ui'
 
 export default function CategoriesPage() {
   const [cats, setCats] = useState([])
@@ -13,8 +13,17 @@ export default function CategoriesPage() {
   const [form, setForm] = useState({ name: '', description: '', reservation_time_hours: 24 })
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
 
-  const load = () => categoriesAPI.list().then(r => setCats(r.data))
+  const load = () => {
+    setLoading(true)
+    setLoadError(false)
+    categoriesAPI.list()
+      .then(r => setCats(r.data))
+      .catch(() => setLoadError(true))
+      .finally(() => setLoading(false))
+  }
   useEffect(() => { load() }, [])
 
   const openCreate = () => { setForm({ name: '', description: '', reservation_time_hours: 24, max_reservation_qty: '' }); setModal('create') }
@@ -34,10 +43,14 @@ export default function CategoriesPage() {
   }
 
   const doDelete = async () => {
-    await categoriesAPI.delete(confirmDelete.id)
-    toast.success('Eliminada')
-    setConfirmDelete(null)
-    load()
+    try {
+      await categoriesAPI.delete(confirmDelete.id)
+      toast.success('Eliminada')
+      setConfirmDelete(null)
+      load()
+    } catch {
+      toast.error('No se pudo eliminar la categoría')
+    }
   }
 
   return (
@@ -47,7 +60,13 @@ export default function CategoriesPage() {
         <button onClick={openCreate} className="btn-primary"><Plus size={16} /> Nueva</button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {loading ? <PageLoader /> : loadError ? (
+        <div className="card"><ErrorState onRetry={load} /></div>
+      ) : cats.length === 0 ? (
+        <div className="card">
+          <EmptyState icon={Tag} title="Sin categorías" description="Crea una categoría para organizar y filtrar tus productos." />
+        </div>
+      ) : <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {cats.map(c => (
           <div key={c.id} className="card p-5 flex flex-col gap-2">
             <div className="flex items-start justify-between">
@@ -70,8 +89,7 @@ export default function CategoriesPage() {
             </div>
           </div>
         ))}
-        {cats.length === 0 && <p className="col-span-3 text-center text-ink-400 py-12">Sin categorías</p>}
-      </div>
+      </div>}
 
       <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Confirmar eliminación">
         <div className="space-y-4">
@@ -89,22 +107,23 @@ export default function CategoriesPage() {
       <Modal open={!!modal} onClose={() => setModal(null)} title={modal === 'create' ? 'Nueva categoría' : 'Editar categoría'}>
         <form onSubmit={handleSave} className="space-y-4">
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Nombre *</label>
-            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="input" required />
+            <label htmlFor="category-name" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Nombre *</label>
+            <input id="category-name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="input" required />
           </div>
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Descripción</label>
-            <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} className="input resize-none" />
+            <label htmlFor="category-description" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Descripción</label>
+            <textarea id="category-description" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} className="input resize-none" />
           </div>
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Tiempo reserva (horas)</label>
-            <input type="number" value={form.reservation_time_hours} onChange={e => setForm(f => ({ ...f, reservation_time_hours: parseInt(e.target.value) }))} className="input" min={1} />
+            <label htmlFor="category-reservation-hours" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Tiempo reserva (horas)</label>
+            <input id="category-reservation-hours" type="number" value={form.reservation_time_hours} onChange={e => setForm(f => ({ ...f, reservation_time_hours: parseInt(e.target.value) }))} className="input" min={1} />
           </div>
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+            <label htmlFor="category-reservation-max" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
               Máximo por reserva <span className="text-ink-400 font-normal normal-case">(dejar vacío = sin límite)</span>
             </label>
             <input
+              id="category-reservation-max"
               type="number"
               value={form.max_reservation_qty}
               onChange={e => setForm(f => ({ ...f, max_reservation_qty: e.target.value }))}

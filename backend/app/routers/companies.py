@@ -6,12 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from app.core.auth import require_super_admin, require_admin, get_current_user
 from app.core.supabase_client import supabase, run_with_retry, run_with_retry_sync as _retry
 from app.core.config import settings
+from app.core.uploads import detect_image_type
 from app.models.schemas import CompanyCreate, CompanyUpdate, CompanyOut, BUSINESS_PRESETS, DEFAULT_FEATURES
 from typing import List
 from pydantic import BaseModel
 import httpx
 import asyncio
+import logging
 from app.services.notifications import send_welcome_email, send_deletion_request_email
+
+logger = logging.getLogger(__name__)
 
 class AssignUserBody(BaseModel):
     user_id: str
@@ -384,7 +388,8 @@ def _upload_logo_sync(company_id: str, ext: str, content: bytes, content_type: s
     )
 
     if response.status_code not in (200, 201):
-        raise HTTPException(500, f"Error al subir imagen: {response.text}")
+        logger.error("Storage rechazó logo: status=%s", response.status_code)
+        raise HTTPException(502, "No se pudo guardar el logo. Intenta de nuevo.")
 
     public_url = (
         f"{settings.supabase_url}/storage/v1/object/public/{bucket}/{storage_path}"
@@ -405,15 +410,21 @@ async def upload_logo(
     user: dict = Depends(require_admin)
 ):
     company_id = user["company_id"]
-    ext = file.filename.split(".")[-1].lower()
-    if ext not in ("png", "jpg", "jpeg", "webp", "svg"):
-        raise HTTPException(400, "Formato no permitido. Usa PNG, JPG, WEBP o SVG.")
-
-    content = await file.read()
+    content = await file.read(2 * 1024 * 1024 + 1)
     if len(content) > 2 * 1024 * 1024:
-        raise HTTPException(400, "El archivo supera 2MB.")
+        raise HTTPException(413, "El archivo supera 2MB.")
+    detected = detect_image_type(content)
+    if not detected:
+        raise HTTPException(400, "El archivo no es una imagen PNG, JPG o WEBP válida.")
+    extension, content_type = detected
 
-    public_url = await asyncio.to_thread(_upload_logo_sync, company_id, ext, content, file.content_type)
+    public_url = await asyncio.to_thread(
+        _upload_logo_sync,
+        company_id,
+        extension,
+        content,
+        content_type,
+    )
     return {"logo_url": public_url}
 
 

@@ -7,12 +7,12 @@ Endpoints del chat IA.
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 import base64
-import imghdr
 import json
 import logging
 from datetime import date, datetime, timezone
 from collections import defaultdict
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ from app.agents.chat_agent import chat, chat_with_image, chat_stream
 from app.core.supabase_client import supabase
 from app.core.company_features import get_active_company, require_public_catalog
 from app.core.net import client_ip as _client_ip
+from app.core.uploads import detect_image_type
 from app.services.transcription import transcribe_audio, ALLOWED_AUDIO_TYPES, MAX_AUDIO_SIZE
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -34,8 +35,9 @@ _counts: dict[str, dict[str, int]] = defaultdict(dict)
 _counts_lock = threading.Lock()
 
 # Cache del límite por empresa para no ir a la DB en cada mensaje
-# { "company_slug": limit_int }  — se invalida al reiniciar el server
-_limit_cache: dict[str, int] = {}
+# { "company_slug": (monotonic_timestamp, limit_int) }
+_limit_cache: dict[str, tuple[float, int]] = {}
+_LIMIT_CACHE_TTL_SECONDS = 60
 
 # ── Rate limiter por IP (anti-bot / anti-ráfaga) ──────────────────────
 # Además del tope diario por empresa, limita cuántas peticiones puede hacer
@@ -85,9 +87,10 @@ _MAX_CHAT_TEXT_LEN = 2000
 
 
 def _get_daily_limit(company_slug: str) -> int:
-    """Lee el límite desde el cache; si no está, consulta la DB."""
-    if company_slug in _limit_cache:
-        return _limit_cache[company_slug]
+    """Lee el límite desde un cache corto para reflejar cambios de plan/config."""
+    cached = _limit_cache.get(company_slug)
+    if cached and time.monotonic() - cached[0] < _LIMIT_CACHE_TTL_SECONDS:
+        return cached[1]
     try:
         res = supabase.table("companies")\
             .select("settings")\
@@ -95,10 +98,11 @@ def _get_daily_limit(company_slug: str) -> int:
             .single()\
             .execute()
         limit = (res.data or {}).get("settings", {}).get("chat_daily_limit", _DEFAULT_DAILY_LIMIT)
-        _limit_cache[company_slug] = int(limit)
+        resolved = max(int(limit), 0)
     except Exception:
-        _limit_cache[company_slug] = _DEFAULT_DAILY_LIMIT
-    return _limit_cache[company_slug]
+        resolved = _DEFAULT_DAILY_LIMIT
+    _limit_cache[company_slug] = (time.monotonic(), resolved)
+    return resolved
 
 
 def _check_rate_limit(company_slug: str) -> None:
@@ -219,15 +223,20 @@ async def send_image_message(
 
     # Leer y convertir a base64
     image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(400, "La imagen está vacía")
     if len(image_bytes) > 10 * 1024 * 1024:  # 10MB máximo
-        raise HTTPException(400, "La imagen no puede superar 10MB")
+        raise HTTPException(413, "La imagen no puede superar 10MB")
+    detected = detect_image_type(image_bytes)
+    if not detected:
+        raise HTTPException(400, "El contenido no es una imagen PNG, JPEG o WebP válida")
 
     _check_ip_rate_limit(request)
     await _check_public_catalog(company_slug)
     _check_rate_limit(company_slug)
 
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-    media_type = image.content_type or "image/jpeg"
+    media_type = detected[0]
 
     response, used_tools = await chat_with_image(
         session_id=session_id,

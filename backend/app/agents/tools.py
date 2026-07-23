@@ -772,28 +772,27 @@ def create_inventory_tools(
             from datetime import timedelta
             expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
 
-            # Crear reserva
-            reservation_data = {
-                "company_id": company_id,
-                "product_id": product_id,
-                "warehouse_id": warehouse_id,
-                "quantity": quantity,
-                "client_name": client_name,
-                "client_email": client_email or None,
-                "client_phone": client_phone or None,
-                "status": "pending",
-                "reservation_code": reservation_code,
-                "expires_at": expires_at,
-                "notes": notes or None,
-            }
-
-            result = await _exec(supabase_client.table("reservations")
-                .insert(reservation_data))
+            result = await _exec(supabase_client.rpc(
+                "create_reservation_if_available",
+                {
+                    "p_company_id": company_id,
+                    "p_product_id": product_id,
+                    "p_warehouse_id": warehouse_id,
+                    "p_quantity": quantity,
+                    "p_client_name": client_name,
+                    "p_client_email": client_email or None,
+                    "p_client_phone": client_phone or None,
+                    "p_notes": notes or None,
+                    "p_reservation_code": reservation_code,
+                    "p_expires_at": expires_at,
+                },
+            ))
 
             if not result.data:
                 return "Error al crear la reserva. Intenta nuevamente."
 
             res = result.data[0]
+            reservation_id = res.get("reservation_id") or res.get("id")
 
             # Notificación al admin
             await _exec(supabase_client.table("notifications").insert({
@@ -801,7 +800,7 @@ def create_inventory_tools(
                 "type": "new_reservation",
                 "message": f"Nueva reserva #{reservation_code} - {client_name} - {product_data.get('name', '')} x{quantity}",
                 "target_role": "admin",
-                "metadata": {"reservation_id": res["id"], "code": reservation_code},
+                "metadata": {"reservation_id": reservation_id, "code": reservation_code},
             }))
 
             # Email al cliente (async, no bloquea la respuesta)
@@ -854,9 +853,14 @@ def create_inventory_tools(
             if res["status"] not in ("pending", "confirmed"):
                 return f"La reserva {reservation_code} no se puede cancelar (estado: {res['status']})."
 
-            await _exec(supabase_client.table("reservations")
-                .update({"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()})
-                .eq("id", res["id"]))
+            await _exec(supabase_client.rpc("transition_reservation", {
+                "p_company_id": company_id,
+                "p_reservation_id": res["id"],
+                "p_new_status": "cancelled",
+                "p_notes": res.get("notes"),
+                "p_created_by": None,
+                "p_variant_combination": None,
+            }))
 
             return (
                 f"✅ Reserva **{reservation_code}** cancelada exitosamente.\n"
@@ -1191,44 +1195,16 @@ def create_inventory_tools(
             if party_size is not None and party_size > 100:
                 return "El número de personas parece demasiado alto. Confírmalo con el cliente."
 
-            # Código único
-            import secrets, string
-            def _gen():
-                return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
-            code = _gen()
-            for _ in range(5):
-                ex = await _exec(supabase_client.table("bookings").select("id").eq("code", code))
-                if not ex.data:
-                    break
-                code = _gen()
-
-            booking = await _exec(supabase_client.table("bookings").insert({
-                "company_id":   company_id,
-                "code":         code,
-                "service_type": service_type,
-                "party_size":   party_size if service_type == "dine_in" else None,
-                "reserved_at":  dt.isoformat(),
-                "zone":         zone,
-                "client_name":  client_name,
-                "client_phone": client_phone,
-                "client_email": client_email,
-                "status":       "pending",
-                "notes":        notes,
-            }))
-            if not booking.data:
-                return "No pude crear la reserva. Intenta de nuevo."
-            booking_id = booking.data[0]["id"]
-
             # Pre-orden de platillos. El modelo puede mandar el id en varios
             # formatos ("ref:UUID:1", "UUID:1", "UUID x1"...), así que extraemos
             # el UUID y la cantidad con regex en vez de partir por ":".
             ordered = []
+            rows = []
             if items:
                 import re as _re
                 uuid_re = _re.compile(
                     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
                 )
-                rows = []
                 for part in items.split(",")[:30]:  # tope de líneas distintas
                     m = uuid_re.search(part)
                     if not m:
@@ -1247,14 +1223,48 @@ def create_inventory_tools(
                         dish = None
                     if dish and dish.data:
                         rows.append({
-                            "booking_id": booking_id,
                             "dish_id":    ref,
                             "quantity":   qty,
-                            "unit_price": dish.data.get("price"),
+                            "modifiers":  {},
                         })
                         ordered.append(f"{qty}× {dish.data['name']}")
-                if rows:
-                    await _exec(supabase_client.table("booking_items").insert(rows))
+
+            # Cabecera y preorden se crean en una sola transacción, igual que
+            # el formulario público. La restricción UNIQUE resuelve colisiones.
+            import secrets, string
+            def _gen():
+                return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+
+            booking_result = None
+            code = None
+            for _ in range(5):
+                code = _gen()
+                try:
+                    booking_result = await _exec(supabase_client.rpc(
+                        "create_booking_with_items",
+                        {
+                            "p_company_id": company_id,
+                            "p_code": code,
+                            "p_service_type": service_type,
+                            "p_party_size": party_size,
+                            "p_reserved_at": dt.isoformat(),
+                            "p_zone": zone,
+                            "p_table_id": None,
+                            "p_client_name": client_name,
+                            "p_client_email": client_email,
+                            "p_client_phone": client_phone,
+                            "p_notes": notes,
+                            "p_items": rows,
+                        },
+                    ))
+                    break
+                except Exception as exc:
+                    if "duplicate key" in str(exc) or "bookings_code_key" in str(exc):
+                        continue
+                    raise
+            if not (booking_result and booking_result.data):
+                return "No pude crear la reserva. Intenta de nuevo."
+            booking_id = booking_result.data[0]["booking_id"]
 
             # Notificar al staff — con detalle útil (mesa/zona + platillos)
             tipo = "Mesa" if service_type == "dine_in" else "Para recoger"

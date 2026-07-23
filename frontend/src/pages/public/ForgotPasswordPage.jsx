@@ -5,7 +5,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { authAPI } from '../../services/api'
-import toast from 'react-hot-toast'
 import { KeyRound, Loader2, ArrowLeft, CheckCircle2 } from 'lucide-react'
 
 export default function ForgotPasswordPage() {
@@ -54,10 +53,11 @@ export default function ForgotPasswordPage() {
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                <label htmlFor="recovery-email" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
                   Correo electrónico
                 </label>
                 <input
+                  id="recovery-email"
                   type="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}

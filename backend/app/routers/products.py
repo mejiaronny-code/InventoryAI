@@ -4,10 +4,10 @@ CRUD de productos con generación automática de embeddings.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from typing import Optional, List
-from uuid import UUID
+from uuid import UUID, uuid4
+import asyncio
 import httpx
 import json
-import time
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ from app.core.auth import require_admin, require_staff, get_current_user
 from app.core.supabase_client import supabase, run_with_retry
 from app.core.config import settings
 from app.core.company_features import get_active_company, require_public_catalog
+from app.core.uploads import detect_image_type
 from app.models.schemas import ProductCreate, ProductUpdate, ProductOut, ProductWithStock, PublicProductOut, StockByWarehouse, VariantStockUpsert, VariantStockUpsertRequest, VariantStockOut
 from app.embeddings.embedding_service import (
     generate_product_embedding,
@@ -27,9 +28,42 @@ router = APIRouter(prefix="/products", tags=["products"])
 
 _PUBLIC_PRODUCT_COLUMNS = (
     "id, company_id, category_id, name, description, price, unit, images, tags, "
-    "is_featured, product_type, allergens, dietary, is_available, prep_time_minutes, "
+    "is_featured, product_type, parent_product_id, variant_attributes, product_options, "
+    "allergens, dietary, is_available, prep_time_minutes, "
     "is_active, product_warehouse_stock(quantity, warehouse_id, nearest_expiry)"
 )
+
+
+async def _validate_product_references(company_id: str, data: dict) -> None:
+    """Impide enlazar categorías o productos padre de otro tenant."""
+    checks = []
+    category_id = data.get("category_id")
+    parent_id = data.get("parent_product_id")
+    if category_id:
+        checks.append((
+            "Categoría no encontrada",
+            supabase.table("categories").select("id")
+                .eq("id", str(category_id)).eq("company_id", company_id).maybe_single(),
+        ))
+    if parent_id:
+        checks.append((
+            "Producto padre no encontrado",
+            supabase.table("products").select("id")
+                .eq("id", str(parent_id)).eq("company_id", company_id).maybe_single(),
+        ))
+    for detail, query in checks:
+        result = await run_with_retry(lambda q=query: q.execute())
+        if not (result and result.data):
+            raise HTTPException(404, detail)
+
+
+def _raise_product_write_error(exc: Exception) -> None:
+    message = str(exc)
+    if "uq_products_company_sku_ci" in message:
+        raise HTTPException(409, "Ya existe un producto con ese SKU")
+    if "uq_products_company_barcode" in message:
+        raise HTTPException(409, "Ya existe un producto con ese código de barras")
+    raise exc
 
 
 @router.get("/public/{company_slug}", response_model=List[PublicProductOut])
@@ -150,6 +184,7 @@ async def create_product(data: ProductCreate, user: dict = Depends(require_admin
     El admin no necesita saber de embeddings — es transparente.
     """
     company_id = user["company_id"]
+    await _validate_product_references(company_id, data.model_dump())
 
     # Generar embedding si hay texto semántico
     embedding = None
@@ -168,7 +203,10 @@ async def create_product(data: ProductCreate, user: dict = Depends(require_admin
         product_data["category_id"] = str(product_data["category_id"])
 
     insert_query = supabase.table("products").insert(product_data)
-    result = await run_with_retry(lambda: insert_query.execute())
+    try:
+        result = await run_with_retry(lambda: insert_query.execute(), idempotent=False)
+    except Exception as exc:
+        _raise_product_write_error(exc)
     if not result.data:
         raise HTTPException(500, "Error al crear producto")
 
@@ -197,6 +235,7 @@ async def update_product(
         raise HTTPException(404, "Producto no encontrado")
 
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    await _validate_product_references(user["company_id"], update_data)
 
     # Regenerar embedding si es necesario
     if should_regenerate_embedding(current.data, update_data):
@@ -210,8 +249,12 @@ async def update_product(
 
     update_query = supabase.table("products")\
         .update(update_data)\
-        .eq("id", product_id)
-    result = await run_with_retry(lambda: update_query.execute())
+        .eq("id", product_id)\
+        .eq("company_id", user["company_id"])
+    try:
+        result = await run_with_retry(lambda: update_query.execute())
+    except Exception as exc:
+        _raise_product_write_error(exc)
 
     if not result.data:
         raise HTTPException(500, "Error al actualizar")
@@ -236,16 +279,16 @@ async def upload_product_image(
     user: dict = Depends(require_admin),
 ):
     """Sube una imagen de producto a Storage y retorna la URL pública."""
-    ext = file.filename.split(".")[-1].lower()
-    if ext not in ("png", "jpg", "jpeg", "webp"):
-        raise HTTPException(400, "Formato no permitido. Usa PNG, JPG o WEBP.")
-
-    content = await file.read()
+    content = await file.read(5 * 1024 * 1024 + 1)
     if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(400, "El archivo supera 5MB.")
+        raise HTTPException(413, "El archivo supera 5MB.")
+    detected = detect_image_type(content)
+    if not detected:
+        raise HTTPException(400, "El archivo no es una imagen PNG, JPG o WEBP válida.")
+    extension, content_type = detected
 
     bucket = "product-images"
-    storage_path = f"{user['company_id']}/{int(time.time())}_{file.filename}"
+    storage_path = f"{user['company_id']}/{uuid4().hex}.{extension}"
     upload_url = f"{settings.supabase_url}/storage/v1/object/{bucket}/{storage_path}"
 
     response = await run_with_retry(lambda: httpx.put(
@@ -254,14 +297,15 @@ async def upload_product_image(
         headers={
             "Authorization": f"Bearer {settings.supabase_service_role_key}",
             "apikey": settings.supabase_service_role_key,
-            "Content-Type": file.content_type,
-            "x-upsert": "true",
+            "Content-Type": content_type,
+            "x-upsert": "false",
         },
         timeout=30,
-    ))
+    ), idempotent=False)
 
     if response.status_code not in (200, 201):
-        raise HTTPException(500, f"Error al subir imagen: {response.text}")
+        logger.error("Storage rechazó imagen de producto: status=%s", response.status_code)
+        raise HTTPException(502, "No se pudo guardar la imagen. Intenta de nuevo.")
 
     public_url = f"{settings.supabase_url}/storage/v1/object/public/{bucket}/{storage_path}"
     return {"url": public_url}
@@ -314,21 +358,27 @@ async def reembed_all_products(user: dict = Depends(require_admin)):
     if not products:
         return {"message": "No hay productos activos", "processed": 0, "failed": 0}
 
-    processed, failed = 0, []
+    semaphore = asyncio.Semaphore(4)
 
-    for p in products:
+    async def reembed_one(p: dict) -> tuple[str, bool]:
         try:
-            embedding = await generate_product_embedding(
-                p["name"], p.get("description") or "", p.get("use_cases") or ""
-            )
+            async with semaphore:
+                embedding = await generate_product_embedding(
+                    p["name"], p.get("description") or "", p.get("use_cases") or ""
+                )
             update_query = supabase.table("products")\
                 .update({"embedding": embedding})\
-                .eq("id", p["id"])
+                .eq("id", p["id"])\
+                .eq("company_id", company_id)
             await run_with_retry(lambda q=update_query: q.execute())
-            processed += 1
+            return p["id"], True
         except Exception as e:
             logger.warning(f"Error re-embebiendo producto {p['id']}: {e}")
-            failed.append(p["id"])
+            return p["id"], False
+
+    outcomes = await asyncio.gather(*(reembed_one(p) for p in products))
+    failed = [product_id for product_id, ok in outcomes if not ok]
+    processed = len(outcomes) - len(failed)
 
     return {
         "message": f"Re-embedding completado: {processed} OK, {len(failed)} fallidos",
@@ -444,62 +494,35 @@ def upsert_variant_stock(
         for item in items
     ]
 
-    result = supabase.table("product_variants_stock")\
-        .upsert(rows, on_conflict="product_id,warehouse_id,combination")\
-        .execute()
-
-    # Registrar cada combinación que cambió como un movimiento de stock —
-    # así aparece en el historial igual que cualquier otro ajuste manual.
-    product_name = prod.data.get("name", "")
-    for warehouse_id, combination, old_qty, new_qty in changes:
-        combo_str = ", ".join(f"{k}: {v}" for k, v in combination.items())
-        delta = new_qty - old_qty
-        movement_notes = f"Variante [{combo_str}] de {product_name}: {old_qty} → {new_qty}"
-        if body.notes and body.notes.strip():
-            movement_notes += f" — Motivo: {body.notes.strip()}"
-        supabase.table("stock_movements").insert({
-            "product_id": product_id,
-            "warehouse_id": warehouse_id,
-            "type": "entrada" if delta > 0 else "salida",
-            "quantity": abs(delta),
-            "notes": movement_notes,
-            "created_by": user["id"],
+    rpc_rows = [
+        {
+            "warehouse_id": row["warehouse_id"],
+            "combination": row["combination"],
+            "quantity": row["quantity"],
+        }
+        for row in rows
+    ]
+    try:
+        result = supabase.rpc("replace_variant_stock", {
+            "p_company_id": company_id,
+            "p_product_id": product_id,
+            "p_items": rpc_rows,
+            "p_notes": body.notes,
+            "p_created_by": user["id"],
         }).execute()
-
-    # ── Sincronizar stock general por almacén ────────────────────────
-    # Sumar todas las combinaciones de este producto por warehouse
-    # y actualizar product_warehouse_stock para que el catálogo muestre bien
-    from collections import defaultdict
-    all_vs = supabase.table("product_variants_stock")\
-        .select("warehouse_id, quantity")\
-        .eq("product_id", product_id)\
-        .execute()
-
-    totals: dict[str, int] = defaultdict(int)
-    for vs in (all_vs.data or []):
-        totals[vs["warehouse_id"]] += vs["quantity"]
-
-    for warehouse_id, total_qty in totals.items():
-        existing = supabase.table("product_warehouse_stock")\
-            .select("id")\
-            .eq("product_id", product_id)\
-            .eq("warehouse_id", warehouse_id)\
-            .maybe_single()\
-            .execute()
-
-        if existing.data:
-            supabase.table("product_warehouse_stock")\
-                .update({"quantity": total_qty})\
-                .eq("product_id", product_id)\
-                .eq("warehouse_id", warehouse_id)\
-                .execute()
-        else:
-            supabase.table("product_warehouse_stock").insert({
-                "product_id": product_id,
-                "warehouse_id": warehouse_id,
-                "quantity": total_qty,
-                "min_stock_alert": 5,
-            }).execute()
+    except Exception as exc:
+        message = str(exc)
+        if "PRODUCT_NOT_FOUND" in message:
+            raise HTTPException(404, "Producto no encontrado")
+        if "WAREHOUSE_NOT_FOUND" in message:
+            raise HTTPException(404, "Almacén no encontrado")
+        if "NOTES_REQUIRED" in message:
+            raise HTTPException(400, "Debes indicar el motivo de la baja de stock")
+        if "PGRST202" in message or (
+            "replace_variant_stock" in message and "schema cache" in message
+        ):
+            raise HTTPException(503, "La migración de integridad de variantes está pendiente")
+        raise
 
     return {"message": f"{len(rows)} combinaciones guardadas", "data": result.data}
 

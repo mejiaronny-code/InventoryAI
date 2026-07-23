@@ -14,6 +14,7 @@ import logging
 import asyncio
 from app.core.auth import require_admin
 from app.core.supabase_client import supabase, run_with_retry
+from app.core.uploads import validate_document_type
 from app.models.schemas import CompanyDocumentOut
 from app.services.knowledge_base import (
     detect_file_type, extract_text, chunk_text,
@@ -105,11 +106,16 @@ async def upload_document(
             detail="Formato no soportado. Sube un archivo PDF, Word (.docx), Markdown (.md) o texto (.txt).",
         )
 
-    file_bytes = await file.read()
+    file_bytes = await file.read(MAX_DOC_SIZE + 1)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="El archivo está vacío.")
     if len(file_bytes) > MAX_DOC_SIZE:
         raise HTTPException(status_code=413, detail="El archivo no puede superar 15 MB.")
+    if not validate_document_type(file_bytes, file_type):
+        raise HTTPException(
+            status_code=400,
+            detail="El contenido del archivo no coincide con su formato o está protegido.",
+        )
 
     # 3. Crear el registro del documento (status=processing)
     insert_query = supabase.table("company_documents").insert({
@@ -120,7 +126,7 @@ async def upload_document(
         "status": "processing",
         "uploaded_by": user.get("id"),
     })
-    doc_res = await run_with_retry(lambda: insert_query.execute())
+    doc_res = await run_with_retry(lambda: insert_query.execute(), idempotent=False)
     document = doc_res.data[0]
     document_id = document["id"]
 
@@ -134,38 +140,46 @@ async def upload_document(
         if not chunks:
             raise ValueError("No se pudo dividir el documento en fragmentos de texto.")
 
-        rows = []
-        for i, chunk in enumerate(chunks):
-            embedding = await generate_embedding(chunk, is_query=False)
-            rows.append({
-                "document_id": document_id,
-                "company_id": company_id,
-                "chunk_index": i,
+        # Concurrencia acotada: reduce el tiempo total sin abrir cientos de
+        # requests simultáneas al proveedor de embeddings.
+        semaphore = asyncio.Semaphore(4)
+
+        async def embed_chunk(index: int, chunk: str) -> dict:
+            async with semaphore:
+                embedding = await generate_embedding(chunk, is_query=False)
+            return {
+                "chunk_index": index,
                 "content": chunk,
                 "embedding": embedding,
-            })
+            }
 
-        chunks_query = supabase.table("company_document_chunks").insert(rows)
-        await run_with_retry(lambda: chunks_query.execute())
-
-        ready_query = supabase.table("company_documents").update({
-            "status": "ready",
-            "chunk_count": len(rows),
-        }).eq("id", document_id)
-        await run_with_retry(lambda: ready_query.execute())
+        rows = await asyncio.gather(*(
+            embed_chunk(index, chunk) for index, chunk in enumerate(chunks)
+        ))
+        finalize_query = supabase.rpc("finalize_company_document", {
+            "p_company_id": company_id,
+            "p_document_id": document_id,
+            "p_chunks": rows,
+        })
+        await run_with_retry(lambda: finalize_query.execute(), idempotent=False)
 
         document["status"] = "ready"
         document["chunk_count"] = len(rows)
 
     except Exception as e:
-        logger.error(f"Error procesando documento {document_id}: {e}")
+        logger.exception("Error procesando documento %s", document_id)
+        safe_error = (
+            str(e)[:300]
+            if isinstance(e, ValueError)
+            else "No se pudo procesar el documento. Intenta de nuevo."
+        )
         error_query = supabase.table("company_documents").update({
             "status": "error",
-            "error_message": str(e)[:500],
+            "error_message": safe_error,
         }).eq("id", document_id)
         await run_with_retry(lambda: error_query.execute())
         document["status"] = "error"
-        document["error_message"] = str(e)[:500]
+        document["error_message"] = safe_error
 
     return document
 

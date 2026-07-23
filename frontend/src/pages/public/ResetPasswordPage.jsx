@@ -68,7 +68,7 @@ export default function ResetPasswordPage() {
 
           {/* Error de link expirado */}
           {error && !done && (
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-5">
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-5" role="alert">
               <p className="text-sm text-red-700 font-medium">⚠️ Enlace inválido</p>
               <p className="text-xs text-red-500 mt-1">{error}</p>
               <button
@@ -90,11 +90,12 @@ export default function ResetPasswordPage() {
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                <label htmlFor="new-password" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
                   Nueva contraseña
                 </label>
                 <div className="relative">
                   <input
+                    id="new-password"
                     type={show ? 'text' : 'password'}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
@@ -106,7 +107,8 @@ export default function ResetPasswordPage() {
                   <button
                     type="button"
                     onClick={() => setShow(s => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-600"
+                    className="absolute right-0 top-1/2 -translate-y-1/2 w-11 h-11 inline-flex items-center justify-center text-ink-400 hover:text-ink-600"
+                    aria-label={show ? 'Ocultar contraseñas' : 'Mostrar contraseñas'}
                   >
                     {show ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
@@ -114,10 +116,11 @@ export default function ResetPasswordPage() {
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                <label htmlFor="confirm-password" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
                   Confirmar contraseña
                 </label>
                 <input
+                  id="confirm-password"
                   type={show ? 'text' : 'password'}
                   value={confirm}
                   onChange={e => setConfirm(e.target.value)}
@@ -127,7 +130,7 @@ export default function ResetPasswordPage() {
                   disabled={!!error}
                 />
                 {confirm && password !== confirm && (
-                  <p className="text-xs text-red-500 mt-1">Las contraseñas no coinciden</p>
+                  <p className="text-xs text-red-600 mt-1" role="alert">Las contraseñas no coinciden</p>
                 )}
               </div>
 

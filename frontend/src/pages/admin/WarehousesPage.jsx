@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react'
 import { warehousesAPI } from '../../services/api'
 import toast from 'react-hot-toast'
 import { Plus, Pencil, Trash2, Warehouse, MapPin, Loader2 } from 'lucide-react'
-import { Modal } from '../../components/ui'
+import { EmptyState, ErrorState, Modal, PageLoader } from '../../components/ui'
 
 export default function WarehousesPage() {
   const [warehouses, setWarehouses] = useState([])
@@ -13,8 +13,17 @@ export default function WarehousesPage() {
   const [form, setForm] = useState({ name: '', location: '', description: '' })
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
 
-  const load = () => warehousesAPI.list().then(r => setWarehouses(r.data))
+  const load = () => {
+    setLoading(true)
+    setLoadError(false)
+    warehousesAPI.list()
+      .then(r => setWarehouses(r.data))
+      .catch(() => setLoadError(true))
+      .finally(() => setLoading(false))
+  }
   useEffect(() => { load() }, [])
 
   const openCreate = () => { setForm({ name: '', location: '', description: '' }); setModal('create') }
@@ -30,10 +39,14 @@ export default function WarehousesPage() {
   }
 
   const doDelete = async () => {
-    await warehousesAPI.delete(confirmDelete.id)
-    toast.success('Desactivado')
-    setConfirmDelete(null)
-    load()
+    try {
+      await warehousesAPI.delete(confirmDelete.id)
+      toast.success('Desactivado')
+      setConfirmDelete(null)
+      load()
+    } catch {
+      toast.error('No se pudo desactivar el almacén')
+    }
   }
 
   return (
@@ -43,7 +56,13 @@ export default function WarehousesPage() {
         <button onClick={openCreate} className="btn-primary"><Plus size={16} /> Nuevo almacén</button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {loading ? <PageLoader /> : loadError ? (
+        <div className="card"><ErrorState onRetry={load} /></div>
+      ) : warehouses.length === 0 ? (
+        <div className="card">
+          <EmptyState icon={Warehouse} title="Sin almacenes" description="Crea un almacén para comenzar a registrar existencias." />
+        </div>
+      ) : <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {warehouses.map(w => (
           <div key={w.id} className="card p-5">
             <div className="flex items-start justify-between mb-3">
@@ -65,8 +84,7 @@ export default function WarehousesPage() {
             </div>
           </div>
         ))}
-        {warehouses.length === 0 && <p className="col-span-3 text-center text-ink-400 py-12">Sin almacenes</p>}
-      </div>
+      </div>}
 
       <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Confirmar desactivación">
         <div className="space-y-4">
@@ -84,16 +102,16 @@ export default function WarehousesPage() {
       <Modal open={!!modal} onClose={() => setModal(null)} title={modal === 'create' ? 'Nuevo almacén' : 'Editar almacén'}>
         <form onSubmit={handleSave} className="space-y-4">
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Nombre *</label>
-            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="input" required />
+            <label htmlFor="warehouse-name" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Nombre *</label>
+            <input id="warehouse-name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="input" required />
           </div>
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Ubicación</label>
-            <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} className="input" />
+            <label htmlFor="warehouse-location" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Ubicación</label>
+            <input id="warehouse-location" value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} className="input" />
           </div>
           <div>
-            <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Descripción</label>
-            <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} className="input resize-none" />
+            <label htmlFor="warehouse-description" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">Descripción</label>
+            <textarea id="warehouse-description" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} className="input resize-none" />
           </div>
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={() => setModal(null)} className="btn-secondary flex-1 justify-center">Cancelar</button>

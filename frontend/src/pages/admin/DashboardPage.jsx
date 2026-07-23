@@ -8,11 +8,12 @@ import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import { useRealtimeNotifications, useRealtimeTable } from '../../hooks/useRealtimeNotifications'
 import {
   Package, CalendarCheck, AlertTriangle,
-  Bell, ArrowRight, RefreshCw, CalendarX2, AlertOctagon
+  Bell, ArrowRight, RefreshCw, CalendarX2, AlertOctagon, CheckCircle2, Circle
 } from 'lucide-react'
 import { format, parseISO, differenceInDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
+import { Link } from 'react-router-dom'
 
 const statusColor = {
   pending:   'badge-yellow',
@@ -20,6 +21,13 @@ const statusColor = {
   completed: 'badge-orange',
   cancelled: 'badge-red',
   expired:   'badge-gray',
+}
+const statusLabel = {
+  pending: 'Pendiente',
+  confirmed: 'Confirmada',
+  completed: 'Completada',
+  cancelled: 'Cancelada',
+  expired: 'Expirada',
 }
 
 function StatCard({ icon: Icon, label, value, sub, accent = false }) {
@@ -108,6 +116,14 @@ export default function DashboardPage() {
         </div>
       ) : data ? (
         <>
+          {error && (
+            <div className="rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 text-sm" role="alert">
+              <span className="text-yellow-800 flex-1">No se pudo actualizar; se muestran los últimos datos disponibles.</span>
+              <button type="button" onClick={load} className="font-semibold text-yellow-900 underline underline-offset-2 text-left">
+                Reintentar
+              </button>
+            </div>
+          )}
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard icon={Package}       label="Productos activos"   value={data.total_products}      sub={`${data.total_stock} en stock`} />
@@ -117,6 +133,44 @@ export default function DashboardPage() {
               <StatCard icon={CalendarX2} label="Por vencer (30d)" value={data.expiring_soon ?? 0} sub="próximos 30 días" />
             )}
           </div>
+
+          {(data.total_products === 0 || data.total_stock === 0) && (
+            <section className="card p-4 sm:p-5 border-brand-200 bg-brand-50/40" aria-labelledby="first-steps-title">
+              <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                <div className="lg:max-w-xs">
+                  <h2 id="first-steps-title" className="section-title">Primeros pasos</h2>
+                  <p className="text-sm text-ink-500 mt-1">Completa lo esencial para comenzar a operar el inventario.</p>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-2 flex-1">
+                  {[
+                    {
+                      done: data.total_products > 0,
+                      label: 'Crear el primer producto',
+                      to: '/admin/products',
+                    },
+                    {
+                      done: data.total_stock > 0,
+                      label: 'Registrar una entrada de stock',
+                      to: '/admin/stock',
+                    },
+                  ].map(step => (
+                    <Link
+                      key={step.label}
+                      to={step.to}
+                      className="min-h-12 rounded-xl border border-ink-100 bg-white px-3 py-2.5 flex items-center gap-2.5 text-sm font-semibold text-ink-700 hover:border-brand-300 hover:text-brand-600 transition-colors"
+                    >
+                      {step.done
+                        ? <CheckCircle2 size={18} className="text-green-500 shrink-0" aria-hidden="true" />
+                        : <Circle size={18} className="text-brand-400 shrink-0" aria-hidden="true" />
+                      }
+                      <span className="flex-1">{step.label}</span>
+                      <ArrowRight size={14} className="text-ink-300" aria-hidden="true" />
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
 
           {/* Widget: Productos por vencer */}
           {hasFeature('expiration_dates') && expiring.length > 0 && (
@@ -161,12 +215,12 @@ export default function DashboardPage() {
                   <CalendarCheck size={17} className="text-brand-500" />
                   Reservas recientes
                 </h2>
-                <a
-                  href={(hasFeature('table_reservations') || hasFeature('pickup_orders')) ? '/admin/bookings' : '/admin/reservations'}
+                <Link
+                  to={(hasFeature('table_reservations') || hasFeature('pickup_orders')) ? '/admin/bookings' : '/admin/reservations'}
                   className="min-h-11 -my-2 px-2 text-xs text-brand-500 font-semibold hover:text-brand-600 flex items-center gap-1 shrink-0"
                 >
                   Ver todas <ArrowRight size={12} />
-                </a>
+                </Link>
               </div>
               <div className="divide-y divide-ink-50">
                 {data.recent_reservations.length === 0 ? (
@@ -182,7 +236,7 @@ export default function DashboardPage() {
                       </p>
                     </div>
                     <span className={clsx('badge shrink-0', statusColor[r.status] || 'badge-gray')}>
-                      {r.status}
+                      {statusLabel[r.status] || r.status}
                     </span>
                   </div>
                 ))}
@@ -196,9 +250,9 @@ export default function DashboardPage() {
                   <Bell size={17} className="text-brand-500" />
                   Notificaciones
                 </h2>
-                <a href="/admin/notifications" className="min-h-11 -my-2 px-2 text-xs text-brand-500 font-semibold hover:text-brand-600 flex items-center gap-1 shrink-0">
+                <Link to="/admin/notifications" className="min-h-11 -my-2 px-2 text-xs text-brand-500 font-semibold hover:text-brand-600 flex items-center gap-1 shrink-0">
                   Ver todas <ArrowRight size={12} />
-                </a>
+                </Link>
               </div>
               <div className="divide-y divide-ink-50">
                 {data.recent_notifications.length === 0 ? (

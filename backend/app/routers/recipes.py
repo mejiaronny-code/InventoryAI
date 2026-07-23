@@ -8,8 +8,6 @@ descuenta automáticamente los insumos del inventario.
 - POST /recipes/register-sale     → registra venta de platillos y descuenta insumos
 """
 from fastapi import APIRouter, Depends, HTTPException
-from datetime import datetime
-
 from app.core.auth import require_staff, require_admin
 from app.core.supabase_client import supabase
 from app.models.schemas import RecipeUpsert, RegisterSale
@@ -73,24 +71,32 @@ def set_recipe(dish_id: str, data: RecipeUpsert, user: dict = Depends(require_ad
         if owned_ids != set(ingredient_ids):
             raise HTTPException(404, "Uno o más insumos no pertenecen a tu empresa")
 
-    # Borrar receta actual y reinsertar
-    supabase.table("recipes").delete()\
-        .eq("dish_id", dish_id)\
-        .eq("company_id", company_id)\
-        .execute()
-
     rows = [{
-        "company_id": company_id,
-        "dish_id": dish_id,
         "ingredient_id": str(item.ingredient_id),
         "quantity": item.quantity,
         "unit": item.unit,
     } for item in data.items]
 
-    if rows:
-        supabase.table("recipes").insert(rows).execute()
+    try:
+        result = supabase.rpc("replace_recipe", {
+            "p_company_id": company_id,
+            "p_dish_id": dish_id,
+            "p_items": rows,
+        }).execute()
+    except Exception as exc:
+        message = str(exc)
+        if "DISH_NOT_FOUND" in message:
+            raise HTTPException(404, "Platillo no encontrado")
+        if "INGREDIENT_NOT_FOUND" in message:
+            raise HTTPException(404, "Uno o más insumos no pertenecen a tu empresa")
+        if "PGRST202" in message or (
+            "replace_recipe" in message and "schema cache" in message
+        ):
+            raise HTTPException(503, "La migración de integridad de recetas está pendiente")
+        raise
 
-    return {"message": "Receta actualizada", "items": len(rows)}
+    count = result.data if isinstance(result.data, int) else len(rows)
+    return {"message": "Receta actualizada", "items": count}
 
 
 def _deplete_ingredient(company_id: str, ingredient_id: str, needed: int,
@@ -189,7 +195,7 @@ def register_sale(data: RegisterSale, user: dict = Depends(require_staff)):
     warehouse_id = str(data.warehouse_id) if data.warehouse_id else None
     dishes_without_recipe: list[str] = []
     shortages: list[dict] = []
-    total_deductions = 0
+    valid_sales: list[dict] = []
 
     for sale in data.items:
         dish_id = str(sale.dish_id)
@@ -204,35 +210,45 @@ def register_sale(data: RegisterSale, user: dict = Depends(require_staff)):
             continue
         dish_name = dish.data["name"]
 
-        # Receta del platillo
+        # Conserva la respuesta existente para platillos sin receta.
         recipe = supabase.table("recipes")\
-            .select("ingredient_id, quantity")\
+            .select("id")\
             .eq("dish_id", dish_id)\
             .eq("company_id", company_id)\
+            .limit(1)\
             .execute()
-        recipe_rows = recipe.data or []
-        if not recipe_rows:
+        if not (recipe.data or []):
             dishes_without_recipe.append(dish_name)
             continue
 
-        note = f"Venta: {sale.quantity}× {dish_name}"
-        for r in recipe_rows:
-            needed = int(round(float(r["quantity"]) * sale.quantity))
-            if needed <= 0:
-                continue
-            res = _deplete_ingredient(
-                company_id, r["ingredient_id"], needed,
-                user["id"], warehouse_id, note,
-            )
-            total_deductions += res["deducted"]
-            if res["short"] > 0:
-                ing = supabase.table("products").select("name")\
-                    .eq("id", r["ingredient_id"]).single().execute()
-                shortages.append({
-                    "ingredient": (ing.data or {}).get("name", "insumo"),
-                    "faltante": res["short"],
-                    "platillo": dish_name,
-                })
+        valid_sales.append({"dish_id": dish_id, "quantity": sale.quantity})
+
+    try:
+        result = supabase.rpc("register_recipe_sale", {
+            "p_company_id": company_id,
+            "p_items": valid_sales,
+            "p_warehouse_id": warehouse_id,
+            "p_created_by": user["id"],
+        }).execute()
+    except Exception as exc:
+        message = str(exc)
+        if "WAREHOUSE_NOT_FOUND" in message:
+            raise HTTPException(404, "Almacén no encontrado")
+        if "PGRST202" in message or (
+            "register_recipe_sale" in message and "schema cache" in message
+        ):
+            raise HTTPException(503, "La migración de integridad de ventas está pendiente")
+        raise
+
+    result_rows = result.data or []
+    total_deductions = sum(int(row.get("deducted") or 0) for row in result_rows)
+    for row in result_rows:
+        if int(row.get("short") or 0) > 0:
+            shortages.append({
+                "ingredient": row.get("ingredient_name") or "insumo",
+                "faltante": int(row["short"]),
+                "platillo": row.get("dish_name") or "platillo",
+            })
 
     return {
         "message": "Venta registrada",

@@ -24,6 +24,9 @@ ALLOWED_DOC_TYPES = {
     "application/octet-stream": None,  # se determina por extensión
 }
 MAX_DOC_SIZE = 15 * 1024 * 1024  # 15 MB
+MAX_PDF_PAGES = 200
+MAX_EXTRACTED_CHARS = 250_000
+MAX_CHUNKS = 250
 
 # Tamaño aproximado de cada chunk (en caracteres) y solapamiento entre chunks
 CHUNK_SIZE = 1200
@@ -50,7 +53,16 @@ def extract_text(file_bytes: bytes, file_type: str) -> str:
     try:
         if file_type == "pdf":
             reader = PdfReader(io.BytesIO(file_bytes))
-            pages = [page.extract_text() or "" for page in reader.pages]
+            if len(reader.pages) > MAX_PDF_PAGES:
+                raise ValueError(f"El PDF supera el máximo de {MAX_PDF_PAGES} páginas.")
+            pages = []
+            extracted_length = 0
+            for page in reader.pages:
+                page_text = page.extract_text() or ""
+                extracted_length += len(page_text)
+                if extracted_length > MAX_EXTRACTED_CHARS:
+                    raise ValueError("El documento contiene demasiado texto para procesarlo.")
+                pages.append(page_text)
             return "\n\n".join(pages).strip()
 
         if file_type == "docx":
@@ -62,10 +74,16 @@ def extract_text(file_bytes: bytes, file_type: str) -> str:
                     cells = [c.text.strip() for c in row.cells if c.text.strip()]
                     if cells:
                         parts.append(" | ".join(cells))
-            return "\n".join(parts).strip()
+            text = "\n".join(parts).strip()
+            if len(text) > MAX_EXTRACTED_CHARS:
+                raise ValueError("El documento contiene demasiado texto para procesarlo.")
+            return text
 
         if file_type in ("md", "txt"):
-            return file_bytes.decode("utf-8", errors="ignore").strip()
+            text = file_bytes.decode("utf-8").strip()
+            if len(text) > MAX_EXTRACTED_CHARS:
+                raise ValueError("El documento contiene demasiado texto para procesarlo.")
+            return text
 
     except Exception as e:
         logger.error(f"Error extrayendo texto ({file_type}): {e}")
@@ -103,6 +121,8 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
+            if len(chunks) > MAX_CHUNKS:
+                raise ValueError("El documento genera demasiados fragmentos para procesarlo.")
 
         if end >= n:
             break

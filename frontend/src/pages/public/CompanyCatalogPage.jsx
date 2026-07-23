@@ -15,41 +15,10 @@ import {
   CalendarClock, Utensils, Users, RefreshCw
 } from 'lucide-react'
 import clsx from 'clsx'
-import { CURRENCIES } from '../../context/CompanyFeaturesContext'
-
-function buildFormatPrice(currencyCode) {
-  const info = CURRENCIES.find(c => c.code === currencyCode) || CURRENCIES[0]
-  const noDecimals = ['CLP', 'PYG', 'JPY']
-  const decimals = noDecimals.includes(currencyCode) ? 0 : 2
-  return (amount) => {
-    if (amount == null || isNaN(amount)) return `${info.symbol}0`
-    return `${info.symbol}${Number(amount).toLocaleString('es-419', {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    })}`
-  }
-}
+import { buildFormatPrice } from '../../context/CompanyFeaturesContext'
 
 const PUBLIC_PRODUCTS_PAGE_SIZE = 200 // máximo permitido por el backend (products.py: le=200)
 const PUBLIC_PRODUCTS_MAX_PAGES = 50  // tope de seguridad: 10,000 productos
-
-/**
- * Trae TODO el catálogo público paginando en el backend (limit/offset),
- * porque el catálogo filtra búsqueda/categoría/tag en memoria sobre el
- * array completo — una sola página se quedaría corta a partir del
- * producto #201 (o #51 antes de este fix).
- */
-async function fetchAllPublicProducts(companySlug) {
-  const all = []
-  let offset = 0
-  for (let page = 0; page < PUBLIC_PRODUCTS_MAX_PAGES; page++) {
-    const res = await productsAPI.listPublic(companySlug, { limit: PUBLIC_PRODUCTS_PAGE_SIZE, offset })
-    all.push(...res.data)
-    if (res.data.length < PUBLIC_PRODUCTS_PAGE_SIZE) break
-    offset += PUBLIC_PRODUCTS_PAGE_SIZE
-  }
-  return all
-}
 
 /* ── Carrusel de imágenes ─────────────────────────────────────────── */
 function ImageCarousel({ images, alt, height = 'h-44' }) {
@@ -65,7 +34,7 @@ function ImageCarousel({ images, alt, height = 'h-44' }) {
 
   return (
     <div className={`relative w-full ${height} rounded-xl overflow-hidden group bg-ink-50`}>
-      <img src={imgs[idx]} alt={alt} className="w-full h-full object-contain p-2 transition-opacity duration-200" />
+      <img src={imgs[idx]} alt={alt} loading="lazy" decoding="async" className="w-full h-full object-contain p-2 transition-opacity duration-200" />
       {imgs.length > 1 && (
         <>
           <button onClick={prev} className="absolute left-1 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-black/50 text-white flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" aria-label="Imagen anterior">
@@ -233,16 +202,19 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
                 <img
                   src={displayImg || imgs[0]}
                   alt={product.name}
+                  decoding="async"
                   className="w-full h-full object-contain p-3 transition-all duration-200"
                 />
                 {imgs.length > 1 && imgIdx !== -1 && (
                   <>
                     <button onClick={() => setImgIdx(i => (i - 1 + imgs.length) % imgs.length)}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center">
+                      className="absolute left-3 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-black/40 text-white flex items-center justify-center"
+                      aria-label="Imagen anterior">
                       <ChevronLeft size={16} />
                     </button>
                     <button onClick={() => setImgIdx(i => (i + 1) % imgs.length)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center">
+                      className="absolute right-3 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-black/40 text-white flex items-center justify-center"
+                      aria-label="Imagen siguiente">
                       <ChevronRight size={16} />
                     </button>
                     <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1.5">
@@ -257,7 +229,7 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
                         <button key={i} onClick={() => { setImgIdx(i); setSelectedColorImg(null) }}
                           className={clsx('w-10 h-10 rounded-lg overflow-hidden border-2 shrink-0 transition-all bg-white',
                             i === imgIdx ? 'border-white' : 'border-transparent opacity-60')}>
-                          <img src={url} alt="" className="w-full h-full object-contain p-0.5" />
+                          <img src={url} alt="" loading="lazy" decoding="async" className="w-full h-full object-contain p-0.5" />
                         </button>
                       ))}
                     </div>
@@ -336,7 +308,7 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
                                 outOfStock && 'opacity-40'
                               )}
                             >
-                              <img src={val.image} alt={val.label} className="w-full h-full object-cover" />
+                              <img src={val.image} alt={val.label} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                               {outOfStock && (
                                 <div className="absolute inset-0 bg-white/60 flex items-center justify-center">
                                   <X size={12} className="text-red-500" />
@@ -482,7 +454,7 @@ function ProductDetailModal({ product, variants, formatPrice, showStock, company
                 <div className="bg-ink-50 rounded-xl p-3 space-y-2">
                   <div className="flex items-center gap-3">
                     {(selectedColorImg || imgs[0])
-                      ? <img src={selectedColorImg || imgs[0]} alt={product.name} className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                      ? <img src={selectedColorImg || imgs[0]} alt={product.name} loading="lazy" decoding="async" className="w-12 h-12 rounded-lg object-cover shrink-0" />
                       : <div className="w-12 h-12 rounded-lg bg-ink-200 flex items-center justify-center shrink-0"><Package size={18} className="text-ink-400" /></div>
                     }
                     <div className="flex-1 min-w-0">
@@ -965,37 +937,71 @@ export default function CompanyCatalogPage() {
   const [catalogDisabled, setCatalogDisabled] = useState(false)
   const [detailProduct, setDetailProduct] = useState(null)
   const [bookingOpen, setBookingOpen] = useState(false)
+  const [syncingCatalog, setSyncingCatalog] = useState(false)
+  const loadRequestRef = useRef(0)
 
   const formatPrice = buildFormatPrice(company?.settings?.currency || 'USD')
   const showStock = company?.settings?.show_stock ?? true
 
-  const loadCatalog = () => {
+  const loadCatalog = async () => {
+    const requestId = ++loadRequestRef.current
     setLoading(true)
     setLoadError(false)
-    // El catálogo filtra (búsqueda/categoría/tag) en memoria sobre este array,
-    // así que hace falta TODO el catálogo, no solo la primera página — antes
-    // se pedía sin limit/offset (tope fijo de 50 del backend) y un producto
-    // #51 en adelante desaparecía sin aviso, junto con sus tags/variantes.
-    Promise.all([
-      fetchAllPublicProducts(companySlug),
-      categoriesAPI.listPublic(companySlug),
-    ]).then(([allProducts, catRes]) => {
-      setProducts(allProducts)
-      setCategories(catRes.data)
-    })
-      // Antes esto se confundía con "empresa no encontrada" (404) — un fallo
-      // de red o un 500 del backend no significa que la empresa no exista.
-      .catch(() => setLoadError(true))
-      .finally(() => setLoading(false))
+    setSyncingCatalog(false)
+    setNotFound(false)
+    setCatalogDisabled(false)
+    setProducts([])
 
     companiesAPI.listPublic()
       .then(r => {
+        if (requestId !== loadRequestRef.current) return
         const found = r.data.find(c => c.slug === companySlug)
         setCompany(found || null)
         if (!found) setNotFound(true)
         else if (found.features?.public_catalog === false) setCatalogDisabled(true)
       })
-      .catch(() => setLoadError(true))
+      .catch(() => {
+        if (requestId === loadRequestRef.current) setLoadError(true)
+      })
+
+    try {
+      const [firstPage, catRes] = await Promise.all([
+        productsAPI.listPublic(companySlug, {
+          limit: PUBLIC_PRODUCTS_PAGE_SIZE,
+          offset: 0,
+        }),
+        categoriesAPI.listPublic(companySlug),
+      ])
+      if (requestId !== loadRequestRef.current) return
+      setProducts(firstPage.data)
+      setCategories(catRes.data)
+      setLoading(false)
+
+      // Renderiza la primera página de inmediato y completa catálogos grandes
+      // progresivamente; así la primera vista no espera hasta 50 requests.
+      let pageRows = firstPage.data
+      let offset = PUBLIC_PRODUCTS_PAGE_SIZE
+      if (pageRows.length === PUBLIC_PRODUCTS_PAGE_SIZE) setSyncingCatalog(true)
+      for (let page = 1; page < PUBLIC_PRODUCTS_MAX_PAGES &&
+        pageRows.length === PUBLIC_PRODUCTS_PAGE_SIZE; page++) {
+        const next = await productsAPI.listPublic(companySlug, {
+          limit: PUBLIC_PRODUCTS_PAGE_SIZE,
+          offset,
+        })
+        if (requestId !== loadRequestRef.current) return
+        pageRows = next.data
+        if (pageRows.length) setProducts(current => [...current, ...pageRows])
+        offset += PUBLIC_PRODUCTS_PAGE_SIZE
+      }
+      if (requestId === loadRequestRef.current) setSyncingCatalog(false)
+    } catch {
+      if (requestId === loadRequestRef.current) {
+        setLoadError(true)
+        setLoading(false)
+        setSyncingCatalog(false)
+      }
+    }
+
   }
 
   useEffect(() => { loadCatalog() }, [companySlug])
@@ -1137,6 +1143,12 @@ export default function CompanyCatalogPage() {
                 </button>
               ))}
             </div>
+          )}
+          {syncingCatalog && (
+            <p className="text-xs text-ink-400 flex items-center gap-2" role="status">
+              <Loader2 size={13} className="animate-spin text-brand-500" />
+              Cargando el resto del catálogo…
+            </p>
           )}
         </div>
 

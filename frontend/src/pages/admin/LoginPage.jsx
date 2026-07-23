@@ -49,10 +49,11 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+              <label htmlFor="login-email" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
                 Email
               </label>
               <input
+                id="login-email"
                 type="email"
                 value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
@@ -64,7 +65,7 @@ export default function LoginPage() {
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide">
+                <label htmlFor="login-password" className="text-xs font-semibold text-ink-500 uppercase tracking-wide">
                   Contraseña
                 </label>
                 <Link to="/forgot-password" className="text-xs text-brand-500 hover:text-brand-600 font-medium">
@@ -73,6 +74,7 @@ export default function LoginPage() {
               </div>
               <div className="relative">
                 <input
+                  id="login-password"
                   type={showPw ? 'text' : 'password'}
                   value={form.password}
                   onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
@@ -83,7 +85,8 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={() => setShowPw(s => !s)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-600"
+                  className="absolute right-0 top-1/2 -translate-y-1/2 w-11 h-11 inline-flex items-center justify-center text-ink-400 hover:text-ink-600"
+                  aria-label={showPw ? 'Ocultar contraseña' : 'Mostrar contraseña'}
                 >
                   {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
@@ -91,7 +94,7 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-600 text-sm px-4 py-3 rounded-xl">
+              <div className="bg-red-50 border border-red-200 text-red-600 text-sm px-4 py-3 rounded-xl" role="alert">
                 {error}
               </div>
             )}
@@ -109,9 +112,9 @@ export default function LoginPage() {
 
         <p className="text-center text-ink-600 text-xs mt-6">
           ¿Eres cliente?{' '}
-          <a href="/" className="text-brand-400 hover:text-brand-300 font-medium">
+          <Link to="/" className="text-brand-400 hover:text-brand-300 font-medium">
             Ver catálogo público
-          </a>
+          </Link>
         </p>
       </div>
     </div>

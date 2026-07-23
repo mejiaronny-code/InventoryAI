@@ -16,6 +16,13 @@ export function AuthProvider({ children }) {
   })
   const [loading, setLoading] = useState(true)
 
+  const logout = useCallback(() => {
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    localStorage.removeItem('user')
+    setUser(null)
+  }, [])
+
   useEffect(() => {
     // Verificar token al montar
     const token = localStorage.getItem('access_token')
@@ -32,22 +39,16 @@ export function AuthProvider({ children }) {
     } else {
       setLoading(false)
     }
-  }, [])
+  }, [logout])
 
   const login = useCallback(async (email, password) => {
     const res = await authAPI.login(email, password)
-    const { access_token, user: userData } = res.data
+    const { access_token, refresh_token, user: userData } = res.data
     localStorage.setItem('access_token', access_token)
+    localStorage.setItem('refresh_token', refresh_token)
     localStorage.setItem('user', JSON.stringify(userData))
     setUser(userData)
     return userData
-  }, [])
-
-  const logout = useCallback(() => {
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
-    localStorage.removeItem('user')
-    setUser(null)
   }, [])
 
   const updateUser = useCallback((updates) => {

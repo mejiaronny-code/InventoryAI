@@ -2,11 +2,12 @@
 app/core/config.py
 Configuración central de la aplicación usando pydantic-settings
 """
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
     # Supabase
     supabase_url: str
     supabase_service_role_key: str
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
 
     # Sentry (monitoreo de errores) — vacío = deshabilitado (local/CI no lo necesitan)
     sentry_dsn: str = ""
+    sentry_traces_sample_rate: float = 0.0
 
     # Margen sobre el costo real de IA que se le muestra a la empresa.
     # `ai_usage_log.cost_usd` siempre guarda el costo REAL de DeepInfra (para
@@ -49,11 +51,6 @@ class Settings(BaseSettings):
     # al número que ve la empresa en su propio dashboard. Configurable por si
     # se ajusta el margen por plan.
     ai_cost_multiplier: float = 20.0
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-
 
 @lru_cache()
 def get_settings() -> Settings:

@@ -16,7 +16,7 @@ import {
 import { QRCodeCanvas } from 'qrcode.react'
 import ProductImage from '../../components/shared/ProductImage'
 import BarcodeScannerModal from '../../components/shared/BarcodeScannerModal'
-import { Modal } from '../../components/ui'
+import { ErrorState, Modal } from '../../components/ui'
 import clsx from 'clsx'
 
 function TagInput({ tags, onChange }) {
@@ -460,7 +460,7 @@ function QRLabelModal({ open, onClose, product, companySlug }) {
       </style>
     </head><body>
       <div class="grid">${labelHtml}</div>
-      <script>window.onload=()=>{window.print();setTimeout(()=>window.close(),500)}<\/script>
+      <script>window.onload=()=>{window.print();setTimeout(()=>window.close(),500)}</script>
     </body></html>`)
     win.document.close()
   }
@@ -1126,6 +1126,7 @@ export default function ProductsPage() {
   const [typeFilter, setTypeFilter] = useState('all') // all | dish | ingredient (solo restaurante)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [modal, setModal] = useState(null) // null | 'create' | product obj
   const [stockModal, setStockModal] = useState(null) // product obj para ver desglose
@@ -1139,6 +1140,7 @@ export default function ProductsPage() {
   // páginas de PRODUCTS_PAGE_SIZE con "Cargar más".
   const load = () => {
     setLoading(true)
+    setLoadError(false)
     Promise.all([
       productsAPI.list({ search, limit: PRODUCTS_PAGE_SIZE, offset: 0 }),
       categoriesAPI.list(),
@@ -1148,6 +1150,8 @@ export default function ProductsPage() {
       setCategories(c.data)
       setWarehouses(w.data)
       setHasMore(p.data.length === PRODUCTS_PAGE_SIZE)
+    }).catch(() => {
+      setLoadError(true)
     }).finally(() => setLoading(false))
   }
 
@@ -1158,6 +1162,7 @@ export default function ProductsPage() {
         setProducts(prev => [...prev, ...r.data])
         setHasMore(r.data.length === PRODUCTS_PAGE_SIZE)
       })
+      .catch(() => toast.error('No se pudieron cargar más productos'))
       .finally(() => setLoadingMore(false))
   }
 
@@ -1257,7 +1262,11 @@ export default function ProductsPage() {
       </div>
 
       {/* Table */}
-      <div className="table-container">
+      {loadError && products.length === 0 ? (
+        <div className="card">
+          <ErrorState onRetry={load} />
+        </div>
+      ) : <div className="table-container">
         <table className="table min-w-[760px]">
           <thead>
             <tr>
@@ -1332,16 +1341,16 @@ export default function ProductsPage() {
                   {isAdmin && (
                     <td>
                       <div className="flex items-center gap-1">
-                        <button onClick={() => setModal(p)} className="btn-ghost p-2 text-ink-500" title="Editar">
+                        <button onClick={() => setModal(p)} className="btn-ghost p-2 text-ink-500" title="Editar" aria-label={`Editar ${p.name}`}>
                           <Pencil size={14} />
                         </button>
-                        <button onClick={() => setQrModal(p)} className="btn-ghost p-2 text-brand-500" title="Imprimir etiqueta QR">
+                        <button onClick={() => setQrModal(p)} className="btn-ghost p-2 text-brand-500" title="Imprimir etiqueta QR" aria-label={`Imprimir etiqueta QR de ${p.name}`}>
                           <QrCode size={14} />
                         </button>
-                        <button onClick={() => handleRegenerateEmbedding(p.id)} className="btn-ghost p-2 text-ink-400" title="Regenerar embedding">
+                        <button onClick={() => handleRegenerateEmbedding(p.id)} className="btn-ghost p-2 text-ink-400" title="Regenerar embedding" aria-label={`Regenerar búsqueda inteligente de ${p.name}`}>
                           <RefreshCw size={14} />
                         </button>
-                        <button onClick={() => setConfirmDelete({ id: p.id, name: p.name })} className="btn-ghost p-2 text-red-500 hover:bg-red-50" title="Desactivar">
+                        <button onClick={() => setConfirmDelete({ id: p.id, name: p.name })} className="btn-ghost p-2 text-red-500 hover:bg-red-50" title="Desactivar" aria-label={`Desactivar ${p.name}`}>
                           <Trash2 size={14} />
                         </button>
                       </div>
@@ -1352,7 +1361,7 @@ export default function ProductsPage() {
             })}
           </tbody>
         </table>
-      </div>
+      </div>}
 
       {hasMore && !loading && (
         <div className="flex justify-center pt-2">

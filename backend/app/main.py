@@ -4,10 +4,13 @@ Punto de entrada principal de la API FastAPI.
 """
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 import asyncio
 import logging
+import time
+import uuid
 
 from app.core.config import settings
 
@@ -16,7 +19,7 @@ if settings.sentry_dsn:
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
         environment=settings.environment,
-        traces_sample_rate=0,  # solo errores, sin performance monitoring (gratis)
+        traces_sample_rate=max(0.0, min(settings.sentry_traces_sample_rate, 1.0)),
     )
 
 from app.core.supabase_client import supabase
@@ -88,7 +91,15 @@ app = FastAPI(
 # ── SECURITY HEADERS ─────────────────────────────────────────────────
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID")
+        if not request_id or len(request_id) > 100:
+            request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
+        started = time.perf_counter()
         response = await call_next(request)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        response.headers["X-Request-ID"] = request_id
+        response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -148,12 +159,15 @@ def health():
         db_status = "ok"
     except Exception:
         db_status = "down"
-    return {
+    payload = {
         "status": "ok" if db_status == "ok" else "degraded",
         "db": db_status,
         "version": "1.0.0",
         "environment": settings.environment,
     }
+    # Railway solo reemplaza una instancia enferma si el healthcheck usa un
+    # código no exitoso. Un JSON "degraded" con HTTP 200 parecía saludable.
+    return JSONResponse(payload, status_code=200 if db_status == "ok" else 503)
 
 
 @app.get("/")

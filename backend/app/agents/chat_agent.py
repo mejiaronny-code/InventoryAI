@@ -104,8 +104,13 @@ _HISTORY_MAX_SESSIONS = 2000
 _HISTORY_TTL_SECONDS = 6 * 3600  # 6 horas de inactividad
 
 
-def _touch_history(session_id: str) -> None:
-    _history_last_seen[session_id] = time.monotonic()
+def _history_key(company_id: str, session_id: str) -> str:
+    """Una sesión del navegador nunca comparte contexto entre empresas."""
+    return f"{company_id}:{session_id}"
+
+
+def _touch_history(history_key: str) -> None:
+    _history_last_seen[history_key] = time.monotonic()
     if len(_history_store) > _HISTORY_MAX_SESSIONS:
         _prune_history_store()
 
@@ -116,6 +121,13 @@ def _prune_history_store() -> None:
     for sid in stale:
         _history_store.pop(sid, None)
         _history_last_seen.pop(sid, None)
+    overflow = len(_history_store) - _HISTORY_MAX_SESSIONS
+    if overflow > 0:
+        oldest = sorted(_history_last_seen, key=_history_last_seen.get)[:overflow]
+        for sid in oldest:
+            _history_store.pop(sid, None)
+            _history_last_seen.pop(sid, None)
+        stale.extend(oldest)
     if stale:
         logger.info(f"_history_store: podadas {len(stale)} sesiones inactivas ({len(_history_store)} restantes)")
 
@@ -375,10 +387,11 @@ async def _run_agent(
     menu_mode = features.get("menu_mode", False)
     client = _client()
 
-    if session_id not in _history_store:
-        _history_store[session_id] = []
-    _touch_history(session_id)
-    history: list = _history_store[session_id]
+    history_key = _history_key(company_id, session_id)
+    if history_key not in _history_store:
+        _history_store[history_key] = []
+    _touch_history(history_key)
+    history: list = _history_store[history_key]
     history.append({"role": "user", "content": message})
 
     # System prompt
@@ -508,7 +521,7 @@ async def _run_agent(
             # a veces filtra al cliente pese a la regla del prompt.
             answer = re.sub(r"\s*\[ref:[^\]]*\]", "", answer).strip()
             history.append({"role": "assistant", "content": answer})
-            _history_store[session_id] = history[-_STORE_LIMIT:]
+            _history_store[history_key] = history[-_STORE_LIMIT:]
             _log_ai_usage(company_id, session_id, CHAT_MODEL, total_tokens_in, total_tokens_out)
             logger.info(
                 f"Chat completado [{CHAT_MODEL}] — "
@@ -582,7 +595,7 @@ async def _run_agent(
         answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
         if answer:
             history.append({"role": "assistant", "content": answer})
-            _history_store[session_id] = history[-_STORE_LIMIT:]
+            _history_store[history_key] = history[-_STORE_LIMIT:]
             return answer, used_tools
     except Exception:
         pass
@@ -714,10 +727,11 @@ async def _run_agent_stream(
     menu_mode = features.get("menu_mode", False)
     client = _client()
 
-    if session_id not in _history_store:
-        _history_store[session_id] = []
-    _touch_history(session_id)
-    history: list = _history_store[session_id]
+    history_key = _history_key(company_id, session_id)
+    if history_key not in _history_store:
+        _history_store[history_key] = []
+    _touch_history(history_key)
+    history: list = _history_store[history_key]
     history.append({"role": "user", "content": message})
 
     if ai_rules:
@@ -938,7 +952,7 @@ async def _run_agent_stream(
         answer_clean = re.sub(r"\s*\[ref:[^\]]*\]", "", answer_clean).strip()
 
         history.append({"role": "assistant", "content": answer_clean})
-        _history_store[session_id] = history[-_STORE_LIMIT:]
+        _history_store[history_key] = history[-_STORE_LIMIT:]
         _log_ai_usage(company_id, session_id, CHAT_MODEL, total_tokens_in, total_tokens_out)
         logger.info(
             f"Chat (stream) completado [{CHAT_MODEL}] — "
@@ -953,7 +967,7 @@ async def _run_agent_stream(
     _log_ai_usage(company_id, session_id, CHAT_MODEL, total_tokens_in, total_tokens_out)
     fallback = "No encontré productos relacionados con tu búsqueda en nuestro catálogo. ¿Puedo ayudarte con algo más?"
     history.append({"role": "assistant", "content": fallback})
-    _history_store[session_id] = history[-_STORE_LIMIT:]
+    _history_store[history_key] = history[-_STORE_LIMIT:]
     yield {"delta": fallback}
     yield {"done": True, "used_tools": used_tools}
 
@@ -1067,6 +1081,15 @@ async def chat_with_image(
     try:
         from app.embeddings.embedding_service import generate_embedding
         client = _client()
+        vision_tokens_in = 0
+        vision_tokens_out = 0
+
+        def add_usage(response) -> None:
+            nonlocal vision_tokens_in, vision_tokens_out
+            usage = getattr(response, "usage", None)
+            if usage:
+                vision_tokens_in += usage.prompt_tokens or 0
+                vision_tokens_out += usage.completion_tokens or 0
 
         user_image_url = f"data:{image_media_type};base64,{image_base64}"
 
@@ -1096,6 +1119,7 @@ async def chat_with_image(
                 ],
             }],
         )
+        add_usage(attr_resp)
         attr_raw = (attr_resp.choices[0].message.content or "").strip()
         logger.info(f"Atributos imagen: {attr_raw[:300]}")
 
@@ -1136,7 +1160,10 @@ async def chat_with_image(
                         candidate_ids.append(row["id"])
 
         if not candidate_ids:
-            _log_ai_usage(company_id, session_id, VISION_MODEL)
+            _log_ai_usage(
+                company_id, session_id, VISION_MODEL,
+                vision_tokens_in, vision_tokens_out,
+            )
             return (
                 f"🔍 Veo que es {product_type}{' ' + brand if brand else ''}. "
                 "No encontré ese tipo de producto en el inventario. "
@@ -1187,6 +1214,7 @@ async def chat_with_image(
                 ],
             }],
         )
+        add_usage(score_resp)
         score_raw = (score_resp.choices[0].message.content or "").strip()
         logger.info(f"Scores: {score_raw[:400]}")
 
@@ -1229,25 +1257,29 @@ async def chat_with_image(
             elif 50 <= score < 85 and len(similar_list) < 3:
                 similar_list.append((product, c))
 
-        _log_ai_usage(company_id, session_id, VISION_MODEL)
+        _log_ai_usage(
+            company_id, session_id, VISION_MODEL,
+            vision_tokens_in, vision_tokens_out,
+        )
 
         # ── Helper para guardar en historial ──────────────────────────
         def _save_to_history(assistant_reply: str, found_product_id: str | None = None):
-            if session_id not in _history_store:
-                _history_store[session_id] = []
-            _touch_history(session_id)
-            _history_store[session_id].append({
+            history_key = _history_key(company_id, session_id)
+            if history_key not in _history_store:
+                _history_store[history_key] = []
+            _touch_history(history_key)
+            _history_store[history_key].append({
                 "role": "user",
                 "content": f"[Imagen enviada] {user_text}",
             })
             content = assistant_reply
             if found_product_id:
                 content = f"[PRODUCTO_ID:{found_product_id}]\n{assistant_reply}"
-            _history_store[session_id].append({
+            _history_store[history_key].append({
                 "role": "assistant",
                 "content": content,
             })
-            _history_store[session_id] = _history_store[session_id][-_STORE_LIMIT:]
+            _history_store[history_key] = _history_store[history_key][-_STORE_LIMIT:]
 
         # ── CASO 1: Match exacto ───────────────────────────────────────
         if exact_match:
@@ -1333,9 +1365,9 @@ def _log_ai_usage(
                 "tokens_input":  tokens_input,
                 "tokens_output": tokens_output,
                 "cost_usd":      cost,
-            }).execute())
+            }).execute(), idempotent=False)
         except Exception:
-            pass
+            logger.exception("No se pudo registrar ai_usage_log")
 
     try:
         asyncio.create_task(_insert())
@@ -1343,9 +1375,16 @@ def _log_ai_usage(
         pass  # no hay event loop corriendo — no debería pasar en producción
 
 
-def clear_session(session_id: str):
+def clear_session(session_id: str, company_id: str | None = None):
     """Limpia el historial de una sesión."""
-    _history_store.pop(session_id, None)
+    keys = (
+        [_history_key(company_id, session_id)]
+        if company_id
+        else [key for key in _history_store if key.endswith(f":{session_id}")]
+    )
+    for key in keys:
+        _history_store.pop(key, None)
+        _history_last_seen.pop(key, None)
 
 
 async def warmup_chat_model() -> None:

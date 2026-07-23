@@ -9,7 +9,7 @@ import asyncio
 
 from app.core.auth import require_staff, require_admin
 from app.core.supabase_client import supabase
-from app.routers.reservations import decrement_variant_stock_from_notes
+from app.routers.reservations import _parse_variant_combination
 
 router = APIRouter(prefix="/picking", tags=["picking"])
 
@@ -154,12 +154,21 @@ async def confirm_pick(reservation_id: str, user: dict = Depends(require_staff))
     if res_row["status"] not in ("pending", "confirmed"):
         raise HTTPException(400, f"No se puede confirmar una reserva con estado '{res_row['status']}'")
 
-    await asyncio.to_thread(
-        lambda: supabase.table("reservations")
-            .update({"status": "confirmed"})
-            .eq("id", reservation_id)
-            .execute()
-    )
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.rpc("transition_reservation", {
+                "p_company_id": company_id,
+                "p_reservation_id": reservation_id,
+                "p_new_status": "confirmed",
+                "p_notes": None,
+                "p_created_by": user["id"],
+                "p_variant_combination": None,
+            }).execute()
+        )
+    except Exception as exc:
+        if "INVALID_STATUS_TRANSITION" in str(exc):
+            raise HTTPException(409, "La reserva cambió de estado; actualiza la lista")
+        raise
     return {"message": "Ítem marcado como recogido"}
 
 
@@ -179,52 +188,33 @@ def complete_pick(reservation_id: str, user: dict = Depends(require_staff)):
     res_row = existing.data if existing else None
     if not res_row:
         raise HTTPException(404, "Reserva no encontrada")
-    if res_row["status"] == "completed":
-        raise HTTPException(400, "La reserva ya está completada")
-    if res_row["status"] == "cancelled":
-        raise HTTPException(400, "No se puede completar una reserva cancelada")
+    combination = _parse_variant_combination(res_row.get("notes") or "") or None
+    try:
+        result = supabase.rpc("transition_reservation", {
+            "p_company_id": company_id,
+            "p_reservation_id": reservation_id,
+            "p_new_status": "completed",
+            "p_notes": res_row.get("notes"),
+            "p_created_by": user["id"],
+            "p_variant_combination": combination,
+        }).execute()
+    except Exception as exc:
+        message = str(exc)
+        if "INVALID_STATUS_TRANSITION" in message:
+            raise HTTPException(409, "La reserva cambió de estado; actualiza la lista")
+        if "INSUFFICIENT_STOCK" in message:
+            raise HTTPException(409, "Stock insuficiente para completar la reserva")
+        raise
 
-    # Descontar stock físico — decremento atómico (ver migración
-    # 011_atomic_stock.sql), evita la carrera del read-modify-write.
     stock = supabase.table("product_warehouse_stock")\
         .select("quantity")\
         .eq("product_id", res_row["product_id"])\
         .eq("warehouse_id", res_row["warehouse_id"])\
         .maybe_single()\
         .execute()
-    stock_row = stock.data if stock else None
-    new_qty = 0
-
-    if stock_row:
-        rpc_result = supabase.rpc("decrement_stock_clamped", {
-            "p_product_id": res_row["product_id"],
-            "p_warehouse_id": res_row["warehouse_id"],
-            "p_qty": res_row["quantity"],
-        }).execute()
-        new_qty = rpc_result.data if rpc_result.data is not None else 0
-
-    # Registrar movimiento de salida
-    supabase.table("stock_movements").insert({
-        "product_id":   res_row["product_id"],
-        "warehouse_id": res_row["warehouse_id"],
-        "type":         "salida",
-        "quantity":     res_row["quantity"],
-        "notes":        f"Entrega de reserva #{reservation_id[:8]}",
-        "created_by":   user["id"],
-    }).execute()
-
-    # Descontar stock por variante (color/talla) si la reserva tenía una
-    # opción elegida — si no, el desglose por color queda desincronizado
-    # del total general (bug real detectado: la suma de colores no cuadraba
-    # con el stock total tras completar por Picking).
-    decrement_variant_stock_from_notes(
-        res_row["product_id"], res_row["warehouse_id"], res_row["quantity"], res_row.get("notes") or ""
-    )
-
-    # Actualizar reserva
-    supabase.table("reservations")\
-        .update({"status": "completed"})\
-        .eq("id", reservation_id)\
-        .execute()
-
-    return {"message": "Reserva completada y stock descontado", "new_stock": new_qty}
+    new_qty = (stock.data or {}).get("quantity", 0) if stock else 0
+    return {
+        "message": "Reserva completada y stock descontado",
+        "new_stock": new_qty,
+        "reservation": result.data[0] if result.data else None,
+    }

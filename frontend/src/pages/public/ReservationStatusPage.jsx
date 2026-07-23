@@ -4,11 +4,13 @@
  */
 import { useState, useEffect } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { reservationsAPI } from '../../services/api'
-import { CheckCircle, Clock, XCircle, Package, Calendar, User, MapPin, ArrowLeft, Zap } from 'lucide-react'
+import { companiesAPI, reservationsAPI } from '../../services/api'
+import { CheckCircle, Clock, XCircle, Package, Calendar, User, MapPin, ArrowLeft, Zap, Loader2 } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
+import ThemeProvider from '../../components/shared/ThemeProvider'
+import { buildFormatPrice } from '../../context/CompanyFeaturesContext'
 
 const statusConfig = {
   pending:   { icon: Clock,        color: 'text-yellow-500', bg: 'bg-yellow-50',  border: 'border-yellow-200', label: 'Pendiente de confirmación' },
@@ -28,10 +30,18 @@ export default function ReservationStatusPage() {
   const [reservation, setReservation] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [company, setCompany] = useState(null)
 
   useEffect(() => {
     if (codeParam && slug) handleSearch()
   }, [])
+
+  useEffect(() => {
+    if (!slug.trim()) return
+    companiesAPI.listPublic()
+      .then(res => setCompany((res.data || []).find(item => item.slug === slug.trim()) || null))
+      .catch(() => {})
+  }, [slug])
 
   const handleSearch = async () => {
     if (!code.trim() || !slug.trim()) {
@@ -53,19 +63,24 @@ export default function ReservationStatusPage() {
 
   const status = reservation ? statusConfig[reservation.status] : null
   const StatusIcon = status?.icon
+  const formatPrice = buildFormatPrice(company?.settings?.currency || 'USD')
 
   return (
     <div className="min-h-screen bg-ink-50 flex flex-col">
+      <ThemeProvider settings={company?.settings} />
       {/* Topbar */}
       <header className="bg-white border-b border-ink-100 px-6 py-4 flex items-center gap-3">
-        <button onClick={() => navigate('/')} className="btn-ghost p-2">
+        <button onClick={() => navigate('/')} className="btn-ghost p-2" aria-label="Volver al inicio">
           <ArrowLeft size={18} />
         </button>
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 bg-brand-500 rounded-lg flex items-center justify-center">
-            <Zap size={13} className="text-white" />
+            {company?.logo_url
+              ? <img src={company.logo_url} alt="" className="w-full h-full object-contain" />
+              : <Zap size={13} className="text-[var(--brand-contrast)]" />
+            }
           </div>
-          <span className="font-bold text-ink-900">InventoryAI</span>
+          <span className="font-bold text-ink-900">{company?.name || 'InventoryAI'}</span>
         </div>
       </header>
 
@@ -79,10 +94,11 @@ export default function ReservationStatusPage() {
           <div className="card p-6 mb-6">
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                <label htmlFor="reservation-code" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
                   Código de reserva
                 </label>
                 <input
+                  id="reservation-code"
                   value={code}
                   onChange={e => setCode(e.target.value.toUpperCase())}
                   placeholder="RES-XXXXXXXX"
@@ -91,10 +107,11 @@ export default function ReservationStatusPage() {
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
+                <label htmlFor="company-slug" className="text-xs font-semibold text-ink-500 uppercase tracking-wide block mb-1.5">
                   Empresa (slug)
                 </label>
                 <input
+                  id="company-slug"
                   value={slug}
                   onChange={e => setSlug(e.target.value)}
                   placeholder="ej: mi-empresa"
@@ -102,9 +119,9 @@ export default function ReservationStatusPage() {
                   onKeyDown={e => e.key === 'Enter' && handleSearch()}
                 />
               </div>
-              {error && <p className="text-red-500 text-xs text-center">{error}</p>}
+              {error && <p className="text-red-600 text-sm text-center" role="alert">{error}</p>}
               <button onClick={handleSearch} disabled={loading} className="btn-primary w-full justify-center mt-1">
-                {loading ? 'Buscando...' : 'Consultar reserva'}
+                {loading ? <><Loader2 size={16} className="animate-spin" /> Buscando...</> : 'Consultar reserva'}
               </button>
             </div>
           </div>
@@ -132,7 +149,7 @@ export default function ReservationStatusPage() {
                     </p>
                     {reservation.products?.price && (
                       <p className="text-xs text-brand-600 font-medium">
-                        ${Number(reservation.products.price).toLocaleString()} c/u
+                        {formatPrice(reservation.products.price)} c/u
                       </p>
                     )}
                   </div>

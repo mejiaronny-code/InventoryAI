@@ -8,25 +8,43 @@ const DEFAULT_PRIMARY = '#f97316'
 const DEFAULT_BG      = '#fafafa'
 const DEFAULT_TEXT    = '#171717'
 
-function getContrastColor(hex) {
+function safeColor(value, fallback) {
+  return /^#[0-9a-f]{6}$/i.test(value || '') ? value : fallback
+}
+
+function getLuminance(hex) {
   const normalized = /^#[0-9a-f]{3}$/i.test(hex)
     ? `#${hex.slice(1).split('').map(char => char + char).join('')}`
     : hex
 
-  if (!/^#[0-9a-f]{6}$/i.test(normalized)) return '#ffffff'
+  if (!/^#[0-9a-f]{6}$/i.test(normalized)) return 0
 
   const channels = [1, 3, 5].map(index => {
     const value = parseInt(normalized.slice(index, index + 2), 16) / 255
     return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
   })
-  const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
-  return luminance > 0.45 ? '#171717' : '#ffffff'
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+}
+
+function contrastRatio(first, second) {
+  const light = Math.max(getLuminance(first), getLuminance(second))
+  const dark = Math.min(getLuminance(first), getLuminance(second))
+  return (light + 0.05) / (dark + 0.05)
+}
+
+function getContrastColor(hex) {
+  return contrastRatio(hex, '#171717') >= contrastRatio(hex, '#ffffff')
+    ? '#171717'
+    : '#ffffff'
 }
 
 export default function ThemeProvider({ settings }) {
-  const primary = settings?.primary_color || DEFAULT_PRIMARY
-  const bgColor = settings?.bg_color      || DEFAULT_BG
-  const textColor = settings?.text_color  || DEFAULT_TEXT
+  const primary = safeColor(settings?.primary_color, DEFAULT_PRIMARY)
+  const bgColor = safeColor(settings?.bg_color, DEFAULT_BG)
+  const requestedText = safeColor(settings?.text_color, DEFAULT_TEXT)
+  const textColor = contrastRatio(bgColor, requestedText) >= 4.5
+    ? requestedText
+    : getContrastColor(bgColor)
   const contrastColor = getContrastColor(primary)
 
   const css = `
@@ -45,14 +63,29 @@ export default function ThemeProvider({ settings }) {
     .text-brand-500 {
       color: ${primary} !important;
     }
+    .text-brand-300 {
+      color: color-mix(in srgb, ${primary} 44%, white) !important;
+    }
+    .text-brand-400 {
+      color: color-mix(in srgb, ${primary} 72%, white) !important;
+    }
     .text-brand-600 {
       color: color-mix(in srgb, ${primary} 82%, black) !important;
     }
     .text-brand-700 {
       color: color-mix(in srgb, ${primary} 68%, black) !important;
     }
+    .text-brand-800 {
+      color: color-mix(in srgb, ${primary} 54%, black) !important;
+    }
     .bg-brand-500 {
       background-color: ${primary} !important;
+    }
+    .bg-brand-400 {
+      background-color: color-mix(in srgb, ${primary} 78%, white) !important;
+    }
+    .bg-brand-600 {
+      background-color: color-mix(in srgb, ${primary} 85%, black) !important;
     }
     .bg-brand-500.text-white,
     .from-brand-500.to-brand-600.text-white {
@@ -70,6 +103,9 @@ export default function ThemeProvider({ settings }) {
     .border-brand-200 {
       border-color: color-mix(in srgb, ${primary} 30%, white) !important;
     }
+    .border-brand-300 {
+      border-color: color-mix(in srgb, ${primary} 48%, white) !important;
+    }
     .border-brand-400, .border-brand-500 {
       border-color: ${primary} !important;
     }
@@ -82,8 +118,14 @@ export default function ThemeProvider({ settings }) {
     .from-brand-500 {
       --tw-gradient-from: ${primary} !important;
     }
+    .from-brand-50 {
+      --tw-gradient-from: color-mix(in srgb, ${primary} 9%, white) !important;
+    }
     .to-brand-600 {
       --tw-gradient-to: color-mix(in srgb, ${primary} 85%, black) !important;
+    }
+    .to-brand-700 {
+      --tw-gradient-to: color-mix(in srgb, ${primary} 68%, black) !important;
     }
     .hover\\:bg-brand-50:hover {
       background-color: color-mix(in srgb, ${primary} 9%, white) !important;
@@ -105,5 +147,5 @@ export default function ThemeProvider({ settings }) {
     }
   `
 
-  return <style dangerouslySetInnerHTML={{ __html: css }} />
+  return <style>{css}</style>
 }

@@ -4,14 +4,14 @@
  */
 import { useState, useEffect } from 'react'
 import { bookingsAPI } from '../../services/api'
-import { useCompanyFeatures } from '../../context/CompanyFeaturesContext'
 import { useAuth } from '../../context/AuthContext'
 import { useRealtimeTable } from '../../hooks/useRealtimeNotifications'
 import toast from 'react-hot-toast'
-import { CalendarClock, Users, MapPin, Utensils, ShoppingBag, Check, X, Loader2, Phone, Mail, Trash2 } from 'lucide-react'
+import { CalendarClock, Users, MapPin, Utensils, ShoppingBag, X, Loader2, Phone, Mail, Trash2 } from 'lucide-react'
 import { format, parseISO, isToday, isTomorrow } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
+import { EmptyState, ErrorState, PageLoader } from '../../components/ui'
 
 const STATUS_LABEL = {
   pending:   { label: 'Recibido',       cls: 'badge-yellow' },
@@ -41,17 +41,19 @@ function dateGroupLabel(d) {
 }
 
 export default function BookingsPage() {
-  const { formatPrice } = useCompanyFeatures()
   const { user } = useAuth()
   const [bookings, setBookings] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('upcoming') // upcoming | all
   const [busy, setBusy] = useState(null)
+  const [loadError, setLoadError] = useState(false)
 
   const load = () => {
     setLoading(true)
+    setLoadError(false)
     bookingsAPI.list({ limit: 200 })
       .then(r => setBookings(r.data || []))
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false))
   }
   useEffect(() => {
@@ -126,11 +128,16 @@ export default function BookingsPage() {
       </div>
 
       {loading ? (
-        <p className="text-ink-400 py-8 text-center">Cargando…</p>
+        <PageLoader />
+      ) : loadError ? (
+        <div className="card"><ErrorState onRetry={load} /></div>
       ) : sortedKeys.length === 0 ? (
-        <div className="text-center py-16">
-          <CalendarClock size={40} className="text-ink-300 mx-auto mb-3" />
-          <p className="text-ink-500">No hay reservas {filter === 'upcoming' ? 'próximas' : ''}.</p>
+        <div className="card">
+          <EmptyState
+            icon={CalendarClock}
+            title={`No hay reservas ${filter === 'upcoming' ? 'próximas' : ''}`}
+            description="Las nuevas reservas y pedidos aparecerán aquí automáticamente."
+          />
         </div>
       ) : (
         sortedKeys.map(key => {

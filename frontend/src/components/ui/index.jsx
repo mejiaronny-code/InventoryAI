@@ -2,7 +2,7 @@
  * components/ui/index.jsx
  * Componentes reutilizables de UI.
  */
-import { X, AlertTriangle, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, AlertTriangle, Loader2, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import clsx from 'clsx'
 import { useEffect, useId, useRef } from 'react'
 
@@ -135,6 +135,7 @@ export function Spinner({ size = 20, className = '' }) {
     <Loader2
       size={size}
       className={clsx('animate-spin text-brand-500', className)}
+      aria-hidden="true"
     />
   )
 }
@@ -152,11 +153,38 @@ export function PageLoader() {
 /* ── Empty state ──────────────────────────────────────────── */
 export function EmptyState({ icon: Icon, title, description, action }) {
   return (
-    <div className="flex flex-col items-center justify-center py-12 sm:py-20 px-4 text-center gap-3">
-      {Icon && <Icon size={44} className="text-ink-200" />}
+    <div className="flex flex-col items-center justify-center py-12 sm:py-16 px-4 text-center gap-3" role="status">
+      {Icon && (
+        <div className="w-14 h-14 rounded-2xl bg-ink-50 border border-ink-100 flex items-center justify-center">
+          <Icon size={26} className="text-ink-300" aria-hidden="true" />
+        </div>
+      )}
       <p className="font-semibold text-ink-600">{title}</p>
       {description && <p className="text-sm text-ink-400 max-w-xs">{description}</p>}
       {action}
+    </div>
+  )
+}
+
+/* ── Recoverable error state ─────────────────────────────── */
+export function ErrorState({
+  title = 'No pudimos cargar esta información',
+  description = 'Revisa tu conexión e intenta nuevamente.',
+  onRetry,
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 sm:py-16 px-4 text-center gap-3" role="alert">
+      <div className="w-14 h-14 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center">
+        <AlertTriangle size={26} className="text-red-500" aria-hidden="true" />
+      </div>
+      <p className="font-semibold text-ink-800">{title}</p>
+      <p className="text-sm text-ink-500 max-w-sm">{description}</p>
+      {onRetry && (
+        <button type="button" onClick={onRetry} className="btn-secondary mt-1">
+          <RefreshCw size={15} aria-hidden="true" />
+          Reintentar
+        </button>
+      )}
     </div>
   )
 }

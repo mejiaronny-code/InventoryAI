@@ -82,3 +82,27 @@ as $$
   where created_at >= p_since
   group by company_id;
 $$;
+
+-- Son métricas internas de empresa/plataforma. La anon key no debe poder
+-- consultar agregados saltándose las reglas del backend.
+revoke execute on function public.company_stock_metrics(uuid, timestamptz)
+  from public, anon, authenticated;
+revoke execute on function public.company_ai_cost_sum(uuid, timestamptz)
+  from public, anon, authenticated;
+revoke execute on function public.ai_cost_by_company(timestamptz)
+  from public, anon, authenticated;
+revoke execute on function public.ai_cost_by_day(timestamptz)
+  from public, anon, authenticated;
+revoke execute on function public.reservations_count_by_company(timestamptz)
+  from public, anon, authenticated;
+
+grant execute on function public.company_stock_metrics(uuid, timestamptz)
+  to service_role;
+grant execute on function public.company_ai_cost_sum(uuid, timestamptz)
+  to service_role;
+grant execute on function public.ai_cost_by_company(timestamptz)
+  to service_role;
+grant execute on function public.ai_cost_by_day(timestamptz)
+  to service_role;
+grant execute on function public.reservations_count_by_company(timestamptz)
+  to service_role;

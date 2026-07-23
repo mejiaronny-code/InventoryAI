@@ -10,6 +10,7 @@ import { RefreshCw, CheckCircle, XCircle, Package, Clock, Search, Loader2, Trash
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import clsx from 'clsx'
+import { ErrorState } from '../../components/ui'
 
 const statusConfig = {
   pending:   { color: 'badge-yellow', label: 'Pendiente'  },
@@ -29,6 +30,7 @@ export default function ReservationsPage() {
   // { id, action } — qué botón muestra spinner
   const [updating, setUpdating] = useState(null)
   const [deletingCancelled, setDeletingCancelled] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   // Set de IDs que acaban de cambiar de estado (para la animación de fila)
   const [flashedRows, setFlashedRows] = useState(new Set())
   // Ref para evitar refetch mientras hay una acción en curso
@@ -36,8 +38,10 @@ export default function ReservationsPage() {
 
   const load = useCallback(() => {
     setLoading(true)
+    setLoadError(false)
     reservationsAPI.list(statusFilter ? { status: statusFilter } : {})
       .then(r => setReservations(r.data))
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false))
   }, [statusFilter])
 
@@ -208,7 +212,9 @@ export default function ReservationsPage() {
         ))}
       </div>
 
-      <div className="table-container">
+      {loadError && reservations.length === 0 ? (
+        <div className="card"><ErrorState onRetry={load} /></div>
+      ) : <div className="table-container">
         <table className="table min-w-[820px]">
           <thead>
             <tr>
@@ -311,7 +317,7 @@ export default function ReservationsPage() {
             })}
           </tbody>
         </table>
-      </div>
+      </div>}
     </div>
   )
 }

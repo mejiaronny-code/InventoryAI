@@ -51,6 +51,19 @@ export const CURRENCIES = [
   { code: 'EUR', symbol: '€',   name: 'Euro'                  },
 ]
 
+export function buildFormatPrice(currencyCode = 'USD') {
+  const currencyInfo = CURRENCIES.find(c => c.code === currencyCode) || CURRENCIES[0]
+  const noDecimals = ['CLP', 'PYG', 'JPY']
+  const decimals = noDecimals.includes(currencyCode) ? 0 : 2
+  return (amount) => {
+    if (amount == null || isNaN(amount)) return `${currencyInfo.symbol}0`
+    return `${currencyInfo.symbol}${Number(amount).toLocaleString('es-419', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })}`
+  }
+}
+
 const CompanyFeaturesContext = createContext({
   features:     DEFAULT_FEATURES,
   hasFeature:   () => false,
@@ -64,19 +77,7 @@ export function CompanyFeaturesProvider({ features, businessType, currency, chil
   const hasFeature = (name) => merged[name] === true
 
   const currencyCode = currency || 'USD'
-  const currencyInfo = CURRENCIES.find(c => c.code === currencyCode) || CURRENCIES[0]
-
-  const formatPrice = useMemo(() => (amount) => {
-    if (amount == null || isNaN(amount)) return `${currencyInfo.symbol}0`
-    const num = Number(amount)
-    // Monedas sin decimales
-    const noDecimals = ['CLP', 'PYG', 'JPY']
-    const decimals = noDecimals.includes(currencyCode) ? 0 : 2
-    return `${currencyInfo.symbol}${num.toLocaleString('es-419', {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    })}`
-  }, [currencyCode, currencyInfo.symbol])
+  const formatPrice = useMemo(() => buildFormatPrice(currencyCode), [currencyCode])
 
   return (
     <CompanyFeaturesContext.Provider value={{

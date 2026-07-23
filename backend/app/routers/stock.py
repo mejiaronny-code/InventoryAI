@@ -101,107 +101,7 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
     _assert_warehouse_in_company(str(data.warehouse_id), user["company_id"])
 
     email_info = None
-    movement_dump = data.model_dump()
-    if movement_dump.get("expires_at"):
-        movement_dump["expires_at"] = movement_dump["expires_at"].isoformat()
-
-    # batch_code no va en stock_movements — lo manejamos aparte
-    batch_code = movement_dump.pop("batch_code", None)
-
-    movement_data = {
-        **movement_dump,
-        "product_id": str(data.product_id),
-        "warehouse_id": str(data.warehouse_id),
-        "to_warehouse_id": str(data.to_warehouse_id) if data.to_warehouse_id else None,
-        "created_by": user["id"],
-    }
-
-    if data.type == "transferencia":
-        # Transferencia real: decrementa origen e incrementa destino en UNA
-        # transacción atómica de Postgres (ver 017_transfer_stock.sql). Antes
-        # este branch dejaba new_qty = current_qty (no-op): el movimiento se
-        # registraba pero ningún almacén cambiaba.
-        _assert_warehouse_in_company(str(data.to_warehouse_id), user["company_id"])
-        try:
-            rpc_q = supabase.rpc("transfer_stock_strict", {
-                "p_product_id": str(data.product_id),
-                "p_from_warehouse_id": str(data.warehouse_id),
-                "p_to_warehouse_id": str(data.to_warehouse_id),
-                "p_qty": data.quantity,
-            })
-            # idempotent=False: un ReadError puede llegar DESPUÉS de que Postgres
-            # ya aplicó la transferencia — reintentar a ciegas la duplicaría.
-            rpc_result = _retry(rpc_q.execute, idempotent=False)
-            row = (rpc_result.data or [{}])[0]
-            new_qty = row.get("from_qty")
-        except Exception as e:
-            if "INSUFFICIENT_STOCK" in str(e):
-                raise HTTPException(400, "Stock insuficiente para la transferencia")
-            if "SAME_WAREHOUSE" in str(e):
-                raise HTTPException(400, "El almacén destino debe ser distinto al origen")
-            raise
-    else:
-        # Obtener stock actual (maybe_single evita error PGRST116 cuando no hay fila aún)
-        current_q = supabase.table("product_warehouse_stock")\
-            .select("quantity")\
-            .eq("product_id", str(data.product_id))\
-            .eq("warehouse_id", str(data.warehouse_id))\
-            .maybe_single()
-        current = _retry(current_q.execute)
-
-        # maybe_single() retorna None directamente (no objeto con .data) cuando no hay fila
-        current_row = current.data if current else None
-        current_qty = current_row["quantity"] if current_row else 0
-
-        if data.type == "salida":
-            # Decremento atómico en Postgres (ver migración 011_atomic_stock.sql):
-            # evita la carrera del read-modify-write cuando dos salidas del mismo
-            # producto/almacén llegan casi al mismo tiempo (sobreventa).
-            try:
-                rpc_q = supabase.rpc("decrement_stock_strict", {
-                    "p_product_id": str(data.product_id),
-                    "p_warehouse_id": str(data.warehouse_id),
-                    "p_qty": data.quantity,
-                })
-                # idempotent=False: mismo motivo que en transferencia — un
-                # decremento reintentado a ciegas puede vender stock dos veces.
-                rpc_result = _retry(rpc_q.execute, idempotent=False)
-                new_qty = rpc_result.data
-            except Exception as e:
-                if "INSUFFICIENT_STOCK" in str(e):
-                    raise HTTPException(400, "Stock insuficiente para la salida")
-                raise
-        else:
-            # Calcular nuevo stock (entrada / ajuste)
-            if data.type == "entrada":
-                new_qty = current_qty + data.quantity
-            else:
-                new_qty = data.quantity  # ajuste directo al valor indicado
-
-            # Actualizar stock. "ajuste" fija un valor absoluto (idempotente:
-            # reintentar el mismo valor es un no-op seguro); "entrada" SUMA a
-            # current_qty, así que un retry a ciegas duplicaría la suma.
-            if current_row:
-                update_q = supabase.table("product_warehouse_stock")\
-                    .update({"quantity": new_qty})\
-                    .eq("product_id", str(data.product_id))\
-                    .eq("warehouse_id", str(data.warehouse_id))
-                _retry(update_q.execute, idempotent=(data.type != "entrada"))
-            else:
-                insert_q = supabase.table("product_warehouse_stock").insert({
-                    "product_id": str(data.product_id),
-                    "warehouse_id": str(data.warehouse_id),
-                    "quantity": max(new_qty, 0),
-                })
-                _retry(insert_q.execute)
-
-    # Registrar movimiento. idempotent=False: sin unique constraint en
-    # stock_movements, un retry a ciegas tras un ReadError post-commit
-    # duplicaría la fila de auditoría (doble conteo en reportes/aging).
-    movement_q = supabase.table("stock_movements").insert(movement_data)
-    result = _retry(movement_q.execute, idempotent=False)
-
-    # Crear lote automáticamente si es entrada y se proveyó batch_code (o generar uno)
+    batch_code = data.batch_code
     if data.type == "entrada":
         product_company_q = supabase.table("products")\
             .select("company_id")\
@@ -219,42 +119,48 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
             features = (company_features.data or {}).get("features") or {}
             if features.get("batch_tracking"):
                 if not batch_code:
-                    # Generar código automático: LOTE-YYYYMMDD-XXXX
                     import random, string
                     suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
                     batch_code = f"LOTE-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{suffix}"
-                expires_iso = data.expires_at.isoformat() if data.expires_at else None
-                batch_q = supabase.table("product_batches").insert({
-                    "company_id": company_id_for_batch,
-                    "product_id": str(data.product_id),
-                    "warehouse_id": str(data.warehouse_id),
-                    "batch_code": batch_code,
-                    "quantity": data.quantity,
-                    "initial_quantity": data.quantity,
-                    "expires_at": expires_iso,
-                    "notes": data.notes,
-                })
-                _retry(batch_q.execute)
 
-    # Actualizar nearest_expiry si es una entrada con fecha de vencimiento
+    # El cambio de stock, la transferencia, el movimiento de auditoría y el
+    # lote (si aplica) se confirman juntos en Postgres. Si una parte falla,
+    # ninguna queda aplicada. Ver migración 019_inventory_integrity.sql.
+    if data.type == "transferencia":
+        _assert_warehouse_in_company(str(data.to_warehouse_id), user["company_id"])
+    try:
+        rpc_result = _retry(
+            lambda: supabase.rpc("record_stock_movement", {
+                "p_company_id": user["company_id"],
+                "p_product_id": str(data.product_id),
+                "p_warehouse_id": str(data.warehouse_id),
+                "p_to_warehouse_id": str(data.to_warehouse_id) if data.to_warehouse_id else None,
+                "p_type": data.type.value,
+                "p_quantity": data.quantity,
+                "p_notes": data.notes,
+                "p_created_by": user["id"],
+                "p_expires_at": data.expires_at.isoformat() if data.expires_at else None,
+                "p_batch_code": batch_code,
+            }).execute(),
+            idempotent=False,
+        )
+        row = (rpc_result.data or [{}])[0]
+        new_qty = row.get("new_quantity")
+    except Exception as e:
+        message = str(e)
+        if "INSUFFICIENT_STOCK" in message:
+            label = "transferencia" if data.type == "transferencia" else "salida"
+            raise HTTPException(400, f"Stock insuficiente para la {label}")
+        if "INVALID_DESTINATION" in message:
+            raise HTTPException(400, "El almacén destino debe ser distinto al origen")
+        if "PGRST202" in message or "record_stock_movement" in message and "schema cache" in message:
+            raise HTTPException(503, "La migración de integridad de inventario está pendiente")
+        raise
+
+    # Notificación si vence en 7 días o menos. La fecha y nearest_expiry ya
+    # quedaron guardadas dentro de la misma transacción del movimiento.
     if data.type == "entrada" and data.expires_at:
         expires_iso = data.expires_at.isoformat()
-        # Obtener nearest_expiry actual
-        current_expiry_q = supabase.table("product_warehouse_stock")\
-            .select("nearest_expiry")\
-            .eq("product_id", str(data.product_id))\
-            .eq("warehouse_id", str(data.warehouse_id))\
-            .maybe_single()
-        current_expiry_res = _retry(current_expiry_q.execute)
-        current_nearest = ((current_expiry_res.data if current_expiry_res else None) or {}).get("nearest_expiry")
-        # Guardar la más próxima
-        if not current_nearest or expires_iso < current_nearest:
-            update_expiry_q = supabase.table("product_warehouse_stock")\
-                .update({"nearest_expiry": expires_iso})\
-                .eq("product_id", str(data.product_id))\
-                .eq("warehouse_id", str(data.warehouse_id))
-            _retry(update_expiry_q.execute)
-        # Notificación si vence en 7 días o menos
         expires_at_aware = data.expires_at if data.expires_at.tzinfo else data.expires_at.replace(tzinfo=timezone.utc)
         days_to_expiry = (expires_at_aware - datetime.now(timezone.utc)).days
         if days_to_expiry <= 7:
@@ -357,29 +263,28 @@ def _create_movement_sync(data: StockMovementCreate, user: dict):
 
 @router.put("/set")
 def set_stock(data: StockUpdate, product_id: str, user: dict = Depends(require_admin)):
-    """Establece el stock de un producto en un almacén directamente."""
+    """Establece stock y deja el ajuste en la auditoría de forma atómica."""
     _assert_product_in_company(product_id, user["company_id"])
     _assert_warehouse_in_company(str(data.warehouse_id), user["company_id"])
 
-    existing = supabase.table("product_warehouse_stock")\
-        .select("id")\
-        .eq("product_id", product_id)\
-        .eq("warehouse_id", str(data.warehouse_id))\
-        .execute()
-
-    if existing.data:
-        supabase.table("product_warehouse_stock")\
-            .update({"quantity": data.quantity, "min_stock_alert": data.min_stock_alert})\
-            .eq("product_id", product_id)\
-            .eq("warehouse_id", str(data.warehouse_id))\
-            .execute()
-    else:
-        supabase.table("product_warehouse_stock").insert({
-            "product_id": product_id,
-            "warehouse_id": str(data.warehouse_id),
-            "quantity": data.quantity,
-            "min_stock_alert": data.min_stock_alert,
-        }).execute()
+    try:
+        _retry(
+            lambda: supabase.rpc("set_stock_with_audit", {
+                "p_company_id": user["company_id"],
+                "p_product_id": product_id,
+                "p_warehouse_id": str(data.warehouse_id),
+                "p_quantity": data.quantity,
+                "p_min_stock_alert": data.min_stock_alert,
+                "p_notes": data.notes,
+                "p_created_by": user["id"],
+            }).execute(),
+            idempotent=False,
+        )
+    except Exception as e:
+        message = str(e)
+        if "PGRST202" in message or "set_stock_with_audit" in message and "schema cache" in message:
+            raise HTTPException(503, "La migración de integridad de inventario está pendiente")
+        raise
 
     # Verificar reabastecimiento automático
     if data.quantity <= data.min_stock_alert:

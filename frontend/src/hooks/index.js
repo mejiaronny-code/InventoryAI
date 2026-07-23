@@ -32,7 +32,11 @@ export function useLocalStorage(key, defaultValue) {
 
   const setStored = useCallback((val) => {
     setValue(val)
-    try { localStorage.setItem(key, JSON.stringify(val)) } catch {}
+    try {
+      localStorage.setItem(key, JSON.stringify(val))
+    } catch {
+      // El modo privado o una cuota llena no deben romper el estado en memoria.
+    }
   }, [key])
 
   return [value, setStored]

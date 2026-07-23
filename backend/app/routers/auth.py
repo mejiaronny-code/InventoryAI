@@ -2,21 +2,53 @@
 app/routers/auth.py
 Autenticación y gestión de usuarios.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 import asyncio
 import httpx
+import threading
+from collections import defaultdict
+from datetime import datetime, timezone
 from app.core.auth import require_admin, require_super_admin, get_current_user
 from app.core.supabase_client import supabase, supabase_auth, run_with_retry_sync as _retry
 from app.core.config import settings
+from app.core.net import client_ip
 from app.services.notifications import send_welcome_email, send_password_reset_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+_login_attempts: dict[str, dict[str, int]] = defaultdict(dict)
+_forgot_attempts: dict[str, dict[str, int]] = defaultdict(dict)
+_auth_rate_lock = threading.Lock()
+
+
+def _check_auth_rate_limit(
+    request: Request,
+    store: dict[str, dict[str, int]],
+    *,
+    max_attempts: int,
+    window_minutes: int,
+) -> None:
+    ip = client_ip(request)
+    now = datetime.now(timezone.utc)
+    window = int(now.timestamp() // (window_minutes * 60))
+    key = str(window)
+    with _auth_rate_lock:
+        bucket = store[ip]
+        for old_key in [candidate for candidate in bucket if candidate != key]:
+            del bucket[old_key]
+        if bucket.get(key, 0) >= max_attempts:
+            raise HTTPException(429, "Demasiados intentos. Espera unos minutos e intenta de nuevo.")
+        bucket[key] = bucket.get(key, 0) + 1
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 
 class RegisterEmployeeRequest(BaseModel):
@@ -27,8 +59,14 @@ class RegisterEmployeeRequest(BaseModel):
 
 
 @router.post("/login")
-def login(data: LoginRequest):
+def login(data: LoginRequest, request: Request):
     """Login via Supabase Auth."""
+    _check_auth_rate_limit(
+        request,
+        _login_attempts,
+        max_attempts=20,
+        window_minutes=15,
+    )
     try:
         # Cliente de auth aislado: NO contamina el cliente de datos con la sesión
         # del usuario (evita 'JWT expired' en las consultas a tablas ~1h después).
@@ -58,20 +96,20 @@ def login(data: LoginRequest):
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(401, f"Error de autenticación: {str(e)}")
+    except Exception:
+        raise HTTPException(401, "Credenciales inválidas")
 
 
 @router.post("/refresh")
-def refresh_token(refresh_token: str):
+def refresh_token(data: RefreshRequest):
     try:
-        result = supabase_auth.auth.refresh_session(refresh_token)
+        result = supabase_auth.auth.refresh_session(data.refresh_token)
         return {
             "access_token": result.session.access_token,
             "refresh_token": result.session.refresh_token,
         }
-    except Exception as e:
-        raise HTTPException(401, f"Token expirado: {str(e)}")
+    except Exception:
+        raise HTTPException(401, "La sesión expiró")
 
 
 @router.get("/me")
@@ -191,11 +229,17 @@ def _forgot_password_sync(email: str):
 
 
 @router.post("/forgot-password")
-async def forgot_password(data: ForgotPasswordRequest):
+async def forgot_password(data: ForgotPasswordRequest, request: Request):
     """
     Genera un enlace de recuperación via Supabase admin API (sin que Supabase envíe email)
     y manda nuestro propio email de marca con el link.
     """
+    _check_auth_rate_limit(
+        request,
+        _forgot_attempts,
+        max_attempts=5,
+        window_minutes=60,
+    )
     full_name, action_link = await asyncio.to_thread(_forgot_password_sync, str(data.email))
     if action_link:
         asyncio.create_task(send_password_reset_email(str(data.email), full_name, action_link))

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 import threading
 import asyncio
+import logging
 
 from app.core.auth import require_staff, require_admin
 from app.core.supabase_client import supabase, run_with_retry
@@ -20,10 +21,10 @@ from app.core.company_features import get_active_company, require_public_catalog
 from app.core.net import client_ip as _client_ip
 from app.models.schemas import BookingCreate, BookingUpdate
 from app.routers.reservations import _generate_code
-from app.routers.recipes import _deplete_ingredient
 from app.services.notifications import send_reservation_email
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
+logger = logging.getLogger(__name__)
 
 VALID_STATUSES = {"pending", "confirmed", "preparing", "ready", "completed",
                   "cancelled", "no_show", "seated"}  # 'seated' se mantiene por compatibilidad
@@ -56,66 +57,71 @@ def _check_booking_rate_limit(request: Request) -> None:
 
 
 def _write_booking_sync(data: BookingCreate, company_id: str) -> str:
-    """Código único + insert de booking/items/notificación. Corre en threadpool."""
-    # Guard de aislamiento multi-tenant: sin esto, un table_id de otra
-    # empresa quedaría vinculado a una reserva de esta empresa.
-    if data.table_id:
-        table = supabase.table("restaurant_tables")\
-            .select("id")\
-            .eq("id", str(data.table_id))\
-            .eq("company_id", company_id)\
-            .maybe_single().execute()
-        if not (table and table.data):
-            raise HTTPException(404, "Mesa no encontrada")
-
-    code = _generate_code()
-    for _ in range(5):
-        existing = supabase.table("bookings").select("id").eq("code", code).execute()
-        if not existing.data:
-            break
-        code = _generate_code()
-
-    booking_row = {
-        "company_id":   company_id,
-        "code":         code,
-        "service_type": data.service_type,
-        "party_size":   data.party_size if data.service_type == "dine_in" else None,
-        "reserved_at":  data.reserved_at.isoformat(),
-        "zone":         data.zone,
-        "table_id":     str(data.table_id) if data.table_id else None,
-        "client_name":  data.client_name,
-        "client_email": data.client_email,
-        "client_phone": data.client_phone,
-        "status":       "pending",
-        "notes":        data.notes,
-    }
-    result = supabase.table("bookings").insert(booking_row).execute()
-    if not result.data:
-        raise HTTPException(500, "Error al crear la reserva")
-    booking_id = result.data[0]["id"]
-
-    # Pre-orden de platillos
+    """Crea cabecera + preorden en una sola transacción de Postgres."""
     ordered_names: list[str] = []
+    rpc_items: list[dict] = []
     if data.items:
-        item_rows = []
         for it in data.items:
             dish = supabase.table("products")\
                 .select("name, price")\
                 .eq("id", str(it.dish_id))\
                 .eq("company_id", company_id)\
+                .eq("product_type", "dish")\
+                .eq("is_active", True)\
+                .eq("is_available", True)\
                 .maybe_single().execute()
-            d = dish.data if dish and dish.data else {}
-            item_rows.append({
-                "booking_id": booking_id,
+            if not (dish and dish.data):
+                raise HTTPException(400, "Uno de los platillos ya no está disponible")
+            d = dish.data
+            rpc_items.append({
                 "dish_id":    str(it.dish_id),
                 "quantity":   it.quantity,
                 "modifiers":  it.modifiers or {},
-                "unit_price": d.get("price"),
             })
-            if d.get("name"):
-                ordered_names.append(f"{it.quantity}× {d['name']}")
-        if item_rows:
-            supabase.table("booking_items").insert(item_rows).execute()
+            ordered_names.append(f"{it.quantity}× {d['name']}")
+
+    result = None
+    code = None
+    for _ in range(5):
+        code = _generate_code()
+        try:
+            result = supabase.rpc("create_booking_with_items", {
+                "p_company_id": company_id,
+                "p_code": code,
+                "p_service_type": data.service_type,
+                "p_party_size": data.party_size,
+                "p_reserved_at": data.reserved_at.isoformat(),
+                "p_zone": data.zone,
+                "p_table_id": str(data.table_id) if data.table_id else None,
+                "p_client_name": data.client_name,
+                "p_client_email": str(data.client_email) if data.client_email else None,
+                "p_client_phone": data.client_phone,
+                "p_notes": data.notes,
+                "p_items": rpc_items,
+            }).execute()
+            break
+        except Exception as e:
+            message = str(e)
+            if "bookings_code_key" in message or "duplicate key" in message:
+                continue
+            if "TABLE_NOT_FOUND" in message:
+                raise HTTPException(404, "Mesa no encontrada")
+            if "TABLE_CAPACITY:" in message:
+                capacity = message.split("TABLE_CAPACITY:", 1)[1].split('"', 1)[0]
+                raise HTTPException(409, f"La mesa admite como máximo {capacity} personas")
+            if "TABLE_TIME_CONFLICT" in message:
+                raise HTTPException(409, "La mesa ya está reservada cerca de ese horario")
+            if "DISH_NOT_AVAILABLE" in message:
+                raise HTTPException(409, "Uno de los platillos ya no está disponible")
+            if "PGRST202" in message or (
+                "create_booking_with_items" in message and "schema cache" in message
+            ):
+                raise HTTPException(503, "La migración de integridad de reservas de mesa está pendiente")
+            raise
+
+    if not (result and result.data):
+        raise HTTPException(500, "No se pudo generar un código de reserva único")
+    booking_id = result.data[0]["booking_id"]
 
     # Notificación al staff — con detalle útil (mesa/zona + platillos)
     tipo = "Mesa" if data.service_type == "dine_in" else "Para recoger"
@@ -127,13 +133,16 @@ def _write_booking_sync(data: BookingCreate, company_id: str) -> str:
     if ordered_names:
         partes.append("· " + ", ".join(ordered_names))
     partes.append(f"(Código: {code})")
-    supabase.table("notifications").insert({
-        "company_id": company_id,
-        "type": "new_reservation",
-        "message": " ".join(partes),
-        "target_role": "all",
-        "metadata": {"booking_id": booking_id, "code": code, "client_name": data.client_name},
-    }).execute()
+    try:
+        supabase.table("notifications").insert({
+            "company_id": company_id,
+            "type": "new_reservation",
+            "message": " ".join(partes),
+            "target_role": "all",
+            "metadata": {"booking_id": booking_id, "code": code, "client_name": data.client_name},
+        }).execute()
+    except Exception:
+        logger.exception("Booking %s creado, pero falló su notificación", booking_id)
 
     return code
 
@@ -269,61 +278,29 @@ def update_booking(booking_id: str, data: BookingUpdate, user: dict = Depends(re
     if not company_id:
         raise HTTPException(401, "No se encontró la empresa asociada")
 
-    current = supabase.table("bookings")\
-        .select("status")\
-        .eq("id", booking_id)\
-        .eq("company_id", company_id)\
-        .maybe_single().execute()
-    if not (current and current.data):
-        raise HTTPException(404, "Reserva no encontrada")
-
-    update_data: dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if data.status is not None:
         if data.status not in VALID_STATUSES:
             raise HTTPException(400, "Estado inválido")
-        update_data["status"] = data.status
-    if data.table_id is not None:
-        table = supabase.table("restaurant_tables")\
-            .select("id")\
-            .eq("id", str(data.table_id))\
-            .eq("company_id", company_id)\
-            .maybe_single().execute()
-        if not (table and table.data):
+
+    try:
+        result = supabase.rpc("transition_booking", {
+            "p_company_id": company_id,
+            "p_booking_id": booking_id,
+            "p_new_status": data.status,
+            "p_table_id": str(data.table_id) if data.table_id else None,
+            "p_notes": data.notes,
+            "p_created_by": user["id"],
+        }).execute()
+    except Exception as e:
+        message = str(e)
+        if "BOOKING_NOT_FOUND" in message:
+            raise HTTPException(404, "Reserva no encontrada")
+        if "TABLE_NOT_FOUND" in message:
             raise HTTPException(404, "Mesa no encontrada")
-        update_data["table_id"] = str(data.table_id)
-    if data.notes is not None:
-        update_data["notes"] = data.notes
-
-    result = supabase.table("bookings")\
-        .update(update_data)\
-        .eq("id", booking_id)\
-        .eq("company_id", company_id)\
-        .execute()
-
-    # Al completar: descontar insumos de los platillos pre-ordenados vía receta
-    if data.status == "completed" and current.data["status"] != "completed":
-        _deplete_booking_items(company_id, booking_id, user["id"])
+        if "INVALID_BOOKING_TRANSITION" in message:
+            raise HTTPException(409, "La reserva cambió de estado; actualiza la página e intenta de nuevo")
+        if "PGRST202" in message or "transition_booking" in message and "schema cache" in message:
+            raise HTTPException(503, "La migración de integridad de reservas de mesa está pendiente")
+        raise
 
     return result.data[0] if result.data else {"message": "Actualizado"}
-
-
-def _deplete_booking_items(company_id: str, booking_id: str, created_by: str) -> None:
-    """Descuenta los insumos de cada platillo pre-ordenado de la reserva."""
-    items = supabase.table("booking_items")\
-        .select("dish_id, quantity, products(name)")\
-        .eq("booking_id", booking_id)\
-        .execute()
-    for it in (items.data or []):
-        dish_id = it["dish_id"]
-        qty = it["quantity"]
-        dish_name = (it.get("products") or {}).get("name", "platillo")
-        recipe = supabase.table("recipes")\
-            .select("ingredient_id, quantity")\
-            .eq("dish_id", dish_id)\
-            .eq("company_id", company_id)\
-            .execute()
-        note = f"Reserva completada: {qty}× {dish_name}"
-        for r in (recipe.data or []):
-            needed = int(round(float(r["quantity"]) * qty))
-            if needed > 0:
-                _deplete_ingredient(company_id, r["ingredient_id"], needed, created_by, None, note)

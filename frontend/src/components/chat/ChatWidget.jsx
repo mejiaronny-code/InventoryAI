@@ -10,40 +10,75 @@ import { v4 as uuidv4 } from 'uuid'
 import { MessageCircle, X, Send, Image, Loader2, Bot, User, ImagePlus, Zap, Mic, Square } from 'lucide-react'
 import clsx from 'clsx'
 
-function parseMarkdown(text) {
-  // 0. Escapar HTML crudo ANTES de aplicar cualquier regla de markdown.
-  //    Sin esto, una respuesta del LLM (o un nombre de producto/documento
-  //    manipulado que llegue al contexto del chat) puede inyectar HTML/JS
-  //    ejecutable vía dangerouslySetInnerHTML (XSS). Las reglas de abajo usan
-  //    * [ ] ! ( ) — ninguna depende de < > &, así que escapar primero no
-  //    rompe el markdown soportado.
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-
-  return escaped
-    // 1. Imágenes markdown BIEN formadas -> <img> (debe ir antes de las redes
-    //    de seguridad para no borrarlas). [^\)\n] (no \s) porque algunos
-    //    nombres de archivo subidos tienen espacios literales en la URL
-    //    (ej. ".../Mochila prueba.jpg") — excluir \s hacía que esas imágenes
-    //    nunca se reconocieran como <img> y la red de seguridad #2 las borraba.
-    //    El espacio crudo en el src además rompe el fetch en el navegador
-    //    (funciona con %20 pero no sin codificar) — se codifica antes de insertarlo.
-    .replace(
-      /!\\?\[([^\]]*)\\?\]\\?\((https?:\/\/[^\)\n]+)\)\\?/g,
-      (_match, alt, url) => `<img src="${url.replace(/ /g, '%20')}" alt="${alt.replace(/"/g, '&quot;')}" class="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover" onerror="this.style.display='none'" />`
+function renderInlineMarkdown(text, keyPrefix) {
+  const nodes = []
+  const emphasis = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g
+  let cursor = 0
+  let match
+  while ((match = emphasis.exec(text)) !== null) {
+    if (match.index > cursor) nodes.push(text.slice(cursor, match.index))
+    const token = match[0]
+    nodes.push(
+      token.startsWith('**')
+        ? <strong key={`${keyPrefix}-${match.index}`}>{token.slice(2, -2)}</strong>
+        : <em key={`${keyPrefix}-${match.index}`}>{token.slice(1, -1)}</em>
     )
-    // 2. Red de seguridad: markdown de imagen sobrante o CORTADO a medias
-    //    (la respuesta del modelo se truncó sin cerrar el paréntesis) -> fuera,
-    //    para que no se filtre la URL ni rompa el layout del chat.
-    .replace(/!\\?\[[^\]]*\]?\(?[^)\n]*\)?/g, '')
-    // 3. Red de seguridad: URL de storage suelta dejada como texto plano
-    //    (precedida por inicio o espacio; así no toca el src="" de un <img>).
-    .replace(/(^|\s)https?:\/\/\S*\/storage\/\S*/g, '$1')
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/\n/g, '<br/>')
+    cursor = match.index + token.length
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor))
+  return nodes
+}
+
+/**
+ * Renderiza el subconjunto de markdown del chat como nodos React.
+ * El texto del LLM nunca se interpreta como HTML: nombres de productos,
+ * documentos o respuestas manipuladas quedan como texto literal.
+ */
+function renderMessageContent(value) {
+  const text = String(value || '')
+  const imagePattern = /!\\?\[([^\]]*)\\?\]\\?\((https?:\/\/[^)\n]+)\)\\?/g
+  const parts = []
+  let cursor = 0
+  let imageMatch
+
+  const pushText = (chunk, prefix) => {
+    const cleaned = chunk
+      .replace(/!\\?\[[^\]]*\]?\(?[^)\n]*\)?/g, '')
+      .replace(/(^|\s)https?:\/\/\S*\/storage\/\S*/g, '$1')
+    cleaned.split('\n').forEach((line, lineIndex, lines) => {
+      parts.push(...renderInlineMarkdown(line, `${prefix}-${lineIndex}`))
+      if (lineIndex < lines.length - 1) {
+        parts.push(<br key={`${prefix}-br-${lineIndex}`} />)
+      }
+    })
+  }
+
+  while ((imageMatch = imagePattern.exec(text)) !== null) {
+    pushText(text.slice(cursor, imageMatch.index), `text-${cursor}`)
+    const rawUrl = imageMatch[2].trim()
+    try {
+      const parsed = new URL(rawUrl)
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        parts.push(
+          <img
+            key={`image-${imageMatch.index}`}
+            src={encodeURI(rawUrl)}
+            alt={imageMatch[1] || 'Producto sugerido'}
+            className="rounded-xl w-full max-w-[200px] my-1 border border-ink-100 object-cover"
+            loading="lazy"
+            decoding="async"
+            referrerPolicy="no-referrer"
+            onError={(event) => { event.currentTarget.hidden = true }}
+          />
+        )
+      }
+    } catch {
+      // Una URL inválida se omite; el resto del mensaje sigue visible.
+    }
+    cursor = imageMatch.index + imageMatch[0].length
+  }
+  pushText(text.slice(cursor), `text-${cursor}`)
+  return parts
 }
 
 function BotAvatar({ logo, size = 'sm' }) {
@@ -458,7 +493,13 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
         </div>
 
         {/* Messages */}
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 bg-ink-50/30">
+        <div
+          className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 bg-ink-50/30"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions text"
+          aria-label="Conversación con el asistente"
+        >
           {messages.map((msg, i) => (
             <div
               key={i}
@@ -496,10 +537,9 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
                     <div className="typing-dot" />
                   </div>
                 ) : (
-                  <div
-                    className="chat-bubble-ai chat-markdown"
-                    dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
-                  />
+                  <div className="chat-bubble-ai chat-markdown">
+                    {renderMessageContent(msg.content)}
+                  </div>
                 )}
                 {msg.usedVision && (
                   <span className="text-[10px] text-brand-500 font-medium flex items-center gap-1">
@@ -593,6 +633,7 @@ export default function ChatWidget({ companySlug, welcomeMessage, companyLogo, o
                     : imageFile ? 'Pregunta sobre esta imagen...' : 'Escribe tu mensaje...'
                 }
                 rows={1}
+                aria-label="Mensaje para el asistente"
                 className="flex-1 input resize-none py-2.5 text-sm leading-relaxed max-h-24"
                 style={{ minHeight: '42px' }}
                 disabled={loading || transcribing}

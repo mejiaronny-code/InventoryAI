@@ -14,6 +14,8 @@ export default function ProductImage({ src, alt = '', className = '', iconSize =
       <img
         src={src}
         alt={alt}
+        loading="lazy"
+        decoding="async"
         className={clsx('object-cover border border-ink-100', className)}
       />
     )

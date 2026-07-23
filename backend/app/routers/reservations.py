@@ -11,6 +11,7 @@ import string
 import asyncio
 import json
 import threading
+import logging
 
 from app.core.auth import require_admin, require_staff
 from app.core.supabase_client import supabase
@@ -20,6 +21,7 @@ from app.services.notifications import send_reservation_email
 from app.models.schemas import ReservationCreate, ReservationUpdate
 
 router = APIRouter(prefix="/reservations", tags=["reservations"])
+logger = logging.getLogger(__name__)
 
 # ── Anti-abuso: consulta pública "mis reservas" por email ────────────
 # Sin este límite, cualquiera con un email ajeno podía enumerar su historial
@@ -88,31 +90,21 @@ async def create_public_reservation(company_slug: str, data: ReservationCreate, 
     company_id = company["id"]
     company_name = company["name"]
 
-    # 2. Verificar producto
-    product = supabase.table("products")\
-        .select("id, name, reservation_time_hours, categories(reservation_time_hours)")\
-        .eq("id", str(data.product_id))\
-        .eq("company_id", company_id)\
-        .eq("is_active", True)\
-        .single()\
-        .execute()
+    # 2. Verificar producto. La operación bloqueante corre en threadpool.
+    product = await asyncio.to_thread(
+        lambda: supabase.table("products")
+            .select("id, name, reservation_time_hours, categories(reservation_time_hours)")
+            .eq("id", str(data.product_id))
+            .eq("company_id", company_id)
+            .eq("is_active", True)
+            .maybe_single()
+            .execute()
+    )
 
     if not product.data:
         raise HTTPException(404, "Producto no disponible")
 
-    # 3. Verificar stock disponible en el almacén
-    stock = supabase.table("product_warehouse_stock")\
-        .select("quantity")\
-        .eq("product_id", str(data.product_id))\
-        .eq("warehouse_id", str(data.warehouse_id))\
-        .single()\
-        .execute()
-
-    available = stock.data["quantity"] if stock.data else 0
-    if available < data.quantity:
-        raise HTTPException(400, f"Stock insuficiente. Disponible: {available}")
-
-    # 4. Calcular expiración
+    # 3. Calcular expiración
     p = product.data
     hours = (
         p.get("reservation_time_hours")
@@ -121,48 +113,73 @@ async def create_public_reservation(company_slug: str, data: ReservationCreate, 
     )
     expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
 
-    # 5. Generar código único
+    # 4. Crear la reserva bajo lock del stock. El RPC descuenta las reservas
+    # activas de la disponibilidad y serializa solicitudes concurrentes para
+    # impedir sobre-reserva. Ver 019_inventory_integrity.sql.
+    result = None
+    code = None
     for _ in range(5):
         code = _generate_code()
-        existing = supabase.table("reservations")\
-            .select("id")\
-            .eq("reservation_code", code)\
-            .execute()
-        if not existing.data:
+        try:
+            result = await asyncio.to_thread(
+                lambda reservation_code=code: supabase.rpc(
+                    "create_reservation_if_available",
+                    {
+                        "p_company_id": company_id,
+                        "p_product_id": str(data.product_id),
+                        "p_warehouse_id": str(data.warehouse_id),
+                        "p_quantity": data.quantity,
+                        "p_client_name": data.client_name,
+                        "p_client_email": str(data.client_email),
+                        "p_client_phone": data.client_phone,
+                        "p_notes": data.notes,
+                        "p_reservation_code": reservation_code,
+                        "p_expires_at": expires_at,
+                    },
+                ).execute()
+            )
             break
+        except Exception as e:
+            message = str(e)
+            if "reservations_reservation_code_key" in message or "duplicate key" in message:
+                continue
+            if "INSUFFICIENT_AVAILABLE_STOCK:" in message:
+                available = message.split("INSUFFICIENT_AVAILABLE_STOCK:", 1)[1].split('"', 1)[0]
+                raise HTTPException(400, f"Stock disponible insuficiente. Disponible: {available}")
+            if "MAX_RESERVATION_QTY:" in message:
+                maximum = message.split("MAX_RESERVATION_QTY:", 1)[1].split('"', 1)[0]
+                raise HTTPException(400, f"La cantidad máxima por reserva es {maximum}")
+            if "WAREHOUSE_NOT_FOUND" in message:
+                raise HTTPException(404, "Almacén no disponible")
+            if "PGRST202" in message or (
+                "create_reservation_if_available" in message and "schema cache" in message
+            ):
+                raise HTTPException(503, "La migración de integridad de reservas está pendiente")
+            raise
 
-    # 6. Crear reserva
-    reservation_data = {
-        "company_id": company_id,
-        "product_id": str(data.product_id),
-        "warehouse_id": str(data.warehouse_id),
-        "quantity": data.quantity,
-        "client_name": data.client_name,
-        "client_email": data.client_email,
-        "client_phone": data.client_phone,
-        "notes": data.notes,
-        "status": "pending",
-        "reservation_code": code,
-        "expires_at": expires_at,
-    }
+    if not (result and result.data):
+        raise HTTPException(500, "No se pudo generar un código de reserva único")
+    reservation_id = result.data[0]["reservation_id"]
 
-    result = supabase.table("reservations").insert(reservation_data).execute()
-    if not result.data:
-        raise HTTPException(500, "Error al crear reserva")
-
-    # 7. Notificación al admin/staff de la empresa
-    supabase.table("notifications").insert({
-        "company_id": company_id,
-        "type": "new_reservation",
-        "message": f"📋 Nueva reserva de {data.client_name}: {p['name']} x{data.quantity} (Código: {code})",
-        "target_role": "all",
-        "metadata": {
-            "reservation_id": result.data[0]["id"],
-            "reservation_code": code,
-            "client_name": data.client_name,
-            "product_name": p["name"],
-        },
-    }).execute()
+    # 5. La reserva ya está confirmada en DB. Una falla secundaria de
+    # notificación no debe convertirla en un 500 que invite a duplicarla.
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.table("notifications").insert({
+                "company_id": company_id,
+                "type": "new_reservation",
+                "message": f"📋 Nueva reserva de {data.client_name}: {p['name']} x{data.quantity} (Código: {code})",
+                "target_role": "all",
+                "metadata": {
+                    "reservation_id": reservation_id,
+                    "reservation_code": code,
+                    "client_name": data.client_name,
+                    "product_name": p["name"],
+                },
+            }).execute()
+        )
+    except Exception:
+        logger.exception("Reserva %s creada, pero falló su notificación", reservation_id)
 
     # Email de confirmación al cliente
     asyncio.create_task(send_reservation_email(
@@ -288,67 +305,66 @@ async def update_reservation(
 ):
     company_id = user["company_id"]
 
-    # Obtener reserva actual antes de actualizar
-    current = supabase.table("reservations")\
-        .select("status, product_id, warehouse_id, quantity, notes")\
-        .eq("id", reservation_id)\
-        .eq("company_id", company_id)\
-        .single()\
-        .execute()
+    # Leer las notas solo para convertir la variante elegida a JSON. El RPC
+    # vuelve a validar y bloquea la reserva: esta lectura NO decide el estado.
+    current = await asyncio.to_thread(
+        lambda: supabase.table("reservations")
+            .select("status, notes")
+            .eq("id", reservation_id)
+            .eq("company_id", company_id)
+            .maybe_single()
+            .execute()
+    )
 
     if not current.data:
         raise HTTPException(404, "Reserva no encontrada")
 
-    update_data = {"status": data.status, "updated_at": datetime.now(timezone.utc).isoformat()}
-    if data.notes is not None:
-        update_data["notes"] = data.notes
+    notes_for_variant = data.notes if data.notes is not None else current.data.get("notes")
+    combination = _parse_variant_combination(notes_for_variant or "")
 
-    result = supabase.table("reservations")\
-        .update(update_data)\
-        .eq("id", reservation_id)\
-        .eq("company_id", company_id)\
-        .execute()
+    try:
+        result = await asyncio.to_thread(
+            lambda: supabase.rpc("transition_reservation", {
+                "p_company_id": company_id,
+                "p_reservation_id": reservation_id,
+                "p_new_status": data.status.value,
+                "p_notes": data.notes,
+                "p_created_by": user["id"],
+                "p_variant_combination": combination or None,
+            }).execute()
+        )
+    except Exception as e:
+        message = str(e)
+        if "RESERVATION_NOT_FOUND" in message:
+            raise HTTPException(404, "Reserva no encontrada")
+        if "INVALID_STATUS_TRANSITION" in message:
+            raise HTTPException(409, "La reserva cambió de estado; actualiza la página e intenta de nuevo")
+        if "INSUFFICIENT_STOCK" in message:
+            raise HTTPException(409, "No hay stock suficiente para completar la reserva")
+        if "PGRST202" in message or "transition_reservation" in message and "schema cache" in message:
+            raise HTTPException(503, "La migración de integridad de reservas está pendiente")
+        raise
 
     if not result.data:
         raise HTTPException(404, "Reserva no encontrada")
-
-    # Al completar: decrementar stock general y variant stock si aplica
-    if data.status == "completed" and current.data["status"] != "completed":
-        res = current.data
-        product_id   = res["product_id"]
-        warehouse_id = res["warehouse_id"]
-        qty          = res["quantity"]
-        notes        = res.get("notes") or ""
-
-        # 1. Movimiento de salida en stock general — decremento atómico
-        # (ver migración 011_atomic_stock.sql), evita la carrera del
-        # read-modify-write si dos reservas del mismo producto se completan casi a la vez.
-        stock_row = supabase.table("product_warehouse_stock")\
-            .select("id, quantity")\
-            .eq("product_id", product_id)\
-            .eq("warehouse_id", warehouse_id)\
-            .maybe_single()\
-            .execute()
-
-        if stock_row.data:
-            supabase.rpc("decrement_stock_clamped", {
-                "p_product_id": product_id,
-                "p_warehouse_id": warehouse_id,
-                "p_qty": qty,
-            }).execute()
-
-            supabase.table("stock_movements").insert({
-                "product_id":   product_id,
-                "warehouse_id": warehouse_id,
-                "type":         "salida",
-                "quantity":     qty,
-                "notes":        f"Reserva completada{' · ' + notes if notes else ''}",
-            }).execute()
-
-        # 2. Decrementar variant stock si la reserva tenía opciones (ej: "Color: Verde")
-        decrement_variant_stock_from_notes(product_id, warehouse_id, qty, notes)
-
     return result.data[0]
+
+
+def _parse_variant_combination(notes: str) -> dict:
+    """Convierte las opciones guardadas en notas a la combinación JSON exacta."""
+    if not notes:
+        return {}
+    options_part = notes.split(" — ")[0]
+    combination: dict = {}
+    normalized = options_part.replace(",", "·")
+    for part in normalized.split("·"):
+        part = part.strip()
+        if ":" in part:
+            key, value = part.split(":", 1)
+            key, value = key.strip(), value.strip()
+            if key:
+                combination[key] = value
+    return combination
 
 
 def decrement_variant_stock_from_notes(product_id: str, warehouse_id: str, qty: int, notes: str) -> None:
@@ -359,25 +375,7 @@ def decrement_variant_stock_from_notes(product_id: str, warehouse_id: str, qty: 
     variantes — reservas (aquí mismo) y picking (`routers/picking.py`) —
     para que el desglose por color no se desincronice del total general.
     """
-    if not notes:
-        return
-    # Parsear notas → {"Color": "Verde", "Talla": "M"}
-    # Acepta separador "·" (AI) o "," (catálogo UI) — toma solo la primera parte
-    # antes de " — " por si el cliente añadió notas libres al final.
-    options_part = notes.split(" — ")[0]
-
-    combination: dict = {}
-    # Normalizar: reemplazar coma por · para unificar el split
-    normalized = options_part.replace(",", "·")
-    for part in normalized.split("·"):
-        part = part.strip()
-        if ":" in part:
-            k, v = part.split(":", 1)
-            k = k.strip()
-            v = v.strip()
-            if k:  # evitar claves vacías
-                combination[k] = v
-
+    combination = _parse_variant_combination(notes)
     if not combination:
         return
 

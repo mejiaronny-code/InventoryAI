@@ -47,6 +47,17 @@ const api = axios.create({
   baseURL: BASE_URL,
   timeout: 30000,
 })
+let _refreshPromise = null
+
+function clearSessionAndRedirect() {
+  clearCache()
+  localStorage.removeItem('access_token')
+  localStorage.removeItem('refresh_token')
+  localStorage.removeItem('user')
+  if (window.location.pathname !== '/admin/login') {
+    window.location.assign('/admin/login')
+  }
+}
 
 // ── Interceptor: inyectar token JWT ──────────────────────────────
 api.interceptors.request.use((config) => {
@@ -78,12 +89,41 @@ api.interceptors.response.use(
     }
     return res
   },
-  (error) => {
-    if (error.response?.status === 401) {
-      clearCache()
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('user')
-      window.location.href = '/admin/login'
+  async (error) => {
+    const original = error.config
+    const isUnauthorized = error.response?.status === 401
+    const isAuthRequest = original?.url?.includes('/auth/login')
+      || original?.url?.includes('/auth/refresh')
+
+    if (isUnauthorized && original && !original._authRetry && !isAuthRequest) {
+      const refreshToken = localStorage.getItem('refresh_token')
+      if (refreshToken) {
+        original._authRetry = true
+        try {
+          if (!_refreshPromise) {
+            _refreshPromise = axios.post(`${BASE_URL}/auth/refresh`, {
+              refresh_token: refreshToken,
+            }, {
+              timeout: 15000,
+            }).then(({ data }) => {
+              localStorage.setItem('access_token', data.access_token)
+              localStorage.setItem('refresh_token', data.refresh_token)
+              clearCache()
+              return data.access_token
+            }).finally(() => {
+              _refreshPromise = null
+            })
+          }
+          const accessToken = await _refreshPromise
+          original.headers = original.headers || {}
+          original.headers.Authorization = `Bearer ${accessToken}`
+          return api(original)
+        } catch {
+          clearSessionAndRedirect()
+        }
+      } else {
+        clearSessionAndRedirect()
+      }
     }
     return Promise.reject(error)
   }
@@ -102,7 +142,6 @@ api.request = function(config) {
 const _originalGet = api.get.bind(api)
 api.get = function(url, config = {}) {
   if (!config.noCache) {
-    const fakeConfig = { ...config, url, method: 'get', baseURL: BASE_URL }
     const token = localStorage.getItem('access_token') || ''
     const key = `${token.slice(-12)}::${url}::${JSON.stringify(config.params || {})}`
     const hit = _cache.get(key)
@@ -120,7 +159,7 @@ export const authAPI = {
   login: (email, password) => api.post('/auth/login', { email, password }),
   me: () => api.get('/auth/me'),
   updateMe: (data) => api.put('/auth/me', data),
-  refresh: (refreshToken) => api.post('/auth/refresh', null, { params: { refresh_token: refreshToken } }),
+  refresh: (refreshToken) => api.post('/auth/refresh', { refresh_token: refreshToken }),
   forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
   createEmployee: (data) => api.post('/auth/employees', data),
   listEmployees: () => api.get('/auth/employees'),

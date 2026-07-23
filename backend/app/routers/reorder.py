@@ -15,6 +15,23 @@ router = APIRouter(prefix="/reorder", tags=["reorder"])
 VALID_STATUSES = ("pending", "ordered", "received", "cancelled")
 
 
+async def _assert_reorder_resources(company_id: str, product_id: str, warehouse_id: str):
+    product, warehouse = await asyncio.gather(
+        asyncio.to_thread(
+            lambda: supabase.table("products").select("id")
+                .eq("id", product_id).eq("company_id", company_id).maybe_single().execute()
+        ),
+        asyncio.to_thread(
+            lambda: supabase.table("warehouses").select("id")
+                .eq("id", warehouse_id).eq("company_id", company_id).maybe_single().execute()
+        ),
+    )
+    if not (product and product.data):
+        raise HTTPException(404, "Producto no encontrado")
+    if not (warehouse and warehouse.data):
+        raise HTTPException(404, "Almacén no encontrado")
+
+
 @router.get("/")
 async def list_requests(
     status: Optional[str] = None,
@@ -63,6 +80,9 @@ async def create_request(data: dict, user: dict = Depends(require_admin)):
         raise HTTPException(status_code=401, detail="No se encontró la empresa asociada al usuario")
     if not data.get("product_id") or not data.get("warehouse_id"):
         raise HTTPException(400, "product_id y warehouse_id son requeridos")
+    await _assert_reorder_resources(
+        company_id, data["product_id"], data["warehouse_id"]
+    )
 
     # Verificar que no exista un pending para el mismo producto+almacén
     existing = await asyncio.to_thread(

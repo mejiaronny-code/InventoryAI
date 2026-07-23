@@ -16,13 +16,15 @@ import ErrorBoundary from './components/shared/ErrorBoundary'
 // Public pages — bundle principal (entrada más común, sin lazy)
 import HomePage from './pages/public/HomePage'
 import CompanyCatalogPage from './pages/public/CompanyCatalogPage'
-import ReservationStatusPage from './pages/public/ReservationStatusPage'
-import MyReservationsPage from './pages/public/MyReservationsPage'
 import NotFoundPage from './pages/public/NotFoundPage'
-import EmbedChatPage from './pages/public/EmbedChatPage'
-import ResetPasswordPage from './pages/public/ResetPasswordPage'
-import ForgotPasswordPage from './pages/public/ForgotPasswordPage'
-import LoginPage from './pages/admin/LoginPage'
+
+// Flujos públicos secundarios — lazy para mantener ligera la primera visita.
+const ReservationStatusPage = lazy(() => import('./pages/public/ReservationStatusPage'))
+const MyReservationsPage     = lazy(() => import('./pages/public/MyReservationsPage'))
+const EmbedChatPage          = lazy(() => import('./pages/public/EmbedChatPage'))
+const ResetPasswordPage      = lazy(() => import('./pages/public/ResetPasswordPage'))
+const ForgotPasswordPage     = lazy(() => import('./pages/public/ForgotPasswordPage'))
+const LoginPage              = lazy(() => import('./pages/admin/LoginPage'))
 
 // Admin pages — lazy (solo se descargan al entrar a /admin)
 const AdminLayout        = lazy(() => import('./components/admin/AdminLayout'))
@@ -53,7 +55,10 @@ const SuperAdminMetricsPage   = lazy(() => import('./pages/superadmin/MetricsPag
 function PageLoader() {
   return (
     <div className="min-h-screen flex items-center justify-center">
-      <div className="w-8 h-8 border-3 border-brand-500 border-t-transparent rounded-full animate-spin" />
+      <div className="flex items-center gap-3 text-sm text-ink-500" role="status" aria-live="polite">
+        <div className="w-7 h-7 border-[3px] border-brand-500 border-t-transparent rounded-full animate-spin" aria-hidden="true" />
+        Cargando…
+      </div>
     </div>
   )
 }
@@ -72,15 +77,15 @@ function AppRoutes() {
       {/* ── Public ── */}
       <Route path="/" element={<HomePage />} />
       {/* Chat embebible para sitios de terceros (iframe) — sin layout */}
-      <Route path="/embed/:companySlug" element={<EmbedChatPage />} />
-      <Route path="/reset-password" element={<ResetPasswordPage />} />
-      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/embed/:companySlug" element={<Suspense fallback={<PageLoader />}><EmbedChatPage /></Suspense>} />
+      <Route path="/reset-password" element={<Suspense fallback={<PageLoader />}><ResetPasswordPage /></Suspense>} />
+      <Route path="/forgot-password" element={<Suspense fallback={<PageLoader />}><ForgotPasswordPage /></Suspense>} />
       <Route path="/:companySlug" element={<CompanyCatalogPage />} />
-      <Route path="/:companySlug/mis-reservas" element={<MyReservationsPage />} />
-      <Route path="/reserva/:code" element={<ReservationStatusPage />} />
+      <Route path="/:companySlug/mis-reservas" element={<Suspense fallback={<PageLoader />}><MyReservationsPage /></Suspense>} />
+      <Route path="/reserva/:code" element={<Suspense fallback={<PageLoader />}><ReservationStatusPage /></Suspense>} />
 
       {/* ── Auth ── */}
-      <Route path="/admin/login" element={<LoginPage />} />
+      <Route path="/admin/login" element={<Suspense fallback={<PageLoader />}><LoginPage /></Suspense>} />
 
       {/* ── Admin / Employee ── */}
       <Route
